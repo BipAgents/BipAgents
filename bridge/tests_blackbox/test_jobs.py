@@ -55,7 +55,7 @@ def test_a_task_runs_in_its_own_conversation_and_ends_with_its_report(bridges, f
     assert re.fullmatch(r"t[0-9a-f]{12}", job["id"]) and job["state"] == "running" and job["session_id"] == "api_s1"
     assert set(job) == {"id", "kind", "agent", "title", "prompt", "template", "state", "reason", "error", "created",
                         "started", "finished", "tokens", "budget_eur", "eur", "max_tokens", "session_id", "report",
-                        "proposed_by", "runs", "from_session", "seen", "steps"}
+                        "proposed_by", "runs", "from_session", "seen", "steps", "step_eur", "needed_eur"}
     assert (job["kind"], job["proposed_by"], job["runs"], job["template"]) == ("task", "person", 1, "research")
     assert fakes.hermes.created == [("", {"title": "🧩 Écoles du quartier"})]
     run = fakes.hermes.seen("/v1/runs", "POST")[0].json()
@@ -317,6 +317,51 @@ def test_a_task_counts_its_euros_as_the_month_s_credit_does(bridges, fakes):
     assert paused["eur"] == pytest.approx(bill, abs=1e-6) and paused["budget_eur"] == 0.015
     resumed = bridge.post(f"/v1/jobs/{job['id']}/resume", headers=AUTH, json={"budget_eur": 0.215}).json()
     assert resumed["state"] == "running" and resumed["budget_eur"] == 0.215 and resumed["runs"] == 2
+    assert bridge.delete(f"/v1/jobs/{job['id']}", headers=AUTH).json() == {"ok": True}
+
+
+def test_a_budget_that_pays_for_one_call_only_is_said_and_a_resume_must_pay_for_a_step(bridges, fakes):
+    """Alex 26/11 (his offer place, 1.1): a background task an agent started paused at « budget » at once, nothing
+    done, and « Reprendre » didn't get it going. Its budget paid for its first model call only: the hub stopped the run
+    before the second (the call's tools never went on), with nothing said but « attend ton feu vert », and a resume
+    whose budget can't pay for one more step only stops it again before it does anything. Now the pause keeps what one
+    more step costs and the budget in all that pays for a few (`step_eur`, `needed_eur`: the apps' « Continuer »
+    gives that when it is more than their small step), the push says it in plain words, and a resume that can't pay
+    for a step is refused with that amount; one that can goes on."""
+    from bbkit.common import sse
+
+    bridge = bridges.new()
+    bridge.config["jobs"] = {"price_in": 0.10, "price_cached": 0.02, "price_out": 0.35}   # GLM-5.3 Flash at EUrouter
+    bridge.seed_db([("INSERT INTO devices (token, environment, agent_ids, created_at, updated_at) VALUES (?,?,?,?,?)",
+                     (TOKEN, "sandbox", "[]", NOW, NOW))])
+    bridge.start()
+    fakes.hermes.rounds = 1000
+    # its first call reads 150 k tokens, none from the cache yet (0.0153 €): with the next one as big, past 0.02 €
+    fakes.hermes.runs["r1"] = [sse("model.usage", run_id="r1", call=1, input_tokens=150_000, output_tokens=900,
+                                   totals={"input_tokens": 150_000, "output_tokens": 900, "cache_read_tokens": 0}),
+                               sse("tool.started", run_id="r1", tool="web_search", preview="écoles")]
+    job = bridge.post("/v1/agents/wellness/jobs", headers=AUTH,
+                      json={**TASK, "title": "Écoles", "budget_eur": 0.02}).json()
+    assert wait_until(lambda: view(bridge, job["id"])["state"] == "paused", timeout=45)
+    paused = view(bridge, job["id"])
+    assert paused["reason"] == "budget" and fakes.hermes.seen("/v1/runs/r1/stop", "POST")
+    assert paused["eur"] == pytest.approx(0.015315, abs=1e-6)
+    # « Reprendre » without a budget, then with one cent more than it took: each would only stop it again at once
+    for body in (None, {"budget_eur": 0.025}):
+        refused = bridge.post(f"/v1/jobs/{job['id']}/resume", headers=AUTH, json=body)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"].startswith("Not resumed: one more step of this task costs about 136,133 tokens")
+        assert refused.json()["detail"].endswith("give it at least 888,888 tokens in all")
+    assert view(bridge, job["id"])["budget_eur"] == 0.02 and "r2" not in fakes.hermes.started
+    # one more step: the same read again and what a call writes; five of them on top of what it took, to the cent
+    assert paused["step_eur"] == pytest.approx(0.015315, abs=1e-6) and paused["needed_eur"] == 0.10
+    # said, not a silent pause: at home in tokens (0.10 € at these prices)
+    told = "Its starting budget doesn't pay for even one step of this work: to go on, it needs at least 888,888 tokens in all."
+    assert wait_until(lambda: told in json.dumps(bridge.get("/v1/notifications", headers=AUTH).json(), ensure_ascii=False))
+    # the budget it proposed: it goes on
+    resumed = bridge.post(f"/v1/jobs/{job['id']}/resume", headers=AUTH, json={"budget_eur": paused["needed_eur"]})
+    assert resumed.status_code == 200 and resumed.json()["state"] == "running" and resumed.json()["runs"] == 2
+    assert resumed.json()["budget_eur"] == 0.10 and resumed.json()["needed_eur"] is None
     assert bridge.delete(f"/v1/jobs/{job['id']}", headers=AUTH).json() == {"ok": True}
 
 
