@@ -5,7 +5,8 @@
 #     add-seat.sh <n> <setup file>
 # The setup file (root's, 0600) comes from the guichet over HTTPS, never from the first-boot script the provider keeps:
 # fetched at first boot with a one-time token (seat-agent.py --bootstrap), later in a signed order.
-# The account bip<n> (bip for place 1; without sudo), its own range of user ids for its agents' sandboxes, its door's
+# The account bip<n> (bip for place 1; without sudo, nor a login shell: the server's SSH refuses it too, seat-agent.py's
+# no_login), its own range of user ids for its agents' sandboxes, its door's
 # port (from the setup file: 443 for place 1, 444, 445 ... up to 482 for place 40) let in by the firewall, then the installer's --cloud mode
 # as that account. The voices already running on the server are shared. Its log: /var/log/bipagents-install<n>.log.
 # ASCII only, like user-data.yaml (installer/tests/test_cloud_init.py checks both).
@@ -50,7 +51,9 @@ if grep -qsE '"(vault_)?keys"' "$setup"; then
         || { echo "add-seat.sh: the server's hardening for encrypted spaces failed: place $n not installed" >&2; exit 1; }
 fi
 
-id -u "$user" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash "$user"
+# No login shell (Alex, 2026-11-26): nothing it runs needs one; an account there before gets nologin too.
+id -u "$user" >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin "$user"
+[ "$(getent passwd "$user" | cut -d: -f7)" = /usr/sbin/nologin ] || usermod --shell /usr/sbin/nologin "$user"
 passwd --lock "$user" >/dev/null
 # Its agents' sandboxes (rootless podman): a range of user ids no other place has (user-data gives the first install of
 # place 1 200000 and up; place n gets 200000 + 100000 * n, place 1 installed again 300000).
@@ -82,7 +85,8 @@ if [ -n "$version" ]; then
     slug=${slug#https://github.com/}
     installer="https://raw.githubusercontent.com/${slug%.git}/$version/install.sh"
 fi
-sudo -iu "$user" bash -c "curl -fsSL $installer | ${pin}bash -s -- --cloud $setup" \
+# In its login environment, as `sudo -iu` gave it, from bash itself: never through its login shell (nologin).
+sudo -u "$user" -H bash -lc "cd && curl -fsSL $installer | ${pin}bash -s -- --cloud $setup" \
     > "/var/log/bipagents-install$n.log" 2>&1
 echo "$(date -u +%FT%TZ) place $n install done" >> /var/log/bipagents-timeline.log
 # The installer kept the secret for the bridge (deleted once the app has paired); this copy goes.
