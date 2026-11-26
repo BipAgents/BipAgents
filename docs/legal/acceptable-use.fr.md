@@ -2,7 +2,7 @@
 
 # Politique d'usage acceptable de l'offre tout compris
 
-> Dernière mise à jour : 13 novembre 2026.
+> Dernière mise à jour : 26 novembre 2026.
 
 ## 1. À quoi elle sert
 
@@ -50,7 +50,7 @@ autre personne sans son accord, pas d'usurpation d'identité (conditions d'utili
 ## 3. Ta responsabilité
 
 Tu réponds de ce que tu fais et de ce que tes agents font depuis ta place, avec ton accord ou parce que ta
-configuration le permet, y compris par l'accès SSH. Ce que lisent tes agents (pages web, e-mails, fichiers) peut
+configuration le permet. Ce que lisent tes agents (pages web, e-mails, fichiers) peut
 contenir des instructions cachées pour les détourner : garde les demandes d'accord activées et ne donne à chaque agent
 que les accès dont il a besoin (conditions d'utilisation, section 9).
 

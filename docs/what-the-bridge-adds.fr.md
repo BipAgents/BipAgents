@@ -158,8 +158,8 @@ domaine, avec les modules (`bridge-rs/src/<nom>.rs`) qui le font, et ce qu'il la
 
 - L'installateur ([`installer/`](../installer/)) met en place Hermes, le bridge, les voix et les bacs à sable en une
   commande, et les met à jour. `place_backup.rs` expose les sauvegardes et leur clé ; `place_import.rs` fait venir ton
-  propre Hermes ; `place_move.rs` déménage un espace vers un autre serveur ; `ssh_keys.rs` permet à la personne de se
-  connecter à son propre compte.
+  propre Hermes ; `place_move.rs` déménage un espace vers un autre serveur ; `ssh_keys.rs` garde les espaces de l'offre
+  fermés au SSH.
 - `space.rs` : l'espace chiffré au repos (désactivé par défaut).
 
 ## L'offre tout compris

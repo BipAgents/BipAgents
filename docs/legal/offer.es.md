@@ -2,7 +2,7 @@
 
 # Condiciones generales de venta de la oferta todo incluido
 
-> Última actualización: 18 de noviembre de 2026.
+> Última actualización: 26 de noviembre de 2026.
 
 ## 1. Objeto
 
@@ -90,8 +90,6 @@ Para cada persona del plan:
   (https://github.com/NousResearch/hermes-agent); BipAgents no está editada, aprobada ni patrocinada por Nous Research.
 - **Las voces de los Bips**, en su teléfono cuando este lo permite; si no, desde su servidor.
 - **Una copia de seguridad cifrada unos minutos después de cada actividad, y al menos una vez al día** (sección 9).
-- **Un acceso SSH** a la cuenta de su servidor, desde un ordenador cuya clave se haya añadido en la app (Ajustes › Plan
-  todo incluido › Acceso SSH), sin derechos de administrador (root).
 
 **El crédito de IA del plan**: 5,00 € (Solo), 9,00 € (Duo) o 16,00 € (Familia) de uso del modelo de IA cada mes,
 compartido por todas las personas del plan, que la app muestra como un número estimado de mensajes: unos 7.000, 13.000
@@ -286,13 +284,18 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 - **Reposo**: un servidor sin ninguna solicitud de la app desde hace 14 días y sin rutina programada se duerme; se
   despierta cuando abres la app, en unos instantes. No se pierde nada.
 - **Actualizaciones**: Kerfy Studio actualiza el software de los servidores (BipAgents, Hermes Agent) por oleadas, y puede
-  volver a la versión anterior si una oleada sale mal. Una actualización puede sustituir los cambios que hayas hecho,
-  por SSH, en los archivos que instala BipAgents.
+  volver a la versión anterior si una oleada sale mal. Una actualización puede sustituir los cambios que hayas hecho
+  en los archivos que instala BipAgents.
 - **Supervisión técnica**: las máquinas envían a Kerfy Studio datos técnicos (memoria, disco, carga, si el software
   de cada servidor funciona y si está en plena tarea, su versión, la hora de su última copia de seguridad, tu zona
   horaria) y, en los primeros días de un servidor, algunas mediciones de uso ([política de privacidad](privacy.es.md),
   secciones 5.6 y 5.12), nunca contenido.
-- Guarda una copia de lo que te importa: el acceso SSH te permite recuperar tus archivos en cualquier momento.
+- Guarda una copia de lo que te importa: el botón «Descargar mis datos», en los Ajustes de la app, te da en cualquier
+  momento una copia de tus datos (conversaciones, Cuaderno, archivos, memoria de tus agentes) en un solo archivo, sin
+  los secretos, como las contraseñas y las claves de acceso. Está disponible a partir de la versión 1.1.1 de la app;
+  antes, la app ya permite exportar tu Cuaderno. Tu servidor no tiene acceso SSH. Para irte con todo: Hermes Agent es
+  software libre, BipAgents también funciona con tu propio ordenador o tu propio servidor, donde el acceso SSH sigue
+  siendo posible, y esa copia te permite llevar allí tus datos.
 
 ## 10. Uso aceptable
 
@@ -341,7 +344,8 @@ política.
   francés).
 - **Fin de la oferta**: si Kerfy Studio deja de ofrecer la oferta todo incluido, se te informa en la app al menos 30
   días antes; la suscripción deja de renovarse, conservas tu servidor hasta el final del mes pagado y puedes recuperar su
-  contenido por SSH; en una suscripción anual, se te reembolsan los meses pagados y no usados.
+  contenido con el botón «Descargar mis datos» de la app; en una suscripción anual, se te reembolsan los meses pagados
+  y no usados.
 
 ## 12. Derecho de desistimiento
 
@@ -404,7 +408,7 @@ En particular, Kerfy Studio no responde:
   servicio;
 - de un pago hecho por un agente con tu tarjeta y que hayas aprobado, ni de una negativa de tu banco a reembolsarlo,
   salvo si el pago se debe a un defecto del servicio (importe, sitio o tarjeta distintos de lo que aprobaste);
-- de lo que hagas tú mismo en tu servidor, en particular por SSH;
+- de lo que hagas tú mismo en tu servidor;
 - de una pérdida de acceso por haber perdido todos tus dispositivos y tu código de recuperación;
 - de los servicios de terceros que conectes a tus agentes (correo, sitios web, cuentas en línea).
 

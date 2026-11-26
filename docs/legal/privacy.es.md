@@ -2,7 +2,7 @@
 
 # Política de privacidad de BipAgents
 
-> Última actualización: 25 de noviembre de 2026.
+> Última actualización: 26 de noviembre de 2026.
 
 ## En resumen
 
@@ -580,7 +580,7 @@ máximo para la semana gratis, 2 días como máximo para los demás límites. La
 **Dónde.** En una máquina alquilada a OVHcloud (centros de datos en la Unión Europea) o a Hetzner (Alemania o
 Finlandia), para todas las personas de la oferta, también las que viven fuera de la Unión.
 
-**Lo que hay.** Lo que describe la sección 5.1, y las claves SSH públicas que añades desde la app. El guichet de Kerfy
+**Lo que hay.** Lo que describe la sección 5.1. El guichet de Kerfy
 Studio (el servicio que gestiona los servidores) conoce la dirección de tu servidor y la huella de su certificado, para que tu
 teléfono se conecte a él y para trasladarlo en caso de avería.
 
@@ -1058,8 +1058,9 @@ desinstala la app. Los datos de tu servidor los gestionas tú; para los de tu pr
 alojamiento, dirígete a ellos.
 
 **Con la oferta todo incluido**, tu cuenta vincula esos datos contigo: podemos darte acceso a ellos, rectificarlos o
-borrarlos. Al contenido de tu servidor accedes tú mismo, por la app o por SSH, y puedes copiarlo en cualquier momento.
-Para eliminar tu cuenta: sección 5.2.
+borrarlos. Al contenido de tu servidor accedes tú mismo, por la app, y puedes copiarlo en cualquier momento con el botón
+«Descargar mis datos» de los Ajustes (a partir de la versión 1.1.1 de la app; antes, la app ya permite exportar tu
+Cuaderno). Para eliminar tu cuenta: sección 5.2.
 
 **Si vives en California o en otro lugar de Estados Unidos.** Kerfy Studio no vende ni comparte tus datos personales
 en el sentido de la ley californiana (California Consumer Privacy Act) y no hace ninguna publicidad dirigida. La app y

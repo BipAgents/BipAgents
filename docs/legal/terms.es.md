@@ -2,7 +2,7 @@
 
 # Condiciones de uso de BipAgents
 
-> Última actualización: 25 de noviembre de 2026.
+> Última actualización: 26 de noviembre de 2026.
 
 ## 1. Objeto
 
@@ -101,9 +101,8 @@ Si usas tu propio ordenador o servidor, eres responsable:
   agentes, sus accesos (correo, navegación, compras) y el modelo a su edad.
 
 Con la oferta todo incluido, Kerfy Studio se ocupa de la máquina, de sus actualizaciones y de las copias de seguridad
-de tu servidor; sigues siendo responsable de tus dispositivos, de tu código de recuperación, del respeto de las
-condiciones de los servicios que conectas a tus agentes y de lo que haces por SSH
-([condiciones de la oferta](offer.es.md)).
+de tu servidor; sigues siendo responsable de tus dispositivos, de tu código de recuperación y del respeto de las
+condiciones de los servicios que conectas a tus agentes ([condiciones de la oferta](offer.es.md)).
 
 ## 8. Lo que la IA puede y no puede hacer
 

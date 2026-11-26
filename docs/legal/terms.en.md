@@ -2,7 +2,7 @@ English · [Français](terms.fr.md) · [Deutsch](terms.de.md) · [Español](term
 
 # BipAgents terms of use
 
-> Last updated: 25 November 2026.
+> Last updated: 26 November 2026.
 
 ## 1. Purpose
 
@@ -93,8 +93,8 @@ If you use your own computer or server, you are responsible for:
   the agents, their access (email, browsing, purchases) and the model to their age.
 
 With the all-included offer, Kerfy Studio takes care of the machine, its updates and your server's backups; you remain
-responsible for your devices, your recovery code, complying with the terms of the services you connect to your agents
-and what you do over SSH ([terms of the offer](offer.en.md)).
+responsible for your devices, your recovery code and complying with the terms of the services you connect to your
+agents ([terms of the offer](offer.en.md)).
 
 ## 8. What AI can and cannot do
 

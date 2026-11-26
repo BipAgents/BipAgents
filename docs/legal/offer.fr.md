@@ -2,7 +2,7 @@
 
 # Conditions générales de vente de l'offre tout compris
 
-> Dernière mise à jour : 18 novembre 2026.
+> Dernière mise à jour : 26 novembre 2026.
 
 ## 1. Objet
 
@@ -90,8 +90,6 @@ Pour chaque personne du forfait :
   Research.
 - **Les voix des Bips**, sur son téléphone quand il le permet, sinon par sa place.
 - **Une sauvegarde chiffrée quelques minutes après chaque activité, et au moins une fois par jour** (section 9).
-- **Un accès SSH** au compte de sa place, depuis un ordinateur dont la clé a été ajoutée dans l'app (Réglages › Offre
-  tout compris › Accès SSH), sans droits d'administrateur (root).
 
 **Le crédit d'IA du forfait** : 5,00 € (Solo), 9,00 € (Duo) ou 16,00 € (Famille) d'utilisation du modèle d'IA chaque
 mois, partagé par toutes les personnes du forfait, affiché dans l'app en nombre estimé de messages : environ 7 000,
@@ -295,12 +293,17 @@ temps de le remplir, puis effacé ([politique de confidentialité](privacy.fr.md
   réveille quand tu ouvres l'app, en quelques instants. Rien n'est perdu.
 - **Mises à jour** : Kerfy Studio met à jour le logiciel des places (BipAgents, Hermes Agent) par vagues, et peut
   revenir à la version d'avant si une vague se passe mal. Une mise à jour peut remplacer les modifications que tu
-  aurais faites, par SSH, aux fichiers installés par BipAgents.
+  aurais faites aux fichiers installés par BipAgents.
 - **Surveillance technique** : les serveurs envoient à Kerfy Studio des données techniques (mémoire, disque, charge, si
   le logiciel de chaque place tourne et s'il est en pleine tâche, sa version, l'heure de sa dernière sauvegarde, ton
   fuseau horaire) et, les premiers jours d'une place, quelques mesures d'usage ([politique de
   confidentialité](privacy.fr.md), sections 5.6 et 5.12), jamais de contenu.
-- Garde une copie de ce qui compte pour toi : l'accès SSH te permet de récupérer tes fichiers à tout moment.
+- Garde une copie de ce qui compte pour toi : le bouton « Télécharger mes données », dans les Réglages de l'app, te
+  donne à tout moment une archive de tes données (conversations, Carnet, fichiers, mémoire de tes agents), sans les
+  secrets, comme les mots de passe et les clés d'accès. Il est disponible à partir de la version 1.1.1 de l'app ; avant,
+  l'app permet déjà d'exporter ton Carnet. Ta place n'a pas d'accès SSH. Pour partir avec tout : Hermes Agent est un
+  logiciel libre, BipAgents fonctionne aussi avec ton propre ordinateur ou ton propre serveur, où l'accès SSH reste
+  possible, et cette archive te permet d'y emporter tes données.
 
 ## 10. Usage acceptable
 
@@ -347,7 +350,8 @@ couper la clé d'IA d'une place et la suspendre aussitôt, dans les conditions d
   demeure de cesser le manquement, sauf urgence ou manquement grave (articles 1224 à 1226 du Code civil).
 - **Fin de l'offre** : si Kerfy Studio arrête l'offre tout compris, tu en es informé dans l'app au moins 30 jours avant
   ; l'abonnement n'est plus renouvelé, tu gardes ta place jusqu'à la fin du mois payé et tu peux récupérer son contenu
-  par SSH ; pour un abonnement annuel, les mois payés et non utilisés te sont remboursés.
+  avec le bouton « Télécharger mes données » de l'app ; pour un abonnement annuel, les mois payés et non utilisés te
+  sont remboursés.
 
 ## 12. Droit de rétractation
 
@@ -409,7 +413,7 @@ Kerfy Studio ne répond notamment pas :
   du service ;
 - d'un paiement fait par un agent avec ta carte et que tu as validé, ni d'un refus de remboursement par ta banque, sauf
   si le paiement résulte d'un défaut du service (montant, site ou carte différents de ce que tu as validé) ;
-- de ce que tu fais toi-même sur ta place, notamment par SSH ;
+- de ce que tu fais toi-même sur ta place ;
 - d'une perte d'accès due à la perte de tous tes appareils et de ton code de récupération ;
 - des services tiers que tu relies à tes agents (messagerie, sites, comptes en ligne).
 

@@ -2,7 +2,7 @@ English · [Français](acceptable-use.fr.md) · [Deutsch](acceptable-use.de.md) 
 
 # Acceptable use policy of the all-included offer
 
-> Last updated: 13 November 2026.
+> Last updated: 26 November 2026.
 
 ## 1. What it is for
 
@@ -46,7 +46,7 @@ one else's private data without their consent, no impersonation (terms of use, s
 ## 3. Your responsibility
 
 You are answerable for what you do and what your agents do from your server, with your approval or because your
-configuration allows it, including through SSH access. What your agents read (web pages, emails, files) may contain
+configuration allows it. What your agents read (web pages, emails, files) may contain
 hidden instructions meant to hijack them: keep approvals on and give each agent only the access it needs (terms of
 use, section 9).
 
