@@ -4,7 +4,9 @@
 //!
 //! - **Pinned files**: approving copies the connector's folder (in the agent's sandbox, `/workspace/…`) into the
 //!   bridge's data, where no agent writes, and pins a SHA-256 over it (sorted paths, each file's content hash and
-//!   executable bit; links and special files refused; `MAX_FILES` / `MAX_BYTES`). Before each run both are checked
+//!   executable bit; links and special files refused; `MAX_FILES` / `MAX_BYTES`). The agent's folder is read through
+//!   folder descriptors only (beneath.rs), each file hashed and copied from the one descriptor it was opened by, never
+//!   through a link the sandbox swaps in meanwhile (security review 26/11, E4). Before each run both are checked
 //!   again: the copy (it is what runs, read-only) and the agent's folder (a change there means « à réapprouver »: no
 //!   run until the person approves the new files).
 //! - **The container**: `podman run --rm -i` on `bipagents-connectors` (no route out; the egress proxy is strict
@@ -40,6 +42,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use zeroize::Zeroizing;
 
 use crate::app::AppState;
+use crate::beneath::{self, Dir, Kind};
 use crate::config::{AgentConfig, Config};
 use crate::connectors::{self, Connector};
 use crate::secrets::{self, Blanker};
@@ -71,83 +74,143 @@ pub fn state_env() -> [(&'static str, String); 6] {
 
 // --- pinned files --------------------------------------------------------------------------------------------------
 
-fn walk(root: &Path, relative: &Path, out: &mut Vec<(String, PathBuf, bool)>, bytes: &mut u64) -> Result<(), String> {
-    let folder = root.join(relative);
-    let mut entries: Vec<_> = std::fs::read_dir(&folder)
-        .map_err(|e| format!("{} can't be read ({e})", relative.display()))?
-        .flatten()
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    for entry in entries {
-        let name = entry.file_name();
+fn too_big() -> String {
+    format!("the folder is too big (at most {MAX_FILES} files and {} MB)", MAX_BYTES / 1024 / 1024)
+}
+
+/// What a name refused on the way means (a link swapped in since it was listed, or something else than a file).
+fn not_plain(shown: &str, err: &std::io::Error) -> String {
+    if beneath::refused(err) {
+        format!("{shown} is a link: a connector's folder holds plain files only")
+    } else {
+        format!("{shown} can't be read ({err})")
+    }
+}
+
+/// What `each_file` does with each file: (its path as the fingerprint hashes it, its names, executable, its content).
+type EachFile<'a> = dyn FnMut(&str, &Path, bool, &[u8]) -> Result<(), String> + 'a;
+
+/// Every plain file under `top`, by name, each opened from its folder's descriptor without following a link and read
+/// from that same descriptor: `each(path shown, its names, executable, content)`. Security review 26/11 (E4): the
+/// names were checked, then read again by their path, so a file the sandbox swapped for a link in between had the copy
+/// take any file of this account (`bridge.toml`, the vault's key). A link, a special file, too many files or bytes,
+/// folders nested too deep: Err.
+fn each_file(top: &Dir, each: &mut EachFile<'_>) -> Result<(), String> {
+    let (mut count, mut bytes) = (0, 0);
+    visit(top, Path::new(""), &mut count, &mut bytes, each)
+}
+
+fn visit(
+    dir: &Dir,
+    relative: &Path,
+    count: &mut usize,
+    bytes: &mut u64,
+    each: &mut EachFile<'_>,
+) -> Result<(), String> {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    if relative.components().count() >= beneath::MAX_DEPTH {
+        return Err(format!("{} is nested too deep", relative.display()));
+    }
+    let entries = dir.entries().map_err(|e| format!("{} can't be read ({e})", relative.display()))?;
+    for (name, stat) in entries {
         let rel = relative.join(&name);
-        let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
         let shown = rel.to_string_lossy().into_owned();
-        if meta.file_type().is_symlink() {
-            return Err(format!("{shown} is a link: a connector's folder holds plain files only"));
-        }
-        if meta.is_dir() {
-            walk(root, &rel, out, bytes)?;
-        } else if meta.is_file() {
-            use std::os::unix::fs::PermissionsExt;
-            *bytes += meta.len();
-            if out.len() >= MAX_FILES || *bytes > MAX_BYTES {
-                return Err(format!(
-                    "the folder is too big (at most {MAX_FILES} files and {} MB)",
-                    MAX_BYTES / 1024 / 1024
-                ));
+        match stat.kind {
+            Kind::Link => return Err(format!("{shown} is a link: a connector's folder holds plain files only")),
+            Kind::Other => return Err(format!("{shown} is not a plain file")),
+            Kind::Dir => {
+                let sub = dir.sub_one(&name).map_err(|e| not_plain(&shown, &e))?;
+                visit(&sub, &rel, count, bytes, each)?;
             }
-            out.push((shown, entry.path(), meta.permissions().mode() & 0o111 != 0));
-        } else {
-            return Err(format!("{shown} is not a plain file"));
+            Kind::File => {
+                if *count >= MAX_FILES {
+                    return Err(too_big());
+                }
+                let file = dir.open_file(Path::new(&name)).map_err(|e| not_plain(&shown, &e))?;
+                let exec = file.metadata().map_err(|e| not_plain(&shown, &e))?.permissions().mode() & 0o111 != 0;
+                let mut content = Vec::new();
+                file.take(MAX_BYTES - *bytes + 1).read_to_end(&mut content).map_err(|e| not_plain(&shown, &e))?;
+                *bytes += content.len() as u64;
+                if *bytes > MAX_BYTES {
+                    return Err(too_big());
+                }
+                *count += 1;
+                each(&shown, &rel, exec, &content)?;
+            }
         }
     }
     Ok(())
 }
 
-fn files_of(folder: &Path) -> Result<Vec<(String, PathBuf, bool)>, String> {
-    if !folder.is_dir() {
-        return Err("the folder isn't there".into());
-    }
-    let mut out = Vec::new();
-    let mut bytes = 0;
-    walk(folder, Path::new(""), &mut out, &mut bytes)?;
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
-}
-
-/// The folder's SHA-256: its sorted paths, each with its executable bit and its content's hash.
-pub fn fingerprint(folder: &Path) -> Result<String, String> {
+/// The SHA-256 of the files under `top`: their sorted paths, each with its executable bit and its content's hash.
+fn digest(top: &Dir) -> Result<String, String> {
+    let mut files: Vec<(String, bool, Vec<u8>)> = Vec::new();
+    each_file(top, &mut |shown, _, exec, content| {
+        files.push((shown.to_string(), exec, Sha256::digest(content).to_vec()));
+        Ok(())
+    })?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut hasher = Sha256::new();
-    for (path, file, exec) in files_of(folder)? {
-        let content = std::fs::read(&file).map_err(|e| format!("{path} can't be read ({e})"))?;
+    for (path, exec, hash) in files {
         hasher.update(path.as_bytes());
         hasher.update([0, u8::from(exec)]);
-        hasher.update(Sha256::digest(&content));
+        hasher.update(hash);
         hasher.update(b"\n");
     }
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// `source` copied to `target` (replaced), readable by the container: the copy's fingerprint.
+/// The agent's folder (`workspace`: its real path, checked by sent_files.rs `sandbox_folder`), opened only while that
+/// path still leads to it (beneath.rs `open_exact`): a folder on the way swapped for a link since is refused.
+fn agent_folder(folder: &Path) -> Result<Dir, String> {
+    Dir::open_exact(folder).map_err(|e| match e.raw_os_error() {
+        Some(libc::ENOENT) | Some(libc::ENOTDIR) => "the folder isn't there".to_string(),
+        Some(libc::ELOOP) => "the folder isn't there any more as it was (a link on the way)".to_string(),
+        _ => format!("the folder can't be read ({e})"),
+    })
+}
+
+/// The agent's folder's SHA-256 (`folder` its real path, as `workspace` gives it), read through descriptors only.
+pub fn fingerprint(folder: &Path) -> Result<String, String> {
+    digest(&agent_folder(folder)?)
+}
+
+/// The pinned copy's SHA-256 (the bridge's own data, which no agent writes: its path opened as it is).
+pub fn pinned_fingerprint(code: &Path) -> Result<String, String> {
+    let top = Dir::open(code).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => "the folder isn't there".to_string(),
+        _ => format!("the folder can't be read ({e})"),
+    })?;
+    digest(&top)
+}
+
+/// `source` (the agent's folder, its real path) copied to `target` (replaced), readable by the container, each file
+/// written from the very bytes read through its descriptor: the copy's fingerprint.
 pub fn snapshot(source: &Path, target: &Path) -> Result<String, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let files = files_of(source)?;
+    use std::io::Write;
+    let top = agent_folder(source)?;
     let staging = target.with_extension("part");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    for (path, file, exec) in &files {
-        let to = staging.join(path);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let content = std::fs::read(file).map_err(|e| format!("{path} can't be read ({e})"))?;
-        std::fs::write(&to, content).map_err(|e| e.to_string())?;
-        let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(if *exec { 0o755 } else { 0o644 }));
+    let copied = Dir::open(&staging).map_err(|e| e.to_string()).and_then(|out| {
+        each_file(&top, &mut |_, relative, exec, content| {
+            let (Some(parent), Some(name)) = (relative.parent(), relative.file_name()) else {
+                return Err(format!("{} is not a plain name", relative.display()));
+            };
+            let folder = out.make_dirs(parent, None).map_err(|e| e.to_string())?;
+            folder
+                .write_file(name, if exec { 0o755 } else { 0o644 }, None, |file| file.write_all(content))
+                .map_err(|e| e.to_string())
+        })
+    });
+    if let Err(why) = copied {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(why);
     }
     let _ = std::fs::remove_dir_all(target);
     std::fs::rename(&staging, target).map_err(|e| e.to_string())?;
-    fingerprint(target)
+    pinned_fingerprint(target)
 }
 
 /// The connector's folder in the agent's sandbox, on this machine (None: not there now).
@@ -606,7 +669,7 @@ async fn ready(state: &AppState, agent: &AgentConfig, id: &str, need_on: bool) -
         }
     }
     let code = connectors::code_dir(&config, &agent.name, id);
-    let pinned = tokio::task::spawn_blocking(move || fingerprint(&code)).await.ok().and_then(Result::ok);
+    let pinned = tokio::task::spawn_blocking(move || pinned_fingerprint(&code)).await.ok().and_then(Result::ok);
     if pinned.as_deref() != Some(conn.fingerprint.as_str()) {
         connectors::mark_changed(state, agent, id, &conn.fingerprint).await;
         return Err(RunError::Changed);
@@ -883,7 +946,8 @@ mod tests {
     #[test]
     fn a_folder_is_pinned_by_its_files() {
         let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
+        // the agent's folder is opened by its real path (`workspace`: sent_files.rs `sandbox_folder` canonicalizes it)
+        let src = dir.path().canonicalize().unwrap().join("src");
         std::fs::create_dir_all(src.join("lib")).unwrap();
         std::fs::write(src.join("server.py"), "print(1)").unwrap();
         std::fs::write(src.join("lib/a.py"), "x = 1").unwrap();
@@ -898,6 +962,90 @@ mod tests {
         assert_ne!(fingerprint(&src).unwrap(), first);
         std::os::unix::fs::symlink("/etc/passwd", src.join("x")).unwrap();
         assert!(fingerprint(&src).unwrap_err().contains("is a link"));
+        assert!(snapshot(&src, &copy).unwrap_err().contains("is a link"));
+        assert_eq!(pinned_fingerprint(&copy).unwrap(), first, "the copy kept as it was");
+        // the folder itself through a link: not the agent's folder any more (opened by its real path only)
+        std::fs::remove_file(src.join("x")).unwrap();
+        std::os::unix::fs::symlink(&src, dir.path().canonicalize().unwrap().join("via")).unwrap();
+        assert!(fingerprint(&dir.path().canonicalize().unwrap().join("via")).is_err());
+        assert!(fingerprint(&dir.path().canonicalize().unwrap().join("gone")).unwrap_err().contains("isn't there"));
+    }
+
+    /// Security review 26/11 (E4): a program in the agent's sandbox swaps a file, and a folder, of the connector's
+    /// folder for links to this account's files (`bridge.toml`, the vault's key) as fast as it can while the bridge
+    /// pins and copies it. Checked, then read again by its path, a file read through the link was pinned and copied
+    /// (mounted at `/connector`, where the connector's code reads it): now each file is read from the one descriptor it
+    /// was opened by, never through a link, so no fingerprint and no copy ever holds the account's file.
+    #[test]
+    fn a_file_or_folder_swapped_for_a_link_is_never_pinned_through_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let account = root.join("compte");
+        std::fs::create_dir_all(&account).unwrap();
+        let secret = b"bridge_key = \"SECRET-DU-COMPTE\"\n";
+        std::fs::write(account.join("b_donnees"), secret).unwrap();
+        std::fs::write(account.join("f"), secret).unwrap();
+        let big = vec![7u8; 1024 * 1024];
+        let make = |name: &str, b: &[u8], f: &[u8]| {
+            let folder = root.join(name);
+            std::fs::create_dir_all(folder.join("d")).unwrap();
+            std::fs::write(folder.join("a_gros"), &big).unwrap();
+            std::fs::write(folder.join("b_donnees"), b).unwrap();
+            std::fs::write(folder.join("c_gros"), &big).unwrap();
+            std::fs::write(folder.join("d/f"), f).unwrap();
+            folder
+        };
+        let plain = b"rien d'interessant\n";
+        let twins = [fingerprint(&make("jumeau1", secret, plain)).unwrap(), fingerprint(&make("jumeau2", plain, secret)).unwrap()];
+        let folder = make("connecteur", plain, plain);
+        let honest = fingerprint(&folder).unwrap();
+        assert!(!twins.contains(&honest));
+        // the links wait beside the folder (same file system): each swap is one step (renameat2 RENAME_EXCHANGE)
+        let (file_link, dir_link) = (root.join("b.link"), root.join("d.link"));
+        std::os::unix::fs::symlink(account.join("b_donnees"), &file_link).unwrap();
+        std::os::unix::fs::symlink(&account, &dir_link).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (stop, file, sub) = (stop.clone(), folder.join("b_donnees"), folder.join("d"));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = crate::beneath::exchange(&file, &file_link);
+                    let _ = crate::beneath::exchange(&sub, &dir_link);
+                    std::thread::yield_now();
+                    let _ = crate::beneath::exchange(&file, &file_link);
+                    let _ = crate::beneath::exchange(&sub, &dir_link);
+                    std::thread::yield_now();
+                }
+            })
+        };
+        let copy = root.join("pinned").join("code");
+        let (mut pinned, mut copied, mut through) = (0, 0, Vec::new());
+        let started = std::time::Instant::now();
+        for _ in 0..400 {
+            if started.elapsed() > Duration::from_secs(8) || !through.is_empty() {
+                break;
+            }
+            if let Ok(print) = fingerprint(&folder) {
+                pinned += 1;
+                if twins.contains(&print) {
+                    through.push("a fingerprint holds the account's file".to_string());
+                }
+            }
+            if snapshot(&folder, &copy).is_ok() {
+                copied += 1;
+                for name in ["b_donnees", "d/f", "d/b_donnees"] {
+                    if std::fs::read(copy.join(name)).is_ok_and(|b| b == secret) {
+                        through.push(format!("the copy's {name} is the account's file"));
+                    }
+                }
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        assert!(through.is_empty(), "read through a link swapped in: {through:?}");
+        assert!(pinned > 0 && copied > 0, "the race never let a read through: {pinned} {copied}");
     }
 
     #[test]
