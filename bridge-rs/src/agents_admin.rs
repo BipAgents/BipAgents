@@ -1019,6 +1019,9 @@ pub async fn from_spare(
     reserve_agent(shared, &agent)?;
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
     give_tools(&shared.get(), &agent, run).await?;
+    // its Hermes connected to the tools it has now, not the spare's of before until the gateway's next tick (26/11,
+    // Alex: a new agent found its watchers' tool only after he insisted; hermes_control.rs)
+    crate::hermes_control::reload_mcp(&shared.get(), &agent).await;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
     crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, ms = started.elapsed().as_millis() as u64, "spare agent taken");
@@ -1068,6 +1071,8 @@ pub async fn make_spares(
             let agent = with_browser(&config, agent, run).await;
             let agent = mount_uploads(shared, &agent, run, false).await?;
             give_tools(&config, &agent, run).await?;
+            // its tools listed now, not at the gateway's next tick (hermes_control.rs): no restart for them
+            crate::hermes_control::reload_mcp(&config, &agent).await;
             Ok(agent)
         }
         .await;
@@ -1107,11 +1112,22 @@ pub async fn make_profile(
     run: &Run,
     resume: bool,
 ) -> anyhow::Result<AgentConfig> {
+    let started = std::time::Instant::now();
     prepare_profile(shared, planned, &agent, run, resume).await?;
-    // The gateway picks new profiles up within 30 s; its permanent « Bot Chat » is opened as soon as it answers.
+    let prepared = started.elapsed();
+    // `profile create` has the gateway serve it at once; its permanent « Bot Chat » is opened as soon as it answers.
     wait_served(http, &agent, true).await?;
+    let served = started.elapsed();
     let agent = finish_profile(shared, planned, agent, run).await?;
+    let finished = started.elapsed();
+    // its MCP servers connected now, its entries all written (hermes_control.rs: else 60 to 120 s, or a restart)
+    crate::hermes_control::reload_mcp(&shared.get(), &agent).await;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
+    // where a creation's time goes (measured 26/11 on a real Hermes): its profile, its serving, its browser and
+    // section, its tools listed
+    tracing::info!(target: "bipbridge::agents", agent = %agent.name, prepare_ms = prepared.as_millis() as u64,
+                   served_ms = (served - prepared).as_millis() as u64, finish_ms = (finished - served).as_millis() as u64,
+                   tools_ms = (started.elapsed() - finished).as_millis() as u64, "agent profile made");
     Ok(agent)
 }
 
@@ -1150,6 +1166,8 @@ pub async fn make_profiles(
         });
     }
     let made: Vec<AgentConfig> = out.iter().filter_map(|r| r.as_ref().ok().cloned()).collect();
+    let config = shared.get();
+    futures::future::join_all(made.iter().map(|a| crate::hermes_control::reload_mcp(&config, a))).await;
     tools_loaded(shared, &made, http, run).await;
     out
 }
@@ -1170,6 +1188,7 @@ async fn prepare_profile(
     let hermes = install.bin.clone();
     let folder = PathBuf::from(install_home(&config)).join("profiles").join(&profile);
     let made = resume && folder.join("config.yaml").is_file();
+    let started = std::time::Instant::now();
     // The hub's (default profile's) model and settings, never another agent's: cloning the active profile would copy
     // its MCP servers and peer keys. Its own key, its personality.
     if !made {
@@ -1195,21 +1214,41 @@ async fn prepare_profile(
     // A project agent (project_agent.rs) the same: shown to friends, it reaches nobody's files.
     let family =
         crate::family_agent::is_family(&config, &profile) || crate::project_agent::is_project(&config, &profile);
-    if !install.isolated || family {
-        // Same account as this bridge and no sandbox: nothing that reads the disk until the person turns it on.
+    if (!install.isolated || family) && !disk_tools_off(&folder) {
+        // Same account as this bridge and no sandbox: nothing that reads the disk until the person turns it on (a
+        // clone of a hub that has them off already has them off: no `hermes` command, 0.6 s measured 26/11)
         let mut args = strings(&[&hermes, "-p", &profile, "tools", "disable"]);
         args.extend(strings(&DISK_TOOLS));
         args.extend(strings(&["--platform", "api_server"]));
         run(args, env.clone()).await?;
     }
+    let disabled = started.elapsed();
     std::fs::create_dir_all(&folder)?;
     // The bridge's tools in its config.yaml before the gateway loads the profile: Hermes connects a profile's MCP
-    // servers when it loads it, and an entry written after that is only read at its next restart (2026-10-30 bench:
+    // servers when it loads it, and an entry written after that only at its next tick, 60 to 120 s later
+    // (`make_profile` has them reloaded at once, hermes_control.rs; 2026-10-30 bench:
     // a new agent answered its first messages with Hermes' tools only, and wrote « call me Max » into the shared
     // memory instead of using propose_profile). Given again below, once it is saved (its guide blocks, its browser).
     give_tools(&shared.get(), agent, run).await?;
     crate::profile_files::new_soul(&folder, &planned.soul)?;
+    tracing::info!(target: "bipbridge::agents", agent = %profile, commands_ms = disabled.as_millis() as u64,
+                   files_ms = (started.elapsed() - disabled).as_millis() as u64, "agent profile prepared");
     Ok(())
+}
+
+/// Whether a profile's app toolsets are an explicit list without any of `DISK_TOOLS` (what `hermes tools disable`
+/// leaves): then disabling them again changes nothing.
+fn disk_tools_off(folder: &Path) -> bool {
+    let data = crate::shares::profile_config(folder);
+    match data.get("platform_toolsets").and_then(|p| p.get(crate::tool_diet::API_PLATFORM)) {
+        Some(Value::Array(items)) => {
+            let names: Vec<&str> = items.iter().filter_map(Value::as_str).collect();
+            names.len() == items.len()
+                && !names.iter().any(|n| n.starts_with("hermes-"))
+                && !names.iter().any(|n| DISK_TOOLS.contains(n))
+        }
+        _ => false,
+    }
 }
 
 /// A served profile finished: its browser, uploads, section in the bridge's config, guide blocks and tools.
@@ -1223,7 +1262,9 @@ async fn finish_profile(
     let profile = planned.profile.clone();
     let family =
         crate::family_agent::is_family(&config, &profile) || crate::project_agent::is_project(&config, &profile);
+    let started = std::time::Instant::now();
     let mut agent = if family { agent } else { with_browser(&config, agent, run).await };
+    let browser = started.elapsed();
     agent = mount_uploads(shared, &agent, run, false).await?;
     if shared.get().agents.contains_key(&profile) {
         save_agent(shared, &agent)?;
@@ -1235,6 +1276,8 @@ async fn finish_profile(
     let before = crate::rules_live::offered_now(&config);
     give_tools(&shared.get(), &agent, run).await?;
     crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
+    tracing::info!(target: "bipbridge::agents", agent = %agent.name, browser_ms = browser.as_millis() as u64,
+                   rest_ms = (started.elapsed() - browser).as_millis() as u64, "agent profile finished");
     Ok(agent)
 }
 
