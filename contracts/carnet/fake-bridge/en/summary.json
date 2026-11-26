@@ -34,23 +34,23 @@
     {
       "id": "people",
       "title": "People",
-      "count": 52,
-      "hint": "Family, Claire Durand, Lucas Bernard",
+      "count": 7,
+      "hint": "Marc Durand, Inès’s birthday, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "page:p000000000d",
+        "id": "page:p000000001c",
         "kind": "page",
         "part": "main",
-        "path": "Areas/Family.md",
-        "title": "Family",
-        "line": "Your sister [[Claire Durand]], her husband [[Marc Durand]] and their children.",
+        "path": "You.md",
+        "title": "You",
+        "line": "You live in Nantes, run on Sundays and are planning a trip to Japan.",
         "categories": [
           "people"
         ],
         "space": "perso",
         "date": null,
         "yearly": null,
-        "source": "Family",
+        "source": "You",
         "who": "",
         "noted": null,
         "archived": false,
@@ -58,48 +58,46 @@
         "answer": null,
         "page": null,
         "open": {
-          "path": "Areas/Family.md"
+          "path": "You.md"
         }
       }
     },
     {
       "id": "dates",
       "title": "Dates",
-      "count": 24,
-      "hint": "Work, Claire Durand, Lucas Bernard",
+      "count": 10,
+      "hint": "Work, Lucas Bernard, Subscriptions",
       "locked": false,
       "first": {
-        "id": "line:p0000000012:0000000039",
-        "kind": "line",
+        "id": "page:p0000000012",
+        "kind": "page",
         "part": "main",
         "path": "Areas/Work.md",
         "title": "Work",
-        "line": "Annual review on November 27",
+        "line": "Your job at Atelier Lumière and your annual review.",
         "categories": [
-          "work",
-          "dates"
+          "work"
         ],
         "space": "perso",
-        "date": "2026-11-27",
+        "date": null,
         "yearly": null,
-        "source": "What matters",
-        "who": "Daily",
-        "noted": "2026-11-19",
+        "source": "Work",
+        "who": "",
+        "noted": null,
         "archived": false,
         "label": null,
         "answer": null,
-        "page": "page:p0000000012",
+        "page": null,
         "open": {
-          "path": "Areas/Work.md",
-          "section": "matters"
+          "path": "Areas/Work.md"
         }
       }
     },
     {
       "id": "money",
       "title": "Money",
-      "count": 19,
-      "hint": "Money, New car, Taxes 2026",
+      "count": 5,
+      "hint": "Taxes 2026, Money, New car",
       "locked": false,
       "first": {
         "id": "page:p0000000011",
@@ -129,23 +127,23 @@
     {
       "id": "home",
       "title": "Home",
-      "count": 27,
-      "hint": "Home, Garden, Kitchen renovation",
+      "count": 3,
+      "hint": "Kitchen renovation, Home, Garden",
       "locked": false,
       "first": {
-        "id": "page:p0000000010",
+        "id": "page:p0000000017",
         "kind": "page",
         "part": "main",
-        "path": "Areas/Home.md",
-        "title": "Home",
-        "line": "The flat, the kitchen work and the neighbours.",
+        "path": "Subjects/Garden.md",
+        "title": "Garden",
+        "line": "",
         "categories": [
           "home"
         ],
         "space": "perso",
         "date": null,
         "yearly": null,
-        "source": "Home",
+        "source": "Garden",
         "who": "",
         "noted": null,
         "archived": false,
@@ -153,31 +151,31 @@
         "answer": null,
         "page": null,
         "open": {
-          "path": "Areas/Home.md"
+          "path": "Subjects/Garden.md"
         }
       }
     },
     {
       "id": "papers",
       "title": "Papers",
-      "count": 10,
-      "hint": "Taxes 2026, Check the pre-filled tax return, Find the donation receipts",
+      "count": 4,
+      "hint": "Taxes 2026, Contracts and insurance, Papers",
       "locked": false,
       "first": {
-        "id": "page:p0000000003",
-        "kind": "page",
+        "id": "record:r000009",
+        "kind": "record",
         "part": "main",
-        "path": "Subjects/Taxes 2026.md",
-        "title": "Taxes 2026",
-        "line": "Online tax return to check before the end of the month.",
+        "path": "Records/Contracts and insurance.md",
+        "title": "Home insurance",
+        "line": "Home insurance · Horizon Insurance · 2027-02-25",
         "categories": [
-          "money",
-          "papers"
+          "papers",
+          "dates"
         ],
         "space": "perso",
-        "date": null,
+        "date": "2027-02-25",
         "yearly": null,
-        "source": "Taxes 2026",
+        "source": "Contracts and insurance",
         "who": "",
         "noted": null,
         "archived": false,
@@ -185,30 +183,34 @@
         "answer": null,
         "page": null,
         "open": {
-          "path": "Subjects/Taxes 2026.md"
+          "record": {
+            "type": "contract",
+            "id": "r000009"
+          }
         }
       }
     },
     {
       "id": "trips",
       "title": "Trips",
-      "count": 26,
-      "hint": "Japan trip, Lisbon weekend, Book the flights to Osaka",
+      "count": 3,
+      "hint": "Japan trip, Lisbon weekend, Bookings",
       "locked": false,
       "first": {
-        "id": "page:p0000000019",
-        "kind": "page",
+        "id": "record:r00002e",
+        "kind": "record",
         "part": "main",
-        "path": "Subjects/Japan trip.md",
-        "title": "Japan trip",
-        "line": "April, 12 days: Tokyo, Kyoto, Osaka. The flights are to book soon.",
+        "path": "Records/Bookings.md",
+        "title": "Hotel, 3 nights",
+        "line": "2026-12-04 · Hotel, 3 nights · Hotel Rossio · Lisbon weekend",
         "categories": [
-          "trips"
+          "trips",
+          "dates"
         ],
         "space": "perso",
-        "date": null,
+        "date": "2026-12-04",
         "yearly": null,
-        "source": "Japan trip",
+        "source": "Bookings",
         "who": "",
         "noted": null,
         "archived": false,
@@ -216,15 +218,18 @@
         "answer": null,
         "page": null,
         "open": {
-          "path": "Subjects/Japan trip.md"
+          "record": {
+            "type": "booking",
+            "id": "r00002e"
+          }
         }
       }
     },
     {
       "id": "work",
       "title": "Work",
-      "count": 4,
-      "hint": "Work, Prepare the annual review",
+      "count": 1,
+      "hint": "Work",
       "locked": false,
       "first": {
         "id": "page:p0000000012",
@@ -248,37 +253,6 @@
         "page": null,
         "open": {
           "path": "Areas/Work.md"
-        }
-      }
-    },
-    {
-      "id": "other",
-      "title": "Other",
-      "count": 1,
-      "hint": "Sort the summer photos",
-      "locked": false,
-      "first": {
-        "id": "task:t000026",
-        "kind": "task",
-        "part": "main",
-        "path": "Tasks/Tasks.md",
-        "title": "Sort the summer photos",
-        "line": "Sort the summer photos",
-        "categories": [
-          "other"
-        ],
-        "space": "perso",
-        "date": null,
-        "yearly": null,
-        "source": "Tasks",
-        "who": "Daily",
-        "noted": "2026-11-22",
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": null,
-        "open": {
-          "task": "t000026"
         }
       }
     },

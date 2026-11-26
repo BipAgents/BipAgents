@@ -389,7 +389,8 @@ fn sante_is_in_no_space() {
     // its page behind the lock: the whole of Santé, whatever the space asked (it has none)
     for space in ["all", "perso", "pro"] {
         let page = sm::category_at(&config, "health", space, None, &fr(), true, today()).unwrap();
-        assert_eq!(page["count"], json!(2), "{space}: {page}");
+        // (its one page, Alex 26/11; its page and its line among the latest)
+        assert_eq!((page["count"].clone(), page["recent"].as_array().unwrap().len()), (json!(1), 2), "{space}: {page}");
     }
     // Santé's search too
     let h = nb::index::health_finder(&config, &fr());

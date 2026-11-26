@@ -77,6 +77,22 @@ pub struct Entry {
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+    /// A page's own kind (`person`, `self`, `subject`, `area`, `trip`): the category screens list the people apart
+    /// (structure.rs, Alex 26/11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_kind: Option<String>,
+    /// A person's link to the person as their page says it (« Beau-frère », « Voisine »); a group page's (« Amis »)
+    /// none. `group`: the group the category screen lists them under (`family`, `friends`, `work`, `others`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// A person marked « proche ».
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub close: bool,
+    /// The icon the person chose for a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 impl Entry {

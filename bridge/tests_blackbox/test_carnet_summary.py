@@ -2,20 +2,21 @@
 what the bridge serves ready to show, the apps computing nothing.
 
 - `GET /v1/notebook/summary`: the kept searches with their count, « Tout le Carnet », the categories with their count
-  and grey words (the latest searches of the category, else its latest titles), « Toi » first in « Personnes », the
-  moment's card, Santé locked (no count, no word);
-- `GET /v1/notebook/category/{id}`: the sub-filters with their counts, « Cherché ici » (3), the latest;
+  (the pages their screens list, Alex 26/11) and grey words (the latest searches of the category, else the titles of
+  its pages), « Toi » first in « Personnes », the moment's card, Santé locked (no count, no word);
+- `GET /v1/notebook/category/{id}`: its pages (people by their link in Personnes, subjects elsewhere, never a line or a
+  file alone), Papiers' sub-filters counted in pages, « Cherché ici » (3), the latest notes (the 1.1 apps');
 - `GET/POST/DELETE /v1/notebook/kept`: six a space, in state.json, in the phone's copy (its version moves);
 - `POST /v1/notebook/searched`: a search made, for « Cherché ici » and the grey words, never Santé, never a number,
   never seen by an agent;
 - `space`: `all` (or none) is the whole Carnet; until S5 no note is Pro: `perso` is everything, `pro` nothing.
 Every answer: `Cache-Control: no-store`. The 1.0 apps' answers stay as they are (test_carnet_sommaire.py)."""
 import json
-from datetime import timedelta
+from pathlib import Path
 
 from bbkit.common import AUTH
 from bbkit.mcp import call, text_of
-from test_carnet_sommaire import index_of, today, write_by_hand, write_carnet
+from test_carnet_sommaire import index_of, write_by_hand, write_carnet
 
 CAPABILITIES = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces", "family"]
 
@@ -52,16 +53,6 @@ def line(answer, id):
     return next((x for x in answer["categories"] if x["id"] == id), None)
 
 
-def in_dates(item, day):
-    """The phone's rule (contract §1): `yearly` always, a `date` from 90 days ago to 730 ahead."""
-    if item.get("yearly"):
-        return True
-    if item.get("date"):
-        d = (day.fromisoformat(item["date"][:10]) - day).days
-        return -90 <= d <= 730
-    return False
-
-
 def test_s4_the_summary_is_ready_to_show(bridges):
     bridge = bridges.new().start()
     write_carnet(bridge)
@@ -77,19 +68,20 @@ def test_s4_the_summary_is_ready_to_show(bridges):
     assert s["version"] == copy["version"]
     assert s["total"] == {"count": len(items), "title": "Tout le Carnet"}
     assert s["bar"] == {"placeholder": "Cherche dans tout le Carnet"}
-    # each category counts the copy's notes (Dates as of today), the empty ones hidden, Santé last and locked
+    # each category counts the pages its screen lists (Alex 26/11), the empty ones hidden, Santé last and locked
     ids = [x["id"] for x in s["categories"]]
     order = ["people", "dates", "money", "home", "papers", "trips", "work", "other", "health"]
     assert ids == [x for x in order if x in ids] and ids[-1] == "health", ids
     assert line(s, "health") == {"id": "health", "title": "Santé", "count": None, "hint": "", "locked": True}
-    day = today()
     for id in order[:-1]:
-        n = sum(1 for i in items if (in_dates(i, day) if id == "dates" else id in i.get("categories", [])))
         got = line(s, id)
-        assert (got["count"] if got else 0) == n, (id, got, n)
+        rows = category(bridge, id)["pages"]
+        assert (got["count"] if got else 0) == len(rows), (id, got, rows)
         if got:
             assert got["locked"] is False and got["hint"] and len(got["hint"].split(", ")) <= 3, got
-            assert id in got["first"]["categories"], got["first"]
+            assert all(t in [r["title"] for r in rows] for t in got["hint"].split(", ")), (id, got["hint"])
+    # a page, not its notes: « Personnes » counts Marc, Claire and « Toi »; « Maison » its subjects
+    assert line(s, "people")["count"] == 3 and line(s, "home")["count"] == len(category(bridge, "home")["pages"])
     people = line(s, "people")
     assert (people["title"], people["first"]["title"], people["first"]["kind"]) == ("Personnes", "Toi", "page")
     # Santé: never a count, a word, a note outside its lock
@@ -106,72 +98,80 @@ def test_s4_the_summary_is_ready_to_show(bridges):
     assert refused.status_code == 400 and refused.json()["detail"]["code"] == "space_unknown", refused.text
 
 
-def test_s4_a_category_page_with_its_filters_searches_and_latest(bridges):
+def test_s4_a_category_page_lists_its_pages(bridges):
+    """Alex 26/11 (« chaque point est une liste de notes sans rapport »): a category lists its pages — the people in
+    Personnes, its subjects elsewhere —, each with its number of notes, then a tap opens the page; never a line, a task
+    or a file on its own."""
     bridge = bridges.new().start()
     write_carnet(bridge)
     write_by_hand(bridge)
+    # a photo a person sent, about Marc: never a row (« photo.jpg » in Personnes, 26/11)
+    received = Path(bridge.config["agents"]["Wellness"]["upload_dir_host"]) / "2026-11"
+    (received / "0123456789ac-photo.jpg").write_bytes(b"\xff\xd8\xff demo")
     s = summary(bridge)
     papers = category(bridge, "papers")
-    assert set(papers) == {"v", "id", "title", "count", "space", "filters", "filter", "searched", "recent", "bar"}
+    assert set(papers) == {"v", "id", "title", "count", "space", "filters", "filter", "searched", "recent", "pages", "groups", "bar"}
     assert (papers["v"], papers["id"], papers["title"], papers["count"], papers["space"], papers["filter"]) == \
         (1, "papers", "Papiers", line(s, "papers")["count"], "all", None)
+    assert papers["count"] == len(papers["pages"])
     assert papers["bar"] == {"placeholder": "Cherche dans Papiers"} and papers["searched"] == []
+    # Papiers keeps its sub-filters, counted in pages: the contracts' page, the purchases' (their warranties)
     assert [(f["id"], f["title"]) for f in papers["filters"]] == [("invoices", "Factures"), ("contracts", "Contrats"),
                                                                   ("warranties", "Garanties")]
     counts = {f["id"]: f["count"] for f in papers["filters"]}
-    # the insurance contract; the washing machine bought with its warranty
-    assert counts["contracts"] >= 1 and counts["warranties"] >= 1, counts
-    assert all("papers" in i["categories"] for i in papers["recent"]) and 1 <= len(papers["recent"]) <= 20
     for fid, n in counts.items():
         narrowed = category(bridge, "papers", filter=fid)
-        assert narrowed["filter"] == fid and len(narrowed["recent"]) == min(n, 20), (fid, n, narrowed["recent"])
-    warranty = category(bridge, "papers", filter="warranties")["recent"]
-    assert any(i.get("open", {}).get("record", {}).get("type") == "purchase" for i in warranty), warranty
-    money = {f["id"]: f["count"] for f in category(bridge, "money")["filters"]}
-    assert set(money) == {"to_pay", "subscriptions", "purchases"} and money["subscriptions"] >= 1, money
-    # Dates: still to come this week (to Sunday), this month (to its last day), later
-    dates = category(bridge, "dates")
-    day = today()
-    sunday = day + timedelta(days=6 - day.weekday())
-    month_end = (day.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-    coming = []
-    for i in dates["recent"]:
-        when = i.get("date") or (f"{day.year}-{i['yearly']}" if i.get("yearly") else None)
-        assert when, i
-    week = {f["id"]: f["count"] for f in dates["filters"]}
-    assert set(week) == {"this_week", "this_month", "later"}
-    # (the task due in 2 days, the interview in 5, a renewal in 9, a flight in 12, the passport in 20, the birthdays in
-    # 23 and 41 days, a contract's end in 95, a warranty's end in 600)
-    for offset in (2, 5, 9, 12, 20, 23, 41, 95, 600):
-        coming.append(day + timedelta(days=offset))
-    assert week["this_week"] >= sum(1 for d in coming if d <= sunday)
-    assert week["this_month"] >= sum(1 for d in coming if d <= month_end)
-    assert week["later"] >= sum(1 for d in coming if d > month_end)
-    later = [i["date"] or "" for i in category(bridge, "dates", filter="later")["recent"] if i.get("date")]
-    assert later == sorted(later), later
-    # Personnes: the close ones (Marc and Claire, « proches », and « Toi ») and the others
+        assert narrowed["filter"] == fid and len(narrowed["pages"]) == n, (fid, n, narrowed["pages"])
+    assert [p["title"] for p in category(bridge, "papers", filter="contracts")["pages"]] == ["Contrats et assurances"]
+    assert "Achats" in [p["title"] for p in category(bridge, "papers", filter="warranties")["pages"]]
+    # the 1.1 apps' « Les plus récents » stays: the category's notes
+    assert all("papers" in i["categories"] for i in papers["recent"]) and 1 <= len(papers["recent"]) <= 20
+    # Personnes: « Toi », then the people, each with their link and their notes
     people = category(bridge, "people")
-    close = {f["id"]: f["count"] for f in people["filters"]}
-    assert close["close"] + close["others"] == people["count"] and close["close"] >= 5, close
-    titles = {i["title"] for i in category(bridge, "people", filter="close")["recent"]}
-    assert {"Marc Durand", "Claire Durand", "Toi"} & titles, titles
-    assert category(bridge, "home")["filters"] == []
+    rows = [(p["title"], p.get("link"), p["kind"], p["page_kind"]) for p in people["pages"]]
+    assert rows == [("Toi", None, "page", "self"), ("Claire Durand", "Sœur", "page", "person"),
+                    ("Marc Durand", "Beau-frère", "page", "person")], rows
+    # (one group only, the family: no header)
+    assert people["groups"] == [] and all(p["group"] is None for p in people["pages"])
+    marc = next(p for p in people["pages"] if p["title"] == "Marc Durand")
+    assert marc["notes"] == 3 and marc["close"] is True and marc["open"] == {"path": "Personnes/Marc Durand.md"}
+    # Maison: its subjects by name, each with its notes
+    home = category(bridge, "home")
+    assert [p["title"] for p in home["pages"]] == sorted((p["title"] for p in home["pages"]), key=str.casefold)
+    kitchen = next(p for p in home["pages"] if p["title"] == "Rénovation cuisine")
+    assert kitchen["notes"] == 2 and kitchen["kind"] == "page"
+    # Dates: the pages with a date to come, the soonest first, the date on each
+    dates = category(bridge, "dates")
+    days = [p["next"]["in_days"] for p in dates["pages"]]
+    assert days == sorted(days) and all(d >= 0 for d in days), dates["pages"]
+    assert ("Marc Durand", 23, "Anniversaire") in [(p["title"], p["next"]["in_days"], p["next"]["what"]) for p in dates["pages"]]
+    assert ("Travail", 5) in [(p["title"], p["next"]["in_days"]) for p in dates["pages"]]
+    # never a file, a task or a line alone, whatever the category
+    for id in ("people", "dates", "money", "home", "papers", "trips", "work", "other"):
+        listed = category(bridge, id)
+        assert all(p["kind"] in ("page", "records") for p in listed["pages"]), (id, listed["pages"])
+        assert not [p for p in listed["pages"] if p["title"].endswith((".jpg", ".pdf"))], (id, listed["pages"])
+        assert not [p for p in listed["pages"] if p["title"] in ("Rappeler Marc pour le devis", "Trier les photos de l'été")]
+    # the sub-filters that meant nothing for a list of pages are gone (Argent, Dates, Personnes)
+    for id in ("money", "dates", "people", "home"):
+        assert category(bridge, id)["filters"] == [], id
     # refused: an unknown sub-filter or category, Santé without its lock
     for path, params, status, code in (("papers", {"filter": "to_pay"}, 400, "filter_unknown"),
+                                       ("people", {"filter": "close"}, 400, "filter_unknown"),
                                        ("gens", {}, 404, "category_unknown"),
                                        ("health", {}, 403, "health_locked"),
                                        ("papers", {"space": "x"}, 400, "space_unknown")):
         got = bridge.get(f"/v1/notebook/category/{path}", params=params, headers=AUTH)
         assert got.status_code == status and got.json()["detail"]["code"] == code, (path, got.status_code, got.text)
         assert got.headers.get("cache-control") == "no-store"
-    # Santé behind the lock: read now, kept nowhere
+    # Santé behind the lock: its page and its latest, read now, kept nowhere
     health = category(bridge, "health", private="1")
     assert (health["title"], health["filters"], health["searched"]) == ("Santé", [], [])
-    # (its page and its line)
     assert [i["line"] for i in health["recent"] if i["kind"] == "line"] == ["Prednisolone le matin"], health["recent"]
-    assert all(i["part"] == "health" for i in health["recent"]) and health["count"] == len(health["recent"])
+    assert all(i["part"] == "health" for i in health["recent"]) and health["count"] == len(health["pages"]) == 1
     # Pro before S5: nothing
-    assert category(bridge, "papers", space="pro")["count"] == 0
+    pro = category(bridge, "papers", space="pro")
+    assert (pro["count"], pro["pages"]) == (0, [])
 
 
 def test_s4_kept_searches_six_a_space_with_their_count(bridges):

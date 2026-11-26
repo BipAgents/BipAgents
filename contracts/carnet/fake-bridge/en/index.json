@@ -30,7 +30,9 @@
       "open": {
         "path": "Areas/Family.md"
       },
-      "fold": "family your sister claire durand her husband marc durand and their children"
+      "fold": "family your sister claire durand her husband marc durand and their children",
+      "page_kind": "area",
+      "group": "family"
     },
     {
       "id": "line:p000000000d:000000000f",
@@ -102,7 +104,8 @@
       "open": {
         "path": "Areas/Home.md"
       },
-      "fold": "home the flat the kitchen work and the neighbours"
+      "fold": "home the flat the kitchen work and the neighbours",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000010:0000000032",
@@ -216,7 +219,8 @@
       "open": {
         "path": "Areas/Money.md"
       },
-      "fold": "money the month s budget and the contracts to renew"
+      "fold": "money the month s budget and the contracts to renew",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000011:0000000037",
@@ -271,7 +275,8 @@
       "open": {
         "path": "Areas/Work.md"
       },
-      "fold": "work your job at atelier lumiere and your annual review"
+      "fold": "work your job at atelier lumiere and your annual review",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000012:0000000039",
@@ -328,7 +333,11 @@
       "fold": "claire durand claire your sister a nurse in nantes married to marc",
       "aliases": [
         "Claire"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Sister",
+      "group": "family",
+      "close": true
     },
     {
       "id": "line:p0000000013:000000003b",
@@ -446,7 +455,11 @@
       "fold": "lucas bernard lucas your sunday morning running friend",
       "aliases": [
         "Lucas"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Friend",
+      "group": "friends",
+      "close": true
     },
     {
       "id": "line:p0000000014:0000000040",
@@ -543,7 +556,11 @@
       "fold": "marc durand marc claire s husband your sister and ines and tom s dad a carpenter he s quoting for your kitchen allergic to nuts",
       "aliases": [
         "Marc"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Brother-in-law",
+      "group": "family",
+      "close": true
     },
     {
       "id": "line:p0000000015:0000000044",
@@ -815,7 +832,10 @@
       "fold": "sophie laurent sophie your neighbour on the 3rd floor she has a spare set of your keys",
       "aliases": [
         "Sophie"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Neighbour",
+      "group": "others"
     },
     {
       "id": "line:p0000000016:0000000051",
@@ -886,7 +906,8 @@
       "open": {
         "path": "Subjects/Garden.md"
       },
-      "fold": "garden"
+      "fold": "garden",
+      "page_kind": "subject"
     },
     {
       "id": "page:p0000000018",
@@ -901,7 +922,8 @@
       "open": {
         "path": "Subjects/Inès’s birthday.md"
       },
-      "fold": "ines s birthday ines turns 8 on saturday december 4 at claire s theme unicorns"
+      "fold": "ines s birthday ines turns 8 on saturday december 4 at claire s theme unicorns",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000018:0000000054",
@@ -973,7 +995,8 @@
       "open": {
         "path": "Subjects/Japan trip.md"
       },
-      "fold": "japan trip april 12 days tokyo kyoto osaka the flights are to book soon"
+      "fold": "japan trip april 12 days tokyo kyoto osaka the flights are to book soon",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000019:0000000057",
@@ -1066,7 +1089,8 @@
       "open": {
         "path": "Subjects/Kitchen renovation.md"
       },
-      "fold": "kitchen renovation marc s quote is in 8 900 the worktop is still to choose and the work date to set"
+      "fold": "kitchen renovation marc s quote is in 8 900 the worktop is still to choose and the work date to set",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000001:000000005b",
@@ -1294,7 +1318,8 @@
       "open": {
         "path": "Subjects/Lisbon weekend.md"
       },
-      "fold": "lisbon weekend four days in lisbon with claire from december 4 to december 7 flights and hotel booked"
+      "fold": "lisbon weekend four days in lisbon with claire from december 4 to december 7 flights and hotel booked",
+      "page_kind": "trip"
     },
     {
       "id": "line:p000000001a:0000000066",
@@ -1578,7 +1603,8 @@
       "open": {
         "path": "Subjects/New car.md"
       },
-      "fold": "new car a used hybrid 15 000 at most"
+      "fold": "new car a used hybrid 15 000 at most",
+      "page_kind": "subject"
     },
     {
       "id": "line:p000000001b:0000000074",
@@ -1634,7 +1660,8 @@
       "open": {
         "path": "Subjects/Taxes 2026.md"
       },
-      "fold": "taxes 2026 online tax return to check before the end of the month"
+      "fold": "taxes 2026 online tax return to check before the end of the month",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000003:000000000b",
@@ -1689,7 +1716,8 @@
       "open": {
         "path": "You.md"
       },
-      "fold": "you you live in nantes run on sundays and are planning a trip to japan"
+      "fold": "you you live in nantes run on sundays and are planning a trip to japan",
+      "page_kind": "self"
     },
     {
       "id": "line:p000000001c:0000000076",

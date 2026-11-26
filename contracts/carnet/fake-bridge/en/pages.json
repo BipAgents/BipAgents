@@ -1,0 +1,628 @@
+{
+  "day": "2026-11-22",
+  "lang": "en",
+  "categories": {
+    "people": {
+      "count": 7,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p000000001c",
+          "kind": "page",
+          "page_kind": "self",
+          "title": "You",
+          "path": "You.md",
+          "notes": 9,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "You.md"
+          }
+        },
+        {
+          "id": "page:p0000000013",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Claire Durand",
+          "path": "People/Claire Durand.md",
+          "notes": 5,
+          "group": "family",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Claire Durand.md"
+          },
+          "link": "Sister"
+        },
+        {
+          "id": "page:p000000000d",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Family",
+          "path": "Areas/Family.md",
+          "notes": 3,
+          "group": "family",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Areas/Family.md"
+          }
+        },
+        {
+          "id": "page:p0000000015",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Marc Durand",
+          "path": "People/Marc Durand.md",
+          "notes": 13,
+          "group": "family",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Marc Durand.md"
+          },
+          "link": "Brother-in-law"
+        },
+        {
+          "id": "page:p0000000014",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Lucas Bernard",
+          "path": "People/Lucas Bernard.md",
+          "notes": 4,
+          "group": "friends",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Lucas Bernard.md"
+          },
+          "link": "Friend"
+        },
+        {
+          "id": "page:p0000000016",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Sophie Laurent",
+          "path": "People/Sophie Laurent.md",
+          "notes": 3,
+          "group": "others",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "People/Sophie Laurent.md"
+          },
+          "link": "Neighbour"
+        },
+        {
+          "id": "page:p0000000018",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Inès’s birthday",
+          "path": "Subjects/Inès’s birthday.md",
+          "notes": 3,
+          "group": "subjects",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Inès’s birthday.md"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "family",
+          "title": "Family"
+        },
+        {
+          "id": "friends",
+          "title": "Friends"
+        },
+        {
+          "id": "others",
+          "title": "Others"
+        },
+        {
+          "id": "subjects",
+          "title": "Subjects"
+        }
+      ]
+    },
+    "dates": {
+      "count": 10,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000012",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Work",
+          "path": "Areas/Work.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Areas/Work.md"
+          },
+          "next": {
+            "date": "2026-11-27",
+            "in_days": 5,
+            "what": "Annual review on November 27",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000014",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Lucas Bernard",
+          "path": "People/Lucas Bernard.md",
+          "notes": 4,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Lucas Bernard.md"
+          },
+          "link": "Friend",
+          "next": {
+            "date": "2026-12-01",
+            "in_days": 9,
+            "what": "Birthday",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:subscription",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Subscriptions",
+          "path": "Records/Subscriptions.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Subscriptions.md",
+            "records": "subscription"
+          },
+          "next": {
+            "date": "2026-12-01",
+            "in_days": 9,
+            "what": "Film streaming",
+            "yearly": false
+          }
+        },
+        {
+          "id": "records:booking",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Bookings",
+          "path": "Records/Bookings.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Bookings.md",
+            "records": "booking"
+          },
+          "next": {
+            "date": "2026-12-04",
+            "in_days": 12,
+            "what": "Hotel, 3 nights",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p000000001a",
+          "kind": "page",
+          "page_kind": "trip",
+          "title": "Lisbon weekend",
+          "path": "Subjects/Lisbon weekend.md",
+          "notes": 14,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Lisbon weekend.md"
+          },
+          "next": {
+            "date": "2026-12-04",
+            "in_days": 12,
+            "what": "From December 4 to December 7",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000015",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Marc Durand",
+          "path": "People/Marc Durand.md",
+          "notes": 13,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Marc Durand.md"
+          },
+          "link": "Brother-in-law",
+          "next": {
+            "date": "2026-12-15",
+            "in_days": 23,
+            "what": "Birthday",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Purchases",
+          "path": "Records/Purchases.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Purchases.md",
+            "records": "purchase"
+          },
+          "next": {
+            "date": "2026-12-22",
+            "in_days": 30,
+            "what": "Washing machine",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000013",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Claire Durand",
+          "path": "People/Claire Durand.md",
+          "notes": 5,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "People/Claire Durand.md"
+          },
+          "link": "Sister",
+          "next": {
+            "date": "2027-01-02",
+            "in_days": 41,
+            "what": "Birthday",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:contract",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Contracts and insurance",
+          "path": "Records/Contracts and insurance.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Contracts and insurance.md",
+            "records": "contract"
+          },
+          "next": {
+            "date": "2027-02-25",
+            "in_days": 95,
+            "what": "Home insurance",
+            "yearly": false
+          }
+        },
+        {
+          "id": "records:paper",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Papers",
+          "path": "Records/Papers.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Papers.md",
+            "records": "paper"
+          },
+          "next": {
+            "date": "2028-01-16",
+            "in_days": 420,
+            "what": "Passport",
+            "yearly": false
+          }
+        }
+      ],
+      "groups": []
+    },
+    "money": {
+      "count": 5,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000011",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Money",
+          "path": "Areas/Money.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Areas/Money.md"
+          }
+        },
+        {
+          "id": "page:p000000001b",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "New car",
+          "path": "Subjects/New car.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/New car.md"
+          }
+        },
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Purchases",
+          "path": "Records/Purchases.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Purchases.md",
+            "records": "purchase"
+          }
+        },
+        {
+          "id": "records:subscription",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Subscriptions",
+          "path": "Records/Subscriptions.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Subscriptions.md",
+            "records": "subscription"
+          }
+        },
+        {
+          "id": "page:p0000000003",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Taxes 2026",
+          "path": "Subjects/Taxes 2026.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Taxes 2026.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "home": {
+      "count": 3,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000017",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Garden",
+          "path": "Subjects/Garden.md",
+          "notes": 0,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Garden.md"
+          }
+        },
+        {
+          "id": "page:p0000000010",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Home",
+          "path": "Areas/Home.md",
+          "notes": 5,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Areas/Home.md"
+          }
+        },
+        {
+          "id": "page:p0000000001",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Kitchen renovation",
+          "path": "Subjects/Kitchen renovation.md",
+          "notes": 11,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Kitchen renovation.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "papers": {
+      "count": 4,
+      "filters": [
+        {
+          "id": "invoices",
+          "title": "Invoices",
+          "count": 0
+        },
+        {
+          "id": "contracts",
+          "title": "Contracts",
+          "count": 1
+        },
+        {
+          "id": "warranties",
+          "title": "Warranties",
+          "count": 1
+        }
+      ],
+      "pages": [
+        {
+          "id": "records:contract",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Contracts and insurance",
+          "path": "Records/Contracts and insurance.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Contracts and insurance.md",
+            "records": "contract"
+          }
+        },
+        {
+          "id": "records:paper",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Papers",
+          "path": "Records/Papers.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Papers.md",
+            "records": "paper"
+          }
+        },
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Purchases",
+          "path": "Records/Purchases.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Purchases.md",
+            "records": "purchase"
+          }
+        },
+        {
+          "id": "page:p0000000003",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Taxes 2026",
+          "path": "Subjects/Taxes 2026.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Taxes 2026.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "trips": {
+      "count": 3,
+      "filters": [],
+      "pages": [
+        {
+          "id": "records:booking",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Bookings",
+          "path": "Records/Bookings.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Records/Bookings.md",
+            "records": "booking"
+          }
+        },
+        {
+          "id": "page:p0000000019",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Japan trip",
+          "path": "Subjects/Japan trip.md",
+          "notes": 4,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Japan trip.md"
+          }
+        },
+        {
+          "id": "page:p000000001a",
+          "kind": "page",
+          "page_kind": "trip",
+          "title": "Lisbon weekend",
+          "path": "Subjects/Lisbon weekend.md",
+          "notes": 14,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Subjects/Lisbon weekend.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "work": {
+      "count": 1,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000012",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Work",
+          "path": "Areas/Work.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Areas/Work.md"
+          }
+        }
+      ],
+      "groups": []
+    }
+  }
+}

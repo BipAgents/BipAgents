@@ -296,6 +296,8 @@ fn page_entries(
     // its space (S5): `space: pro` on its header; Santé's pages have none (spaces.rs)
     let page_space = super::spaces::of_page(part, page);
     let space = (page_space == "pro").then(|| "pro".to_string());
+    // what the category screens list it by (structure.rs): its kind, a person's link and group, « proche »
+    let (link, group) = super::structure::link_of(page, &kind);
     items.push(Entry {
         id: page_id.clone(),
         kind: "page".into(),
@@ -310,6 +312,11 @@ fn page_entries(
         open: json!({"path": path}),
         fold: fold(&format!("{title} {} {summary}", aliases.join(" "))),
         aliases,
+        page_kind: some(kind.clone()),
+        link: link.and_then(|l| masked(&l)),
+        group: group.map(str::to_string),
+        close: page.close(),
+        icon: page.icon(),
         ..Default::default()
     });
     let sections: Vec<(String, Vec<super::Fact>)> =

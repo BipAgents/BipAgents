@@ -30,41 +30,8 @@
     {
       "id": "dates",
       "title": "Dates",
-      "count": 2,
-      "hint": "Travail, Préparer l’entretien annuel",
-      "locked": false,
-      "first": {
-        "id": "line:p0000000012:0000000039",
-        "kind": "line",
-        "part": "main",
-        "path": "Domaines/Travail.md",
-        "title": "Travail",
-        "line": "Entretien annuel le 27 novembre",
-        "categories": [
-          "work",
-          "dates"
-        ],
-        "space": "pro",
-        "date": "2026-11-27",
-        "yearly": null,
-        "source": "Ce qui compte",
-        "who": "Daily",
-        "noted": "2026-11-19",
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": "page:p0000000012",
-        "open": {
-          "path": "Domaines/Travail.md",
-          "section": "matters"
-        }
-      }
-    },
-    {
-      "id": "work",
-      "title": "Travail",
-      "count": 4,
-      "hint": "Travail, Préparer l’entretien annuel",
+      "count": 1,
+      "hint": "Travail",
       "locked": false,
       "first": {
         "id": "page:p0000000012",
@@ -76,7 +43,38 @@
         "categories": [
           "work"
         ],
-        "space": "pro",
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Travail",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Travail.md"
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Travail",
+      "count": 1,
+      "hint": "Travail",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000012",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Ton poste chez Atelier Lumière et ton entretien annuel.",
+        "categories": [
+          "work"
+        ],
+        "space": "perso",
         "date": null,
         "yearly": null,
         "source": "Travail",

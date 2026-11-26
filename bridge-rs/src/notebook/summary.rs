@@ -8,9 +8,10 @@
 //!     DELETE /v1/notebook/kept?id=
 //!     POST   /v1/notebook/searched                                   {q, category?, space?} → 204
 //!
-//! Everything is counted on the phone's copy (index.rs: the same notes, the same rule as the search's chips; Santé is
-//! never in it): a category's `count` is its notes (`dates` as of today), `total` each note once. Santé's line is
-//! locked: no count, no word; its page is read behind the app's lock only (`private=1`), kept nowhere.
+//! Everything is counted on the phone's copy (index.rs; Santé is never in it): a category's `count` is the pages its
+//! screen lists (structure.rs, Alex 26/11: the people in Personnes, the subjects elsewhere, never a line), `total` each
+//! note once. Santé's line is locked: no count, no word; its page is read behind the app's lock only (`private=1`),
+//! kept nowhere.
 //!
 //! - **Kept searches** (`state.json` `kept_searches`): the words as typed (a date phrase too: « à payer ce mois-ci »,
 //!   counted again each day), a title the person may change, 6 a space; never a number or a reference (the same rule
@@ -29,11 +30,11 @@
 //!   and those kept with the setting off (`all`), `pro` Pro's; 6 a view. The searches made: each space its own.
 //!   Santé is in no space: its line is in `all` and `perso`, its page ignores the space asked.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::categories as c;
@@ -59,28 +60,16 @@ pub const SPACES: [&str; 3] = ["all", "perso", "pro"];
 pub const Q_MAX: usize = 200;
 pub const TITLE_MAX: usize = 80;
 const KEPT_KEY: &str = "kept_searches";
-/// Each category's sub-filters (sommaire.json `categories.filters`), in their order.
-pub const FILTERS: [(&str, &[&str]); 4] = [
-    ("papers", &["invoices", "contracts", "warranties"]),
-    ("money", &["to_pay", "subscriptions", "purchases"]),
-    ("dates", &["this_week", "this_month", "later"]),
-    ("people", &["close", "others"]),
-];
+/// Each category's sub-filters (sommaire.json `categories.filters`), in their order: only those that mean something
+/// for a list of pages (Alex 26/11: Papiers' Factures, Contrats, Garanties; the others' are gone with the lines).
+pub const FILTERS: [(&str, &[&str]); 1] = [("papers", &["invoices", "contracts", "warranties"])];
 
 /// The sub-filters' names (contracts/carnet/sommaire.json `titles_proposed`, the same table: checked by
 /// `the_sub_filter_titles_are_the_contracts`) in fr, en, de, es, nl. Visible text: proposed, for Alex.
-const FILTER_TITLES: [(&str, [&str; 5]); 11] = [
+const FILTER_TITLES: [(&str, [&str; 5]); 3] = [
     ("invoices", ["Factures", "Invoices", "Rechnungen", "Facturas", "Facturen"]),
     ("contracts", ["Contrats", "Contracts", "Verträge", "Contratos", "Contracten"]),
     ("warranties", ["Garanties", "Warranties", "Garantien", "Garantías", "Garanties"]),
-    ("to_pay", ["À payer", "To pay", "Zu zahlen", "Por pagar", "Te betalen"]),
-    ("subscriptions", ["Abonnements", "Subscriptions", "Abos", "Suscripciones", "Abonnementen"]),
-    ("purchases", ["Achats", "Purchases", "Käufe", "Compras", "Aankopen"]),
-    ("this_week", ["Cette semaine", "This week", "Diese Woche", "Esta semana", "Deze week"]),
-    ("this_month", ["Ce mois-ci", "This month", "Diesen Monat", "Este mes", "Deze maand"]),
-    ("later", ["Plus tard", "Later", "Später", "Más adelante", "Later"]),
-    ("close", ["Proches", "Close ones", "Nahestehende", "Cercanos", "Naasten"]),
-    ("others", ["Autres", "Others", "Andere", "Otros", "Anderen"]),
 ];
 
 fn column(lang: &str) -> usize {
@@ -220,8 +209,9 @@ fn latest(f: &Finder, ats: &[usize], category: &str, today: NaiveDate) -> Vec<us
     out
 }
 
-/// The grey words: the category's latest searches, else its latest titles (a line's is its page's), 3 at most.
-fn hint(made: &serde_json::Map<String, Value>, f: &Finder, ordered: &[usize], space: &str, category: &str) -> String {
+/// The grey words: the category's latest searches, else the titles of its pages last written in (Dates: the soonest),
+/// 3 at most.
+fn hint(made: &serde_json::Map<String, Value>, rows: &[super::structure::Listed], space: &str, category: &str) -> String {
     let made: Vec<String> = made
         .get(&searched_key(space, category))
         .and_then(Value::as_array)
@@ -230,9 +220,13 @@ fn hint(made: &serde_json::Map<String, Value>, f: &Finder, ordered: &[usize], sp
     if !made.is_empty() {
         return made.join(", ");
     }
+    let mut ordered: Vec<&super::structure::Listed> = rows.iter().collect();
+    if category != "dates" {
+        ordered.sort_by(|a, b| b.latest.cmp(&a.latest));
+    }
     let mut titles: Vec<&str> = Vec::new();
-    for at in ordered {
-        let t = f.items[*at].title.as_str();
+    for r in ordered {
+        let t = r.title.as_str();
         if !t.is_empty() && !titles.contains(&t) {
             titles.push(t);
             if titles.len() == HINTS {
@@ -293,8 +287,7 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
     let shown = titles_lang(langs);
     let t = texts(&shown);
     let (f, version, epoch) = super::index::current(config, langs);
-    let (members, total) = by_category(&f, space, today);
-    let me = super::words(&super::language(config)).self_path();
+    let (_, total) = by_category(&f, space, today);
     let made = read_searched(config);
     let mut lines: Vec<Value> = Vec::new();
     for id in c::PERSONAL {
@@ -305,16 +298,15 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
             }
             continue;
         }
-        let Some(ats) = members.get(id).filter(|a| !a.is_empty()) else { continue };
-        let ordered = latest(&f, ats, id, today);
-        // « Toi » is the first line of « Personnes »; else the latest
-        let first = match id {
-            "people" => ats.iter().copied().find(|at| f.items[*at].kind == "page" && f.items[*at].path.as_deref() == Some(me.as_str())),
-            _ => None,
+        // what its screen lists (structure.rs, Alex 26/11): its pages, people in Personnes, subjects elsewhere
+        let rows = super::structure::pages_in(&f, id, space, today);
+        if rows.is_empty() {
+            continue;
         }
-        .or_else(|| ordered.first().copied());
-        let mut line = json!({"id": id, "title": c::title(&shown, id), "count": ats.len(),
-                              "hint": hint(&made, &f, &ordered, space, id), "locked": false});
+        // « Toi » is the first line of « Personnes »; else the first listed (Dates: the soonest)
+        let first = rows.first().map(|r| r.at);
+        let mut line = json!({"id": id, "title": c::title(&shown, id), "count": rows.len(),
+                              "hint": hint(&made, &rows, space, id), "locked": false});
         if let Some(at) = first {
             line["first"] = super::index::item_view(&f, at, today);
         }
@@ -359,63 +351,23 @@ fn record_type(f: &Finder, at: usize) -> &str {
     f.items[at].open.get("record").and_then(|r| r.get("type")).and_then(Value::as_str).unwrap_or("")
 }
 
-/// The last day of `today`'s week (Sunday) and of its month.
-fn week_and_month_ends(today: NaiveDate) -> (NaiveDate, NaiveDate) {
-    let sunday = today + Duration::days(6 - i64::from(today.weekday().num_days_from_monday()));
-    let next = if today.month() == 12 {
-        NaiveDate::from_ymd_opt(today.year() + 1, 1, 1)
-    } else {
-        NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1)
-    };
-    (sunday, next.map(|d| d - Duration::days(1)).unwrap_or(today))
-}
-
-/// Whether the note at `at` is in sub-filter `id` (contracts/carnet/sommaire.md §3, change 30): the records by their
-/// type, the other notes by the words of their title and line (5 languages); Dates by their day still to come;
-/// Personnes by the close ones (`close`: « Toi », the pages marked « proche », their lines).
-fn in_filter(id: &str, f: &Finder, at: usize, today: NaiveDate, close: &HashSet<String>) -> bool {
+/// Whether the note at `at` is in sub-filter `id` (the 1.1 apps' « Les plus récents »: contracts/carnet/sommaire.md
+/// §3, change 30): the records by their type, the other notes by the words of their title and line (5 languages).
+fn in_filter(id: &str, f: &Finder, at: usize) -> bool {
     let e = &f.items[at];
     let kind = record_type(f, at);
-    let coming = || f.day(at, today).filter(|d| *d >= today);
-    let (sunday, month_end) = week_and_month_ends(today);
     match id {
         "invoices" => e.kind != "record" && starts(&words_of(f, at), &["factur", "factuur", "invoice", "rechnung"]),
         "contracts" => kind == "contract" || (e.kind != "record" && starts(&words_of(f, at), &["contrat", "contract", "vertrag", "contrato"])),
         "warranties" => kind == "purchase" || (e.kind != "record" && starts(&words_of(f, at), &["garanti", "warrant", "guarant", "gewahrleist"])),
-        // what is still to pay: an open task, a renewal to come, a line or a document with a day to come
-        "to_pay" => match e.kind.as_str() {
-            "task" => !e.done,
-            "record" => kind == "subscription" && coming().is_some(),
-            _ => coming().is_some(),
-        },
-        "subscriptions" => {
-            kind == "subscription" || (e.kind != "record" && {
-                let w = words_of(f, at);
-                starts(&w, &["abonn", "subscri", "suscrip"]) || w.iter().any(|x| x == "abo" || x == "abos")
-            })
-        }
-        "purchases" => kind == "purchase" || (e.kind != "record" && starts(&words_of(f, at), &["achat", "achet", "purchase", "bought", "gekauft", "compra", "aankoop", "gekocht"])),
-        "this_week" => coming().is_some_and(|d| d <= sunday),
-        "this_month" => coming().is_some_and(|d| d <= month_end),
-        "later" => coming().is_some_and(|d| d > month_end),
-        "close" => close.contains(&e.id) || e.page.as_ref().is_some_and(|p| close.contains(p)),
-        "others" => !(close.contains(&e.id) || e.page.as_ref().is_some_and(|p| close.contains(p))),
         _ => false,
     }
 }
 
-/// The close ones' pages (« Toi », a person marked « proche »): their Item ids.
-fn close_pages(config: &Config) -> HashSet<String> {
-    super::all_pages(config, Part::Main)
-        .iter()
-        .filter(|(_, p)| p.close() || p.kind() == "self")
-        .map(|(path, p)| format!("page:{}", c::page_key(p, path)))
-        .collect()
-}
-
-/// A category's page (`CategoryPage`): its sub-filters with their counts, « Cherché ici » (3), the latest (20, of
-/// `filter` when given). Santé (`health`) only behind the app's lock (`private`): read now, kept nowhere, no
-/// sub-filter, no search kept.
+/// A category's page (`CategoryPage`): its pages ready to show (`pages`, `groups`: structure.rs, Alex 26/11) and
+/// their count, Papiers' sub-filters counted in pages, « Cherché ici » (3); `recent`, the latest 20 notes (of
+/// `filter` when given), for the 1.1 apps that list them. Santé (`health`) only behind the app's lock (`private`):
+/// read now, kept nowhere, no sub-filter, no search kept.
 pub fn category_at(
     config: &Config,
     id: &str,
@@ -444,30 +396,38 @@ pub fn category_at(
         let f = super::index::health_finder(config, langs);
         let ats: Vec<usize> = (0..f.items.len()).collect();
         let recent: Vec<Value> = latest(&f, &ats, id, today).into_iter().take(RECENT).map(|at| super::index::item_view(&f, at, today)).collect();
-        return Ok(json!({"v": V, "id": id, "title": title, "count": ats.len(), "space": space, "filters": [],
-                         "filter": null, "searched": [], "recent": recent, "bar": bar}));
+        // its pages (the private part's: every one of them, by name)
+        let rows = super::structure::pages_in(&f, "health", "all", today);
+        let pages: Vec<Value> = rows.iter().map(|r| super::structure::entry_view(&f, r, today)).collect();
+        return Ok(json!({"v": V, "id": id, "title": title, "count": pages.len(), "space": space, "filters": [],
+                         "filter": null, "searched": [], "recent": recent, "pages": pages, "groups": [], "bar": bar}));
     }
     let f = super::index::finder(config, langs);
     let (mut members, _) = by_category(&f, space, today);
     let ats = members.remove(id).unwrap_or_default();
-    let close = if id == "people" { close_pages(config) } else { HashSet::new() };
+    let rows = super::structure::pages_in(&f, id, space, today);
     let counted: Vec<Value> = filters
         .iter()
         .map(|fid| {
-            let n = ats.iter().filter(|at| in_filter(fid, &f, **at, today, &close)).count();
+            let n = rows.iter().filter(|r| super::structure::in_papers_filter(&f, r, fid)).count();
             json!({"id": fid, "title": filter_title(&shown, fid), "count": n})
         })
         .collect();
+    let shown_rows: Vec<&super::structure::Listed> = match filter {
+        Some(fid) => rows.iter().filter(|r| super::structure::in_papers_filter(&f, r, fid)).collect(),
+        None => rows.iter().collect(),
+    };
+    let pages: Vec<Value> = shown_rows.iter().map(|r| super::structure::entry_view(&f, r, today)).collect();
     let listed: Vec<usize> = match filter {
-        Some(fid) => ats.iter().copied().filter(|at| in_filter(fid, &f, *at, today, &close)).collect(),
+        Some(fid) => ats.iter().copied().filter(|at| in_filter(fid, &f, *at)).collect(),
         None => ats.clone(),
     };
-    // a sub-filter of days: the soonest first
-    let order_as = if matches!(filter, Some("this_week" | "this_month" | "later")) { "dates" } else { id };
     let recent: Vec<Value> =
-        latest(&f, &listed, order_as, today).into_iter().take(RECENT).map(|at| super::index::item_view(&f, at, today)).collect();
-    Ok(json!({"v": V, "id": id, "title": title, "count": ats.len(), "space": space, "filters": counted,
-              "filter": filter, "searched": searched_in(config, space, id), "recent": recent, "bar": bar}))
+        latest(&f, &listed, id, today).into_iter().take(RECENT).map(|at| super::index::item_view(&f, at, today)).collect();
+    let groups = super::structure::groups_view(&rows, &shown);
+    Ok(json!({"v": V, "id": id, "title": title, "count": rows.len(), "space": space, "filters": counted,
+              "filter": filter, "searched": searched_in(config, space, id), "recent": recent, "pages": pages,
+              "groups": groups, "bar": bar}))
 }
 
 // -- kept searches (state.json `kept_searches`) ------------------------------------------------------------------------

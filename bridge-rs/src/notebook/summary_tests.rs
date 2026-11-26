@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::summary::{self as sm, Refused};
@@ -77,7 +77,7 @@ fn the_summary_is_ready_to_show() {
     // no selector before S5 (Perso · Pro) and S6 (Famille): the app keeps its « Moi | Famille » of today
     assert_eq!(s["spaces"], json!([]));
     assert_eq!(s["kept"], json!([]));
-    let (total, counts) = counted(&config, "all");
+    let (total, _) = counted(&config, "all");
     assert_eq!(s["total"], json!({"count": total, "title": "Tout le Carnet"}));
     assert_eq!(s["bar"], json!({"placeholder": "Cherche dans tout le Carnet"}));
     // the categories in the sommaire's order, an empty one hidden, Santé last and locked (no count, no word)
@@ -86,17 +86,25 @@ fn the_summary_is_ready_to_show() {
     assert_eq!(ids, order);
     assert_eq!(ids.last().map(String::as_str), Some("health"));
     assert_eq!(line(&s, "health").unwrap(), &json!({"id": "health", "title": "Santé", "count": null, "hint": "", "locked": true}));
+    // each category counts what its screen lists (Alex 26/11): its pages, never its lines
+    let f = nb::index::finder(&config, &fr());
     for l in s["categories"].as_array().unwrap().iter().filter(|l| l["id"] != "health") {
         let id = l["id"].as_str().unwrap();
-        assert_eq!(l["count"], json!(counts[id]), "{id}");
+        let rows = nb::structure::pages_in(&f, id, "all", today());
+        assert_eq!(l["count"], json!(rows.len()), "{id}");
+        let screen = sm::category_at(&config, id, "all", None, &fr(), false, today()).unwrap();
+        assert_eq!(screen["pages"].as_array().unwrap().len(), rows.len(), "{id}");
         assert_eq!((l["locked"].clone(), l["title"].clone()), (json!(false), json!(c::title("fr", id))));
-        // the grey words: the latest titles of the category (no search made yet), three at most
+        // the grey words: the titles of its pages (no search made yet), three at most
         let hint = l["hint"].as_str().unwrap();
         assert!(!hint.is_empty() && hint.split(", ").count() <= 3, "{id}: {hint}");
-        assert!(l["first"]["categories"].as_array().unwrap().iter().any(|x| x == id), "{id}: {}", l["first"]);
+        assert!(hint.split(", ").all(|t| rows.iter().any(|r| r.title == t)), "{id}: {hint}");
+        // `first`: the first row's page (in Dates the soonest)
+        assert_eq!(l["first"]["id"], json!(f.items[rows[0].at].id), "{id}");
     }
-    for id in counts.keys().filter(|k| *k != "health") {
-        assert!(ids.contains(id), "{id} not shown");
+    for id in c::PERSONAL.iter().filter(|k| **k != "health") {
+        let listed = !nb::structure::pages_in(&f, id, "all", today()).is_empty();
+        assert_eq!(ids.contains(&id.to_string()), listed, "{id}");
     }
     // « Toi » is the first line of « Personnes »
     let people = line(&s, "people").unwrap();
@@ -147,82 +155,125 @@ fn a_space_before_s5() {
 }
 
 #[test]
-fn a_category_page_has_its_filters_its_searches_and_the_latest() {
+fn a_category_page_lists_its_pages_and_still_its_latest_notes() {
     let (_dir, config) = demo("fr");
     santé(&config);
     let page = |id: &str, filter: Option<&str>| sm::category_at(&config, id, "all", filter, &fr(), false, today());
     let papers = page("papers", None).unwrap();
     typed(&papers, "CategoryPage");
-    let (_, counts) = counted(&config, "all");
-    assert_eq!((papers["id"].clone(), papers["title"].clone(), papers["count"].clone()), (json!("papers"), json!("Papiers"), json!(counts["papers"])));
+    let f = nb::index::finder(&config, &fr());
+    let rows = |id: &str| nb::structure::pages_in(&f, id, "all", today());
+    assert_eq!((papers["id"].clone(), papers["title"].clone(), papers["count"].clone()), (json!("papers"), json!("Papiers"), json!(rows("papers").len())));
     assert_eq!((papers["filter"].clone(), papers["searched"].clone()), (Value::Null, json!([])));
     assert_eq!(papers["bar"], json!({"placeholder": "Cherche dans Papiers"}));
     let filters: Vec<(String, String)> = papers["filters"].as_array().unwrap().iter()
         .map(|f| (f["id"].as_str().unwrap().into(), f["title"].as_str().unwrap().into())).collect();
     assert_eq!(filters, [("invoices", "Factures"), ("contracts", "Contrats"), ("warranties", "Garanties")]
         .map(|(a, b)| (a.to_string(), b.to_string())));
-    // the latest: the category's own, at most 20, the newest noted first
+    // its pages: the records' pages of its records and the pages filed there, never a line, a task or a file
+    let titles = |v: &Value| -> Vec<String> { v["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect() };
+    let listed = titles(&papers);
+    assert!(listed.contains(&"Contrats et assurances".to_string()) && listed.contains(&"Achats".to_string()), "{listed:?}");
+    assert!(papers["pages"].as_array().unwrap().iter().all(|p| p["kind"] == "page" || p["kind"] == "records"));
+    // the 1.1 apps' « Les plus récents »: the category's own notes, at most 20, the newest noted first
     let recent = papers["recent"].as_array().unwrap();
     assert!(!recent.is_empty() && recent.len() <= sm::RECENT);
     assert!(recent.iter().all(|i| i["categories"].as_array().unwrap().iter().any(|x| x == "papers")));
     let noted: Vec<String> = recent.iter().filter_map(|i| i["noted"].as_str().map(str::to_string)).collect();
     assert!(noted.windows(2).all(|w| w[0] >= w[1]), "{noted:?}");
-    // each sub-filter: its count is what it lists (all of it under 20), each of them in the category
-    for id in ["papers", "money", "dates", "people"] {
-        let whole = page(id, None).unwrap();
-        for f in whole["filters"].as_array().unwrap() {
-            let fid = f["id"].as_str().unwrap();
-            let narrowed = page(id, Some(fid)).unwrap();
-            assert_eq!(narrowed["filter"], json!(fid));
-            assert_eq!(narrowed["count"], whole["count"]);
-            let listed = narrowed["recent"].as_array().unwrap();
-            assert_eq!(json!(listed.len().min(sm::RECENT)), json!(f["count"].as_u64().unwrap().min(sm::RECENT as u64)), "{id}/{fid}");
-            assert!(listed.iter().all(|i| i["categories"].as_array().unwrap().iter().any(|x| x == id)), "{id}/{fid}");
-        }
-    }
-    // the demo's records: a contract, a purchase with its warranty
+    // Papiers' sub-filters count pages: the contracts' records page, the purchases' (their warranties)
     let count = |p: &Value, fid: &str| p["filters"].as_array().unwrap().iter().find(|f| f["id"] == fid).unwrap()["count"].as_u64().unwrap();
-    assert!(count(&papers, "contracts") >= 1 && count(&papers, "warranties") >= 1, "{}", papers["filters"]);
-    let money = page("money", None).unwrap();
-    assert!(count(&money, "subscriptions") >= 1 && count(&money, "purchases") >= 1, "{}", money["filters"]);
-    // Dates: what is still to come, this week (to Sunday), this month (to its last day), later
-    let dates = page("dates", None).unwrap();
-    let f = nb::index::finder(&config, &fr());
-    let t = today();
-    let sunday = t + Duration::days(6 - t.weekday().num_days_from_monday() as i64);
-    let month_end = NaiveDate::from_ymd_opt(t.year() + i32::from(t.month() == 12), t.month() % 12 + 1, 1).unwrap() - Duration::days(1);
-    let days: Vec<NaiveDate> = (0..f.items.len())
-        .filter(|at| f.categories(*at, t).iter().any(|x| x == "dates"))
-        .filter_map(|at| f.day(at, t))
-        .filter(|d| *d >= t)
-        .collect();
-    assert_eq!(count(&dates, "this_week") as usize, days.iter().filter(|d| **d <= sunday).count());
-    assert_eq!(count(&dates, "this_month") as usize, days.iter().filter(|d| **d <= month_end).count());
-    assert_eq!(count(&dates, "later") as usize, days.iter().filter(|d| **d > month_end).count());
-    let coming = page("dates", Some("later")).unwrap();
-    let listed: Vec<&str> = coming["recent"].as_array().unwrap().iter().filter_map(|i| i["date"].as_str()).collect();
-    assert!(listed.windows(2).all(|w| w[0] <= w[1]), "the soonest first: {listed:?}");
-    // Personnes: the close ones (marked « proche », and « Toi ») and the others, each note in one of them
-    let people = page("people", None).unwrap();
-    assert_eq!(count(&people, "close") + count(&people, "others"), people["count"].as_u64().unwrap());
-    assert!(count(&people, "close") >= 1);
-    // categories without sub-filters: none
-    assert_eq!(page("home", None).unwrap()["filters"], json!([]));
-    // refused: a sub-filter of another category, an unknown category, Santé without its lock
-    assert_eq!(page("papers", Some("to_pay")), Err(Refused::FilterUnknown));
-    assert_eq!(page("home", Some("x")), Err(Refused::FilterUnknown));
+    for fid in ["invoices", "contracts", "warranties"] {
+        let narrowed = page("papers", Some(fid)).unwrap();
+        assert_eq!((narrowed["filter"].clone(), narrowed["count"].clone()), (json!(fid), papers["count"].clone()));
+        assert_eq!(narrowed["pages"].as_array().unwrap().len() as u64, count(&papers, fid), "{fid}");
+    }
+    assert_eq!(titles(&page("papers", Some("contracts")).unwrap()), ["Contrats et assurances"]);
+    assert!(titles(&page("papers", Some("warranties")).unwrap()).contains(&"Achats".to_string()));
+    // the other categories have none any more (Alex 26/11: they meant nothing for a list of pages)
+    for id in ["money", "dates", "people", "home"] {
+        assert_eq!(page(id, None).unwrap()["filters"], json!([]), "{id}");
+    }
+    for (id, fid) in [("papers", "to_pay"), ("money", "to_pay"), ("dates", "this_week"), ("people", "close"), ("home", "x")] {
+        assert_eq!(page(id, Some(fid)), Err(Refused::FilterUnknown), "{id}/{fid}");
+    }
     assert_eq!(page("gens", None), Err(Refused::CategoryUnknown));
     assert_eq!(page("health", None), Err(Refused::HealthLocked));
-    // Santé behind the lock: read now, kept nowhere, no sub-filter, no search kept
+    // Santé behind the lock: its pages and its latest, read now, kept nowhere, no sub-filter, no search kept
     let health = sm::category_at(&config, "health", "all", None, &fr(), true, today()).unwrap();
     typed(&health, "CategoryPage");
-    assert_eq!((health["filters"].clone(), health["searched"].clone()), (json!([]), json!([])));
+    assert_eq!((health["filters"].clone(), health["searched"].clone(), titles(&health)), (json!([]), json!([]), vec!["Santé".to_string()]));
     let lines: Vec<&str> = health["recent"].as_array().unwrap().iter().map(|i| i["line"].as_str().unwrap()).collect();
     assert!(lines.contains(&"Prednisolone le matin"), "{lines:?}");
     assert!(health["recent"].as_array().unwrap().iter().all(|i| i["part"] == "health"));
     // Pro before S5: nothing
     let pro = sm::category_at(&config, "papers", "pro", None, &fr(), false, today()).unwrap();
-    assert_eq!((pro["count"].clone(), pro["recent"].clone()), (json!(0), json!([])));
+    assert_eq!((pro["count"].clone(), pro["recent"].clone(), pro["pages"].clone()), (json!(0), json!([]), json!([])));
+}
+
+#[test]
+fn personnes_lists_the_people_by_their_link() {
+    let (_dir, config) = demo("fr");
+    let people = sm::category_at(&config, "people", "all", None, &fr(), false, today()).unwrap();
+    typed(&people, "CategoryPage");
+    let rows: Vec<(String, Value, Value, u64)> = people["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["title"].as_str().unwrap().to_string(), p["group"].clone(), p.get("link").cloned().unwrap_or(Value::Null), p["notes"].as_u64().unwrap()))
+        .collect();
+    let shown: Vec<(&str, Value, Value)> = rows.iter().map(|(t, g, l, _)| (t.as_str(), g.clone(), l.clone())).collect();
+    // « Toi » first, then the family (Claire, the family's area, Marc), the friends, the others, then the subject
+    assert_eq!(shown, vec![
+        ("Toi", Value::Null, Value::Null),
+        ("Claire Durand", json!("family"), json!("Sœur")),
+        ("Famille", json!("family"), Value::Null),
+        ("Marc Durand", json!("family"), json!("Beau-frère")),
+        ("Lucas Bernard", json!("friends"), json!("Ami")),
+        ("Sophie Laurent", json!("others"), json!("Voisine")),
+        ("Anniversaire d’Inès", json!("subjects"), Value::Null),
+    ]);
+    assert_eq!(people["groups"], json!([{"id": "family", "title": "Famille"}, {"id": "friends", "title": "Amis"},
+                                        {"id": "others", "title": "Autres"}, {"id": "subjects", "title": "Sujets"}]));
+    // each with its notes: its page's lines in the copy
+    let f = nb::index::finder(&config, &fr());
+    for p in people["pages"].as_array().unwrap() {
+        let lines = f.items.iter().filter(|e| e.kind == "line" && e.page.as_deref() == p["id"].as_str()).count();
+        assert_eq!(p["notes"], json!(lines), "{}", p["title"]);
+    }
+    assert_eq!(rows.iter().find(|r| r.0 == "Marc Durand").unwrap().3, 13);
+    assert_eq!(people["count"], json!(7));
+    // in English: the same people, the headers in English, the links as their pages say them
+    let (_d, en_config) = demo("en");
+    let en = sm::category_at(&en_config, "people", "all", None, &["en".to_string()], false, today()).unwrap();
+    let links: Vec<Value> = en["pages"].as_array().unwrap().iter().map(|p| p.get("link").cloned().unwrap_or(Value::Null)).collect();
+    assert!(links.contains(&json!("Brother-in-law")) && links.contains(&json!("Sister")) && links.contains(&json!("Neighbour")), "{links:?}");
+    assert_eq!(en["groups"][0], json!({"id": "family", "title": "Family"}));
+}
+
+#[test]
+fn maison_lists_its_subjects_and_dates_the_pages_with_a_date_to_come() {
+    let (_dir, config) = demo("fr");
+    let home = sm::category_at(&config, "home", "all", None, &fr(), false, today()).unwrap();
+    let titles: Vec<&str> = home["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap()).collect();
+    // by name, one header-less list (no person filed there)
+    assert_eq!(titles, ["Maison", "Rénovation cuisine"]);
+    assert_eq!(home["groups"], json!([]));
+    assert!(home["pages"].as_array().unwrap().iter().all(|p| p["group"].is_null() && p["notes"].as_u64().unwrap() > 0));
+    // Dates: the pages with a date still to come, the soonest first, the date on each
+    let dates = sm::category_at(&config, "dates", "all", None, &fr(), false, today()).unwrap();
+    let next: Vec<(String, String)> = dates["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["title"].as_str().unwrap().to_string(), p["next"]["date"].as_str().unwrap().to_string()))
+        .collect();
+    assert!(next.windows(2).all(|w| w[0].1 <= w[1].1), "{next:?}");
+    assert!(next.iter().all(|(_, d)| d.as_str() >= today().to_string().as_str()), "{next:?}");
+    let marc = dates["pages"].as_array().unwrap().iter().find(|p| p["title"] == "Marc Durand").unwrap();
+    assert_eq!((marc["next"]["in_days"].clone(), marc["next"]["what"].clone(), marc["next"]["yearly"].clone()), (json!(23), json!("Anniversaire"), json!(true)));
+    // the records' pages by their next date (the purchases' warranty, a renewal…)
+    assert!(dates["pages"].as_array().unwrap().iter().any(|p| p["kind"] == "records"), "{}", dates["pages"]);
 }
 
 #[test]

@@ -118,7 +118,8 @@ def test_s6_the_family_carnet_has_its_sommaire_relayed(bridges, fakes):
     for x in (a, b):
         assert x.get("/v1/notebook", headers=AUTH).json()["sommaire"][-1] == "family"
 
-    want = [("shopping", 2), ("people", 1), ("dates", 2), ("home", 1), ("holidays", 1), ("school", 1), ("menus", 1)]
+    # (each counts its pages and lists, Alex 26/11: « Courses », « Dates » for Mamie's birthday, « Tâches »…)
+    want = [("shopping", 1), ("people", 1), ("dates", 2), ("home", 1), ("holidays", 1), ("school", 1), ("menus", 1)]
     theirs = ok(fam(b, "summary"))
     mine = ok(fam(a, "summary"))
     for s, others in ((theirs, "Avec Alex"), (mine, "Avec Marie")):
@@ -127,9 +128,9 @@ def test_s6_the_family_carnet_has_its_sommaire_relayed(bridges, fakes):
         assert {x["locked"] for x in s["categories"]} == {False} and not line(s, "health") and not line(s, "other")
         assert s["total"] == {"count": 7, "title": "Tout le Carnet"} and s["kept"] == []
         assert s["bar"] == {"placeholder": "Cherche pour la famille"}
-        # the grey words: the latest notes' lines (no search made yet)
-        assert line(s, "shopping")["hint"] == "Pâtes complètes, Lait"
-        assert line(s, "school")["hint"] == "Inscrire Tom au judo"
+        # the grey words: its pages' and lists' titles (no search made yet)
+        assert line(s, "shopping")["hint"] == "Courses"
+        assert line(s, "school")["hint"] == "Tâches"
         assert line(s, "dates")["first"]["line"] == "Rendez-vous chaudière"
     # the holder's copy, relayed as it is: the same version of the same epoch
     assert (theirs["version"], theirs["epoch"]) == (mine["version"], mine["epoch"])
@@ -180,8 +181,11 @@ def test_s6_the_family_carnet_has_its_sommaire_relayed(bridges, fakes):
     assert (school["id"], school["title"], school["count"], school["searched"]) == ("school", "École", 1, [])
     assert [r["line"] for r in school["recent"]] == ["Inscrire Tom au judo"]
     assert school["bar"] == {"placeholder": "Cherche dans École"}
+    # its pages and lists, the same structure as the person's own (Alex 26/11): « Tâches » with its item there
+    assert [(p["title"], p["kind"], p["notes"]) for p in school["pages"]] == [("Tâches", "list", 1)]
     dates = ok(fam(a, "category/dates"))
     assert [r["line"] for r in dates["recent"]] == ["Rendez-vous chaudière", "Anniversaire de Mamie"]
+    assert [(p["title"], p["next"]["date"]) for p in dates["pages"]] == [("Tâches", day(3)), ("Dates", day(6))]
     for unknown in ("health", "money", "trips", "gens"):
         got = fam(b, f"category/{unknown}")
         assert got.status_code == 404 and got.json()["detail"]["code"] == "category_unknown", (unknown, got.text)
@@ -267,7 +271,7 @@ def test_s6_the_bridge_files_the_family_carnet_and_the_person_wins(bridges, fake
     # undone: as it was
     back = ok(fam(a, "categorize/undo", method="post", json={"undo": moved["undo"]}))
     assert back["categories"] == ["shopping"] and back["categories_by"] == "auto"
-    assert line(ok(fam(b, "summary")), "shopping")["count"] == 2
+    assert line(ok(fam(b, "summary")), "shopping")["count"] == 1
     again = fam(a, "categorize/undo", method="post", json={"undo": moved["undo"]})
     assert again.status_code == 404 and again.json()["detail"]["code"] == "undo_gone"
     # refused (S1's codes): a personal category, Dates (computed), three, none, a note that isn't there
@@ -351,9 +355,10 @@ def test_s6_searches_made_are_each_persons_own(bridges, fakes):
     assert [x["q"] for x in ok(fam(a, "category/home"))["searched"]] == ["chaudière"]
     # never shown to another member
     assert ok(fam(a, "category/school"))["searched"] == []
-    assert line(ok(fam(a, "summary")), "school")["hint"] == "Inscrire Tom au judo"
+    # (her own grey words: the titles of the pages and lists there, Alex 26/11)
+    assert line(ok(fam(a, "summary")), "school")["hint"] == "Tâches"
     assert ok(fam(b, "category/home"))["searched"] == []
-    assert line(ok(fam(b, "summary")), "home")["hint"] == "Rendez-vous chaudière"
+    assert line(ok(fam(b, "summary")), "home")["hint"] == "Tâches"
     # kept by her own bridge, nowhere else: not on the holder's place, not in the copy, not for the agent
     assert files_holding(b, "karat") == ["family-searched.json"] and files_holding(a, "karat") == []
     assert files_holding(a, "piscine") == [] and files_holding(b, "piscine") == []

@@ -2,7 +2,7 @@
   "v": 1,
   "id": "papers",
   "title": "Papiers",
-  "count": 10,
+  "count": 4,
   "space": "all",
   "filters": [
     {
@@ -18,7 +18,7 @@
     {
       "id": "warranties",
       "title": "Garanties",
-      "count": 3
+      "count": 1
     }
   ],
   "filter": null,
@@ -301,6 +301,68 @@
       }
     }
   ],
+  "pages": [
+    {
+      "id": "records:purchase",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Achats",
+      "path": "Fiches/Achats.md",
+      "notes": 3,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Fiches/Achats.md",
+        "records": "purchase"
+      }
+    },
+    {
+      "id": "records:contract",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Contrats et assurances",
+      "path": "Fiches/Contrats et assurances.md",
+      "notes": 1,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Fiches/Contrats et assurances.md",
+        "records": "contract"
+      }
+    },
+    {
+      "id": "page:p0000000003",
+      "kind": "page",
+      "page_kind": "subject",
+      "title": "Impôts 2026",
+      "path": "Sujets/Impôts 2026.md",
+      "notes": 2,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Sujets/Impôts 2026.md"
+      }
+    },
+    {
+      "id": "records:paper",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Papiers",
+      "path": "Fiches/Papiers.md",
+      "notes": 1,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Fiches/Papiers.md",
+        "records": "paper"
+      }
+    }
+  ],
+  "groups": [],
   "bar": {
     "placeholder": "Cherche dans Papiers"
   }

@@ -1,0 +1,628 @@
+{
+  "day": "2026-11-22",
+  "lang": "fr",
+  "categories": {
+    "people": {
+      "count": 7,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p000000001c",
+          "kind": "page",
+          "page_kind": "self",
+          "title": "Toi",
+          "path": "Toi.md",
+          "notes": 9,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Toi.md"
+          }
+        },
+        {
+          "id": "page:p0000000013",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Claire Durand",
+          "path": "Personnes/Claire Durand.md",
+          "notes": 5,
+          "group": "family",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Claire Durand.md"
+          },
+          "link": "Sœur"
+        },
+        {
+          "id": "page:p000000000d",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Famille",
+          "path": "Domaines/Famille.md",
+          "notes": 3,
+          "group": "family",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Domaines/Famille.md"
+          }
+        },
+        {
+          "id": "page:p0000000015",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Marc Durand",
+          "path": "Personnes/Marc Durand.md",
+          "notes": 13,
+          "group": "family",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Marc Durand.md"
+          },
+          "link": "Beau-frère"
+        },
+        {
+          "id": "page:p0000000014",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Lucas Bernard",
+          "path": "Personnes/Lucas Bernard.md",
+          "notes": 4,
+          "group": "friends",
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Lucas Bernard.md"
+          },
+          "link": "Ami"
+        },
+        {
+          "id": "page:p0000000016",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Sophie Laurent",
+          "path": "Personnes/Sophie Laurent.md",
+          "notes": 3,
+          "group": "others",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Personnes/Sophie Laurent.md"
+          },
+          "link": "Voisine"
+        },
+        {
+          "id": "page:p0000000017",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Anniversaire d’Inès",
+          "path": "Sujets/Anniversaire d’Inès.md",
+          "notes": 3,
+          "group": "subjects",
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Anniversaire d’Inès.md"
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "family",
+          "title": "Famille"
+        },
+        {
+          "id": "friends",
+          "title": "Amis"
+        },
+        {
+          "id": "others",
+          "title": "Autres"
+        },
+        {
+          "id": "subjects",
+          "title": "Sujets"
+        }
+      ]
+    },
+    "dates": {
+      "count": 10,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000012",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Travail",
+          "path": "Domaines/Travail.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Domaines/Travail.md"
+          },
+          "next": {
+            "date": "2026-11-27",
+            "in_days": 5,
+            "what": "Entretien annuel le 27 novembre",
+            "yearly": false
+          }
+        },
+        {
+          "id": "records:subscription",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Abonnements",
+          "path": "Fiches/Abonnements.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Abonnements.md",
+            "records": "subscription"
+          },
+          "next": {
+            "date": "2026-12-01",
+            "in_days": 9,
+            "what": "Films en streaming",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000014",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Lucas Bernard",
+          "path": "Personnes/Lucas Bernard.md",
+          "notes": 4,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Lucas Bernard.md"
+          },
+          "link": "Ami",
+          "next": {
+            "date": "2026-12-01",
+            "in_days": 9,
+            "what": "Anniversaire",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:booking",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Réservations",
+          "path": "Fiches/Réservations.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Réservations.md",
+            "records": "booking"
+          },
+          "next": {
+            "date": "2026-12-04",
+            "in_days": 12,
+            "what": "Hôtel, 3 nuits",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p000000001b",
+          "kind": "page",
+          "page_kind": "trip",
+          "title": "Week-end à Lisbonne",
+          "path": "Sujets/Week-end à Lisbonne.md",
+          "notes": 14,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Week-end à Lisbonne.md"
+          },
+          "next": {
+            "date": "2026-12-04",
+            "in_days": 12,
+            "what": "Du 4 décembre au 7 décembre",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000015",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Marc Durand",
+          "path": "Personnes/Marc Durand.md",
+          "notes": 13,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Marc Durand.md"
+          },
+          "link": "Beau-frère",
+          "next": {
+            "date": "2026-12-15",
+            "in_days": 23,
+            "what": "Anniversaire",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Achats",
+          "path": "Fiches/Achats.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Achats.md",
+            "records": "purchase"
+          },
+          "next": {
+            "date": "2026-12-22",
+            "in_days": 30,
+            "what": "Lave-linge",
+            "yearly": false
+          }
+        },
+        {
+          "id": "page:p0000000013",
+          "kind": "page",
+          "page_kind": "person",
+          "title": "Claire Durand",
+          "path": "Personnes/Claire Durand.md",
+          "notes": 5,
+          "group": null,
+          "archived": false,
+          "close": true,
+          "open": {
+            "path": "Personnes/Claire Durand.md"
+          },
+          "link": "Sœur",
+          "next": {
+            "date": "2027-01-02",
+            "in_days": 41,
+            "what": "Anniversaire",
+            "yearly": true
+          }
+        },
+        {
+          "id": "records:contract",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Contrats et assurances",
+          "path": "Fiches/Contrats et assurances.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Contrats et assurances.md",
+            "records": "contract"
+          },
+          "next": {
+            "date": "2027-02-25",
+            "in_days": 95,
+            "what": "Assurance habitation",
+            "yearly": false
+          }
+        },
+        {
+          "id": "records:paper",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Papiers",
+          "path": "Fiches/Papiers.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Papiers.md",
+            "records": "paper"
+          },
+          "next": {
+            "date": "2028-01-16",
+            "in_days": 420,
+            "what": "Passeport",
+            "yearly": false
+          }
+        }
+      ],
+      "groups": []
+    },
+    "money": {
+      "count": 5,
+      "filters": [],
+      "pages": [
+        {
+          "id": "records:subscription",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Abonnements",
+          "path": "Fiches/Abonnements.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Abonnements.md",
+            "records": "subscription"
+          }
+        },
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Achats",
+          "path": "Fiches/Achats.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Achats.md",
+            "records": "purchase"
+          }
+        },
+        {
+          "id": "page:p0000000018",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Changer de voiture",
+          "path": "Sujets/Changer de voiture.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Changer de voiture.md"
+          }
+        },
+        {
+          "id": "page:p0000000010",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Finances",
+          "path": "Domaines/Finances.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Domaines/Finances.md"
+          }
+        },
+        {
+          "id": "page:p0000000003",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Impôts 2026",
+          "path": "Sujets/Impôts 2026.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Impôts 2026.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "home": {
+      "count": 3,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000019",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Jardin",
+          "path": "Sujets/Jardin.md",
+          "notes": 0,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Jardin.md"
+          }
+        },
+        {
+          "id": "page:p0000000011",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Maison",
+          "path": "Domaines/Maison.md",
+          "notes": 5,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Domaines/Maison.md"
+          }
+        },
+        {
+          "id": "page:p0000000001",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Rénovation cuisine",
+          "path": "Sujets/Rénovation cuisine.md",
+          "notes": 11,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Rénovation cuisine.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "papers": {
+      "count": 4,
+      "filters": [
+        {
+          "id": "invoices",
+          "title": "Factures",
+          "count": 0
+        },
+        {
+          "id": "contracts",
+          "title": "Contrats",
+          "count": 1
+        },
+        {
+          "id": "warranties",
+          "title": "Garanties",
+          "count": 1
+        }
+      ],
+      "pages": [
+        {
+          "id": "records:purchase",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Achats",
+          "path": "Fiches/Achats.md",
+          "notes": 3,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Achats.md",
+            "records": "purchase"
+          }
+        },
+        {
+          "id": "records:contract",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Contrats et assurances",
+          "path": "Fiches/Contrats et assurances.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Contrats et assurances.md",
+            "records": "contract"
+          }
+        },
+        {
+          "id": "page:p0000000003",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Impôts 2026",
+          "path": "Sujets/Impôts 2026.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Impôts 2026.md"
+          }
+        },
+        {
+          "id": "records:paper",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Papiers",
+          "path": "Fiches/Papiers.md",
+          "notes": 1,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Papiers.md",
+            "records": "paper"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "trips": {
+      "count": 3,
+      "filters": [],
+      "pages": [
+        {
+          "id": "records:booking",
+          "kind": "records",
+          "page_kind": "records",
+          "title": "Réservations",
+          "path": "Fiches/Réservations.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Fiches/Réservations.md",
+            "records": "booking"
+          }
+        },
+        {
+          "id": "page:p000000001a",
+          "kind": "page",
+          "page_kind": "subject",
+          "title": "Voyage Japon",
+          "path": "Sujets/Voyage Japon.md",
+          "notes": 4,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Voyage Japon.md"
+          }
+        },
+        {
+          "id": "page:p000000001b",
+          "kind": "page",
+          "page_kind": "trip",
+          "title": "Week-end à Lisbonne",
+          "path": "Sujets/Week-end à Lisbonne.md",
+          "notes": 14,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Sujets/Week-end à Lisbonne.md"
+          }
+        }
+      ],
+      "groups": []
+    },
+    "work": {
+      "count": 1,
+      "filters": [],
+      "pages": [
+        {
+          "id": "page:p0000000012",
+          "kind": "page",
+          "page_kind": "area",
+          "title": "Travail",
+          "path": "Domaines/Travail.md",
+          "notes": 2,
+          "group": null,
+          "archived": false,
+          "close": false,
+          "open": {
+            "path": "Domaines/Travail.md"
+          }
+        }
+      ],
+      "groups": []
+    }
+  }
+}
