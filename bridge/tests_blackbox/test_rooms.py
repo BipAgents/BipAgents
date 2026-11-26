@@ -106,13 +106,17 @@ def on_screen(bridge, room_id, **params):
 
 
 def age_answers(bridge, room_id, seconds=7200):
-    """The agents' answers moved `seconds` back (past rooms.rs `CONTINUITY_SECONDS`): the next message is routed afresh."""
+    """The agents' answers moved `seconds` back (past rooms.rs `CONTINUITY_SECONDS`): the next message is routed afresh.
+    The bridge stopped meanwhile: the room's worker writes the room once more as it leaves, after the room already
+    looks quiet, from what it read before this change (26/11, the public CI: the answers' times came back)."""
+    bridge.stop()
     stored = bridge.state_dir / "rooms" / f"{room_id}.json"
     room = json.loads(stored.read_text())
     for m in room["messages"]:
         if m["kind"] != "person":
             m["at"] -= seconds
     stored.write_text(json.dumps(room))
+    bridge.start(write=False)
 
 
 def runs_of(fakes, agent):
