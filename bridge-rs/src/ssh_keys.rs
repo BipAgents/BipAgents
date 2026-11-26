@@ -9,6 +9,9 @@
 //! A key is one public key line with nothing in front (no `command=` or other options); it goes to
 //! ~/.ssh/authorized_keys (700/600), which the account's other keys share.
 //!
+//! The folder is the place's home from the config ([`Config::place_home`], only while `cloud`), never $HOME: without it
+//! nothing is shown, added nor removed.
+//!
 //! A reopen (cloud_setup::reopen: a device removed from the person's account, a recovery) takes every key away
 //! ([`forget_all`]): a key a removed device added must not outlive it (security review 2026-11-26, E3). The person adds
 //! theirs again from the app.
@@ -27,6 +30,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::app::AppState;
+use crate::config::Config;
 use crate::web::{self, check_max_len, check_min_len, ApiResult, FieldError, HttpError, Json, QueryMap, Validate};
 use crate::Dict;
 
@@ -69,11 +73,9 @@ impl SshKey {
     }
 }
 
-pub(crate) fn home() -> PathBuf {
-    match std::env::var("HOME") {
-        Ok(h) if !h.is_empty() => PathBuf::from(h),
-        _ => PathBuf::from(crate::py::expanduser("~")),
-    }
+/// The account whose keys these are: the place's home from the config, on a place of the offer only. Never $HOME.
+pub fn folder(config: &Config) -> Option<PathBuf> {
+    config.place_home.as_deref().filter(|h| config.cloud && Path::new(h).is_absolute()).map(PathBuf::from)
 }
 
 /// Python's `str.splitlines()`.
@@ -175,11 +177,19 @@ fn write_named(home: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, folder.join(name))
 }
 
-/// Every key that opens this account by SSH goes, from both files sshd reads (~/.ssh/authorized_keys and
+/// Every key that opens the place's account by SSH goes, from both files sshd reads (~/.ssh/authorized_keys and
 /// authorized_keys2): the ones added from the app, and any added by hand since over SSH (with options or not), which a
-/// key from the app let in first. Comments and blank lines stay; a file that can't be read as one (a folder made in its
-/// place, say) goes whole. How many lines went.
-pub fn forget_all(home: &Path) -> std::io::Result<usize> {
+/// key from the app let in first: on a place of the offer the account has no other. Comments and blank lines stay; a
+/// file that can't be read as one (a folder made in its place, say) goes whole. Nothing anywhere else: off a place of
+/// the offer, or without its home in the config ([`folder`]), nothing is touched (0). How many lines went.
+pub fn forget_all(config: &Config) -> std::io::Result<usize> {
+    match folder(config) {
+        Some(home) => forget_in(&home),
+        None => Ok(0),
+    }
+}
+
+fn forget_in(home: &Path) -> std::io::Result<usize> {
     let mut gone = 0;
     for name in ["authorized_keys", "authorized_keys2"] {
         let path = home.join(".ssh").join(name);
@@ -309,18 +319,18 @@ const NOT_CLOUD: &str = "only on a server of the all-included offer";
 
 async fn ssh_status(State(state): State<AppState>) -> ApiResult<Response> {
     let config = state.config();
-    if !config.cloud {
+    let Some(home) = folder(&config) else {
         return Ok(web::ok(json!({"enabled": false, "keys": []})));
-    }
-    let listed = tokio::task::spawn_blocking(|| keys(&home())).await.map_err(anyhow::Error::from)?;
+    };
+    let listed = tokio::task::spawn_blocking(move || keys(&home)).await.map_err(anyhow::Error::from)?;
     Ok(web::ok(json!({"enabled": true, "login": login(config.public_url.as_deref()), "keys": listed})))
 }
 
 async fn ssh_add(State(state): State<AppState>, Json(body): Json<KeyRequest>) -> ApiResult<Response> {
-    if !state.config().cloud {
+    let Some(home) = folder(&state.config()) else {
         return Err(HttpError::new(403, NOT_CLOUD));
-    }
-    match tokio::task::spawn_blocking(move || add(&home(), &body.key)).await.map_err(anyhow::Error::from)? {
+    };
+    match tokio::task::spawn_blocking(move || add(&home, &body.key)).await.map_err(anyhow::Error::from)? {
         Ok(key) => Ok(web::ok(serde_json::Value::Object(key))),
         Err(exc) => match exc.downcast_ref::<SshKeyError>() {
             Some(e) => Err(HttpError::new(400, e.0.clone())),
@@ -331,10 +341,10 @@ async fn ssh_add(State(state): State<AppState>, Json(body): Json<KeyRequest>) ->
 
 async fn ssh_remove(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
     let fingerprint = web::query_required(&q, "fingerprint")?;
-    if !state.config().cloud {
+    let Some(home) = folder(&state.config()) else {
         return Err(HttpError::new(403, NOT_CLOUD));
-    }
-    if !tokio::task::spawn_blocking(move || remove(&home(), &fingerprint)).await.map_err(anyhow::Error::from)?? {
+    };
+    if !tokio::task::spawn_blocking(move || remove(&home, &fingerprint)).await.map_err(anyhow::Error::from)?? {
         return Err(HttpError::new(404, "no such key"));
     }
     Ok(web::ok(json!({"ok": true})))
@@ -391,7 +401,7 @@ mod tests {
     #[test]
     fn every_key_goes_comments_stay() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(forget_all(home.path()).unwrap(), 0); // no ~/.ssh at all
+        assert_eq!(forget_in(home.path()).unwrap(), 0); // no ~/.ssh at all
         let ssh = home.path().join(".ssh");
         std::fs::create_dir_all(&ssh).unwrap();
         let mut odd = format!("# kept\n\n{GOOD}\r\n  # indented, kept\n").into_bytes();
@@ -400,11 +410,33 @@ mod tests {
         std::fs::write(ssh.join("authorized_keys"), odd).unwrap();
         std::fs::create_dir(ssh.join("authorized_keys2")).unwrap(); // a folder in its place
         std::fs::write(ssh.join("authorized_keys2").join("x"), GOOD).unwrap();
-        assert_eq!(forget_all(home.path()).unwrap(), 4);
+        assert_eq!(forget_in(home.path()).unwrap(), 4);
         assert_eq!(std::fs::read_to_string(ssh.join("authorized_keys")).unwrap(), "# kept\n\n  # indented, kept\n");
         assert!(!ssh.join("authorized_keys2").exists());
         assert!(keys(home.path()).is_empty());
-        assert_eq!(forget_all(home.path()).unwrap(), 0); // nothing left to take: the file untouched
+        assert_eq!(forget_in(home.path()).unwrap(), 0); // nothing left to take: the file untouched
+    }
+
+    /// The folder is the place's home from the config, on a place of the offer only: off one, without it, or with a
+    /// relative one, nothing is touched (and $HOME is never read: this test leaves it as it is).
+    #[test]
+    fn only_the_places_home_from_the_config() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+        std::fs::write(home.path().join(".ssh/authorized_keys"), format!("{GOOD}\n")).unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.place_home = Some(home.path().to_string_lossy().into_owned());
+        assert_eq!(forget_all(&config).unwrap(), 0, "not a place of the offer");
+        config.cloud = true;
+        config.place_home = Some("relative/home".into());
+        assert_eq!(forget_all(&config).unwrap(), 0, "a relative home");
+        config.place_home = None;
+        assert_eq!((folder(&config), forget_all(&config).unwrap()), (None, 0), "no home given");
+        assert_eq!(keys(home.path()).len(), 1);
+        config.place_home = Some(home.path().to_string_lossy().into_owned());
+        assert_eq!(folder(&config).as_deref(), Some(home.path()));
+        assert_eq!(forget_all(&config).unwrap(), 1);
+        assert!(keys(home.path()).is_empty());
     }
 
     #[test]

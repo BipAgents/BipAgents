@@ -165,12 +165,11 @@ pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
     }
     // and the SSH keys any device could add (security review 2026-11-26, E3): a removed phone's must not outlive its
     // device key. After the keys above, so that nothing in those files can keep a removed device's key valid.
-    if config.cloud {
-        match crate::ssh_keys::forget_all(&crate::ssh_keys::home()) {
-            Ok(0) => {}
-            Ok(gone) => tracing::info!(gone, "reopen: the account's SSH keys removed"),
-            Err(e) => tracing::error!(error = %e, "reopen: the account's SSH keys could not be removed"),
-        }
+    // Only in the place's home from the config, never $HOME (ssh_keys::folder).
+    match crate::ssh_keys::forget_all(&config) {
+        Ok(0) => {}
+        Ok(gone) => tracing::info!(gone, "reopen: the account's SSH keys removed"),
+        Err(e) => tracing::error!(error = %e, "reopen: the account's SSH keys could not be removed"),
     }
     Ok(key)
 }

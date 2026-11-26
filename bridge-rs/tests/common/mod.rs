@@ -99,6 +99,9 @@ pub fn config_dict(dir: &Path, urls: &Urls) -> Value {
         "hermes": {"root": hermes_root},
         "bridge_key": BRIDGE_KEY,
         "data_dir": dir.join("data").to_string_lossy(),
+        // the place's home (its SSH keys, when a test makes it a place of the offer): the test's own folder, never the
+        // machine's HOME (review 26/11: a reopen in a test emptied the build server's authorized_keys)
+        "place_home": dir.join("home").to_string_lossy(),
         "pocket": {"url": urls.pocket},
         "apns": {"team_id": "TEAM123456", "key_id": "TESTKEY123", "p8_path": p8,
                  "bundle_id": "io.github.bipagents", "environment": "sandbox"},
