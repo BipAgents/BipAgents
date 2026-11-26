@@ -438,6 +438,11 @@ def test_the_beat_s_body_and_its_order(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900, "disk": "ok"}})
     monkeypatch.setattr(agent, "zram", lambda: steps.append("zram"))
 
+    def deny():   # every round, before the beat; whatever it raises never stops the round (review M2)
+        steps.append("deny_places_ssh")
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(agent, "deny_places_ssh", deny)
+
     def call(conf, method, path, body=None):
         sent.append((path, body))
         return {"orders": [], "settings": {"memory_high_share": 0.3}}
@@ -447,7 +452,7 @@ def test_the_beat_s_body_and_its_order(tmp_path, monkeypatch):
     assert sent == [("/v1/server/beat", {"seats": {"1": {"up": True}}, "server": {"memory_mb": 7812},
                                          "places": {"1": {"mem_mb": 812, "mem_peak_mb": 1630, "disk_mb": 900,
                                                           "disk": "ok"}}})]
-    assert steps == [("settled", 7812), ("settled", 7812), "zram"]
+    assert steps == ["deny_places_ssh", ("settled", 7812), ("settled", 7812), "zram"]
     assert json.loads((tmp_path / "settings.json").read_text()) == {"memory_high_share": 0.3}
 
 
@@ -468,6 +473,7 @@ def test_a_long_order_keeps_the_server_beating(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "memory_settled", lambda server: None)
     monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900}})
     monkeypatch.setattr(agent, "zram", lambda: None)
+    monkeypatch.setattr(agent, "deny_places_ssh", lambda: True)
     monkeypatch.setattr(agent, "add_moves", lambda beat: beat.__setitem__("moves", {"m1": {"phase": "copy"}}))
     monkeypatch.setattr(agent, "verified", lambda body, signature: True)
     monkeypatch.setattr(agent, "accepted", lambda order, server, done, now: json.loads(order["body"]))
@@ -897,6 +903,106 @@ def test_the_seat_agent_waits_for_its_token_and_keeps_the_metadata_block(tmp_pat
     ran.clear()
     agent.metadata_block(str(rules), lambda *args: ran.append(args) or 0)
     assert ran == [("nft", "list", "table", "inet", "bipagents_metadata")]   # there: left as it is
+
+
+class Sshd:
+    """A fake `sshd -t` and systemctl for deny_places_ssh: what each was asked, whether /run/sshd was there for the
+    check, and what they answer (sshd -t failing always, or only while the places' rule is in)."""
+
+    def __init__(self, rule, run_dir, check=0, without_rule=0, reload=0):
+        self.rule, self.run_dir, self.ran = rule, run_dir, []
+        self.check, self.without_rule, self.reload = check, without_rule, reload
+
+    def __call__(self, *args):
+        import os
+        if args == ("/usr/sbin/sshd", "-t"):
+            self.ran.append(("sshd -t", os.path.exists(self.rule), os.path.isdir(self.run_dir)))
+            return self.check if os.path.exists(self.rule) else self.without_rule
+        self.ran.append(args)
+        return self.reload
+
+
+def test_the_seat_agent_has_the_ssh_server_refuse_the_places_and_leaves_it_so(tmp_path, monkeypatch):
+    """Alex, 2026-11-26 (security review C1, E1, E3, E7: a place's shell was where the attacks on its neighbours
+    started): the server's SSH refuses bip, bip2 ... bip40, its tunnels too (`ssh -N`); the server's own administrator
+    account and the move's own sshd (place-move.py, its own settings and `bipmove`) are not concerned. The accounts
+    keep their shell this time: root's `sudo -iu` needs it, an agent from before a rollback too. Written once, checked
+    by `sshd -t` before sshd reads it, then nothing while it is so."""
+    import os
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    folder = tmp_path / "sshd_config.d"
+    folder.mkdir()
+    rule, pending, run_dir = folder / "11-bipagents-places.conf", tmp_path / "pending", tmp_path / "run-sshd"
+    text = agent.sshd_places()
+    denied = next(line for line in text.decode().splitlines() if line.startswith("DenyUsers "))
+    assert denied.split()[1:] == ["bip"] + ["bip%d" % n for n in range(2, agent.MAX_SEATS + 1)]
+    assert "lab" not in denied.split() and "bipmove" not in denied.split()
+    assert agent.SSHD_PLACES == "/etc/ssh/sshd_config.d/11-bipagents-places.conf"
+    sshd = Sshd(rule, run_dir)
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir))
+    assert sshd.ran == [("sshd -t", True, True), ("systemctl", "try-reload-or-restart", "ssh.service")]
+    assert rule.read_bytes() == text and oct(rule.stat().st_mode & 0o777) == "0o644"
+    assert os.listdir(folder) == [rule.name] and not pending.exists()   # nothing else left (a .conf would be read)
+    sshd.ran.clear()
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir)) and sshd.ran == []   # so: nothing
+    # changed by hand: written again
+    rule.write_text("DenyUsers nobody\n")
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir)) and rule.read_bytes() == text
+    # no OpenSSH server on the server: nothing to write
+    assert not agent.deny_places_ssh(str(tmp_path / "none" / "x.conf"), sshd, str(pending), str(run_dir))
+    # the agent's own text never says « no login shell »: the accounts keep theirs, and what root runs as them
+    code = (ROOT / "installer" / "cloud" / "seat-agent.py").read_text(encoding="utf-8")
+    assert "usermod" not in code and "nologin" not in code
+    assert '["sudo", "-iu", user, "env"' in code
+
+
+def test_review_m2_a_rule_file_that_is_not_text_is_written_again_and_never_stops_the_round(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    (tmp_path / "d").mkdir()
+    rule = tmp_path / "d" / "11-bipagents-places.conf"
+    rule.write_bytes(b"\xff\xfe DenyUsers bip\n")
+    sshd = Sshd(rule, tmp_path / "run")
+    assert agent.deny_places_ssh(str(rule), sshd, str(tmp_path / "pending"), str(tmp_path / "run"))
+    assert rule.read_bytes() == agent.sshd_places()
+
+
+def test_review_m3_sshd_failing_for_another_reason_keeps_the_rule_and_tries_again(tmp_path, monkeypatch):
+    """Ubuntu 24.04's ssh.socket: /run/sshd is missing after a reboot and `sshd -t` fails without it. The folder is
+    made first; `sshd -t` failing without the places' rule too says the rule isn't the cause: kept, sshd told again
+    next round. Only a rule sshd refuses goes. sshd not told (its reload failing): told again next round."""
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    (tmp_path / "d").mkdir()
+    rule, pending, run_dir = tmp_path / "d" / "11-bipagents-places.conf", tmp_path / "pending", tmp_path / "run-sshd"
+    args = (str(rule), str(pending), str(run_dir))
+
+    def deny(sshd):
+        return agent.deny_places_ssh(args[0], sshd, args[1], args[2])
+
+    # /run/sshd missing: made before the check
+    sshd = Sshd(rule, run_dir)
+    assert deny(sshd) and sshd.ran[0] == ("sshd -t", True, True)
+    rule.unlink()
+    # sshd -t fails with the rule and without it: not the rule's fault, kept, tried again
+    sshd = Sshd(rule, run_dir, check=1, without_rule=1)
+    assert not deny(sshd)
+    assert rule.read_bytes() == agent.sshd_places() and pending.exists()
+    assert ("systemctl", "try-reload-or-restart", "ssh.service") not in sshd.ran
+    sshd = Sshd(rule, run_dir)   # next round, sshd fine again: the same rule, told now
+    assert deny(sshd) and sshd.ran[-1] == ("systemctl", "try-reload-or-restart", "ssh.service") and not pending.exists()
+    # sshd -t fails only with the rule: the rule goes, sshd not told
+    rule.unlink()
+    sshd = Sshd(rule, run_dir, check=1, without_rule=0)
+    assert not deny(sshd) and not rule.exists()
+    assert sshd.ran == [("sshd -t", True, True), ("sshd -t", False, True)]
+    # its reload fails: not done, told again next round although the file is the same
+    sshd = Sshd(rule, run_dir, reload=1)
+    assert not deny(sshd) and pending.exists()
+    sshd = Sshd(rule, run_dir)
+    assert deny(sshd) and sshd.ran == [("sshd -t", True, True), ("systemctl", "try-reload-or-restart", "ssh.service")]
+    assert not pending.exists()
 
 
 def test_an_encrypted_place_s_server_is_hardened_before_any_place_runs():

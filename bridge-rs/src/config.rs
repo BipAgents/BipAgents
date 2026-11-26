@@ -865,6 +865,13 @@ pub struct Config {
     /// A server the app created in the person's own account (« no computer »): the door is on the Internet, the
     /// web console is off and wrong keys are limited (guard.py).
     pub cloud: bool,
+    /// The account's home on a place of the offer: the only folder whose SSH keys this bridge takes away (at its start
+    /// and at a reopen), and only while `cloud` (ssh_keys.rs). `place_home` in bridge.toml (an absolute path), else
+    /// the home of the installer's layout (bridge.toml at <home>/.config/bipagents/bridge.toml, `data_dir`
+    /// <home>/.local/share/bipagents), else none. Never $HOME: a test's reopen once emptied the build server's own authorized_keys through
+    /// it (review 26/11, E3).
+    #[serde(skip)]
+    pub place_home: Option<String>,
     /// Until the app claims that server (cloud_setup.py): the one-time pairing secret, and the installer's progress.
     pub setup_file: Option<String>,
     pub setup_progress: Option<String>,
@@ -961,6 +968,7 @@ impl Config {
             public_url: None,
             peer_url: None,
             cloud: false,
+            place_home: None,
             setup_file: None,
             setup_progress: None,
             source_path: None,
@@ -2038,10 +2046,28 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         public_url: opt_s(data, "public_url").map(|u| py::rstrip_slash(&u)),
         peer_url: opt_s(data, "peer_url").map(|u| py::rstrip_slash(&u)),
         cloud: b(data, "cloud", false),
+        place_home: place_home(data, source_path, &data_dir),
         setup_file: opt_s(setup_t, "file").map(|p| expand(&p)),
         setup_progress: opt_s(setup_t, "progress").map(|p| expand(&p)),
         source_path: source_path.map(str::to_string),
     })
+}
+
+/// [`Config::place_home`]: the absolute `place_home` given, else the home of the installer's layout around this file;
+/// never one read from $HOME nor expanded from `~`.
+fn place_home(data: &Value, source_path: Option<&str>, data_dir: &str) -> Option<String> {
+    if let Some(given) = opt_s(data, "place_home") {
+        return Path::new(&given).is_absolute().then_some(given);
+    }
+    let source = Path::new(source_path?);
+    let folder = source.parent()?; // <home>/.config/bipagents
+    let dot_config = folder.parent()?;
+    let home = dot_config.parent()?;
+    let laid_out = source.file_name()? == "bridge.toml"
+        && folder.file_name()? == "bipagents"
+        && dot_config.file_name()? == ".config"
+        && Path::new(data_dir) == home.join(".local").join("share").join("bipagents");
+    (laid_out && home.is_absolute()).then(|| home.to_string_lossy().into_owned())
 }
 
 /// Python's `str.capitalize()`: the first character upper-cased, the rest lower-cased.
@@ -2121,6 +2147,25 @@ mod tests {
         assert_eq!(c.apns.host("sandbox"), "https://api.sandbox.push.apple.com");
         assert_eq!(c.apns.host("production"), "https://api.push.apple.com");
         assert_eq!(c.fcm_base_url, FCM_BASE_URL);
+    }
+
+    /// The place's home (its SSH keys, ssh_keys.rs): the absolute one given, else the installer's layout around the
+    /// file, never $HOME (the default config, which reads no file, has none).
+    #[test]
+    fn the_places_home_is_given_or_the_installers_never_home() {
+        assert_eq!(parse_config(&base(), None).unwrap().place_home, None);
+        let mut data = base();
+        data["place_home"] = json!("/srv/place");
+        assert_eq!(parse_config(&data, None).unwrap().place_home.as_deref(), Some("/srv/place"));
+        data["place_home"] = json!("~");
+        assert_eq!(parse_config(&data, None).unwrap().place_home, None, "never expanded from HOME");
+        let mut data = base();
+        data["data_dir"] = json!("/home/p1/.local/share/bipagents");
+        let file = "/home/p1/.config/bipagents/bridge.toml";
+        assert_eq!(parse_config(&data, Some(file)).unwrap().place_home.as_deref(), Some("/home/p1"));
+        assert_eq!(parse_config(&data, Some("/tmp/x/bridge.toml")).unwrap().place_home, None);
+        assert_eq!(parse_config(&data, Some("/home/p2/.config/bipagents/bridge.toml")).unwrap().place_home, None);
+        assert_eq!(parse_config(&base(), Some(file)).unwrap().place_home, None, "data_dir elsewhere");
     }
 
     #[test]

@@ -111,6 +111,8 @@ def default_config(root: Path, fakes: Any, p8_path: str) -> Dict[str, Any]:
         "host": "127.0.0.1",
         "port": free_port(),
         "data_dir": str(root / "data"),
+        # the place's home (its SSH keys on a place of the offer): the bridge's own HOME here, the test's folder
+        "place_home": str(root / "home"),
         "pocket": {"url": fakes.pocket.url},
         "apns": {"team_id": "TEAM123456", "key_id": "TESTKEY123", "p8_path": p8_path,
                  "bundle_id": "io.github.bipagents", "environment": "sandbox",

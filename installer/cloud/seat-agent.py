@@ -34,8 +34,8 @@ says how long the server has been up for the same reason.
 
 It also keeps each place's memory and CPU soft-capped (its user slice's MemoryHigh and CPUWeight, a MemoryMax only as a
 last-resort safety: below), gives each place a disk of its own of 5 GB and watches it (below), samples each place's
-memory every 15 s between beats (--sample, bipagents-memory.timer, which it sets up), and sets up zram on a server
-that has none.
+memory every 15 s between beats (--sample, bipagents-memory.timer, which it sets up), sets up zram on a server
+that has none, and keeps the server's SSH refusing every place's account (deny_places_ssh).
 
 ASCII only, like user-data.yaml and add-seat.sh (installer/tests/test_cloud_init.py checks it).
 """
@@ -487,6 +487,67 @@ def metadata_block(rules=METADATA_BLOCK, runner=None):
     runner = runner or quietly
     if runner("nft", "list", "table", "inet", "bipagents_metadata") != 0:
         log("metadata block %s" % ("loaded again" if runner("nft", "-f", rules) == 0 else "not loaded"))
+
+
+# No place's account logs in by SSH (Alex, 2026-11-26; security review C1, E1, E3, E7: a place's shell was where the
+# attacks on its neighbours started): the server's SSH refuses them, their tunnels (`ssh -N`) too. The server's own
+# administrator account keeps its SSH; a move has its own sshd, which reads none of this (place-move.py). The accounts
+# keep their shell for now: what root runs as a place goes through it (`sudo -iu`, update), an agent from before a
+# rollback too.
+SSHD_PLACES = "/etc/ssh/sshd_config.d/11-bipagents-places.conf"
+SSHD_PENDING = "/var/lib/bipagents/sshd-places-pending"   # the rule written, sshd not told yet: tried each round
+SSHD_RUN = "/run/sshd"   # `sshd -t` fails without it (Ubuntu 24.04's ssh.socket, after a reboot; place-move.py too)
+
+
+def sshd_places():
+    """The SSH server's rule refusing every place's account (bip, bip2 ... bip40), as bytes."""
+    return ("# BipAgents: no place's account logs in by SSH (installer/cloud/seat-agent.py).\n"
+            "DenyUsers %s\n" % " ".join(account(number) for number in range(1, MAX_SEATS + 1))).encode("ascii")
+
+
+def deny_places_ssh(path=SSHD_PLACES, runner=None, pending=SSHD_PENDING, run_dir=SSHD_RUN):
+    """The SSH server's rule refusing the places, each round: written when the file differs (as bytes: whatever was
+    put in its place), checked by `sshd -t` before sshd reads it, then sshd told (try-reload-or-restart). Nothing done
+    while it is so. Any step that fails is tried again next round (`pending`): sshd not told; `sshd -t` failing
+    without the rule too (not the rule's fault: kept). Only a rule `sshd -t` refuses goes (sshd would stop on it).
+    True when sshd has the rule."""
+    runner = runner or quietly
+    text = sshd_places()
+    if not os.path.isdir(os.path.dirname(path)):
+        return False   # no OpenSSH server here
+    try:
+        with open(path, "rb") as fh:
+            same = fh.read() == text
+    except OSError:
+        same = False
+    if same and not os.path.exists(pending):
+        return True
+    os.makedirs(os.path.dirname(pending), exist_ok=True)
+    with open(pending, "w") as fh:   # before the rule: a stop in between still tells sshd next round
+        fh.write("1\n")
+    if not same:
+        fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text)
+        os.chmod(path + ".tmp", 0o644)
+        os.replace(path + ".tmp", path)   # (a name sshd's *.conf doesn't read until then)
+    os.makedirs(run_dir, mode=0o755, exist_ok=True)
+    if runner("/usr/sbin/sshd", "-t") != 0:
+        os.replace(path, path + ".off")
+        if runner("/usr/sbin/sshd", "-t") == 0:
+            os.unlink(path + ".off")
+            os.unlink(pending)
+            log("the SSH server refuses its rule for the places: left out")
+        else:
+            os.replace(path + ".off", path)
+            log("the SSH server's settings fail without the places' rule too: kept, tried again next round")
+        return False
+    if runner("systemctl", "try-reload-or-restart", "ssh.service") != 0:
+        log("the SSH server not told of the places' rule: tried again next round")
+        return False
+    os.unlink(pending)
+    log("places refused by the SSH server")
+    return True
 
 
 def call(conf, method, path, body=None):
@@ -2888,6 +2949,10 @@ def main(argv=()):
     if "--rebooting" in argv:
         return rebooting(conf)
     metadata_block()
+    try:
+        deny_places_ssh()
+    except Exception as exc:   # nothing of it may stop the round (review M2): logged, tried again next round
+        log("places' SSH not refused: %s" % exc)
     try:
         hold_reboot()   # first: even while the guichet doesn't answer
     except (OSError, subprocess.SubprocessError) as exc:

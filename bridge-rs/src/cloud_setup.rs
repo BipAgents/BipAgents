@@ -21,9 +21,10 @@
 //! (dates/), the country the agents are told when it isn't the zone's. Older apps send no zone nor country: the
 //! server's zone stays until the app reports the phone's (`PUT /v1/time/device`).
 //!
-//! A place whose person recovered their account without any of their devices (guichet/bipguichet/accounts.py) gets a
-//! new secret from the guichet's signed order and is claimed with `{"reopen": {"name": …}}`: the bridge key changes and
-//! every device key goes (device_keys.py); the device gets a key of its own.
+//! A place whose person recovered their account without any of their devices, or removed one of them
+//! (guichet/bipguichet/accounts.py), gets a new secret from the guichet's signed order and is claimed with
+//! `{"reopen": {"name": …}}`: the bridge key changes, every device key goes (device_keys.py) and so do the account's SSH
+//! keys (ssh_keys.rs); the device gets a key of its own.
 //!
 //! A place given to someone whose server died (the guichet moved them, guichet/bipguichet/watch.py) is claimed with
 //! `{"restore": {"key": …}}` instead: the backup key the person's phone kept. The installer's `restore` puts their last
@@ -147,9 +148,9 @@ pub fn start_restore(config: &Config, key: &str) -> std::io::Result<()> {
     crate::place_import::spawn_detached(command)
 }
 
-/// The person recovered their account without any of their devices (the guichet's signed order put a new pairing
-/// secret here): every device key and web console goes, the bridge key changes (nobody has the new one), and the
-/// device that proved the secret gets a key of its own. Returns it.
+/// The person recovered their account without any of their devices, or removed one of them (the guichet's signed
+/// order put a new pairing secret here): every device key and web console goes, the bridge key changes (nobody has the
+/// new one), the account's SSH keys go too, and the device that proved the secret gets a key of its own. Returns it.
 pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
     let config = state.config();
     let keys = crate::device_keys::of(&config);
@@ -162,6 +163,11 @@ pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
             state.console.revoke(&crate::py::py_str(id));
         }
     }
+    // and any SSH key put in the account since the place started (security review 2026-11-26, E3; the app adds none
+    // since 26/11, ssh_keys.rs): nothing a removed device left may open it. After the keys above, so that nothing in
+    // those files can keep a removed device's key valid. Only in the place's home from the config, never $HOME
+    // (ssh_keys::folder); a failure is logged, and the next start removes them all again (ssh_keys::at_start).
+    crate::ssh_keys::forget_at_reopen(&config);
     Ok(key)
 }
 
