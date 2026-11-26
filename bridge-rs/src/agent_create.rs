@@ -95,8 +95,9 @@ pub fn interview_note(family: &[String]) -> String {
     format!(
         "{NOTE_OPEN}They want a new agent. Ask ONE short question per message, only what you don't know yet: {}. Then \
          propose_agent with all of it, role: what it is for in their own words, with every specific they gave (goal, \
-         dates, how often…), as they would ask it (« Me préparer à… »), not a label. Nothing is made before they tap \
-         the card.{family_facts}\n-->",
+         dates, how often…), as they would ask it (« Me préparer à… »), not a label; what it must watch or do \
+         regularly goes in first: it sets up its own watcher or routine once made, never you. Nothing is made before \
+         they tap the card.{family_facts}\n-->",
         numbered.join("; ")
     )
 }

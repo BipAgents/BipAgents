@@ -193,6 +193,7 @@ pub mod favicons;
 pub mod agent_create;
 pub mod guide;
 pub mod guide_team;
+pub mod launch;
 pub mod welcome;
 pub mod background_turn;
 pub mod handback;

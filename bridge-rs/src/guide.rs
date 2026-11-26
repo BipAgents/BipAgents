@@ -363,7 +363,11 @@ fn propose_agent_tool() -> Value {
             "tools": {"type": "array", "items": {"type": "string"}, "description": "what it must reach: web, weather, \
     browser, calendar, reminders, contacts, mail, health, file, notebook, or a service (strava…)"},
             "handover": {"type": "string", "description": "other facts about them it should know, not what it is for \
-    (that is role)"}},
+    (that is role)"},
+            "first": {"type": "string", "description": "what it starts on at once once made, one line in their \
+    language (« Préparer le plan de la première semaine », « Mettre en place le veilleur du prix du vélo »). It has \
+    the same tools as you (watchers, routines, mail…): what it must watch or do regularly is its own first step, \
+    never one you make for yourself"}},
             "required": ["kind", "name", "role"]},
     })
 }
@@ -907,6 +911,9 @@ pub fn call(config: &Config, agent: &AgentConfig, name: &str, arguments: &Dict) 
             proposal.insert("name".into(), json!(new_name));
             proposal.insert("role".into(), json!(role));
             proposal.insert("handover".into(), json!(arg(arguments, "handover", 1200)));
+            // its first step once made (launch.rs): started at once, after Bip's brief
+            let first = arg(arguments, "first", 200);
+            proposal.insert("first".into(), if first.is_empty() { Value::Null } else { json!(first) });
             // the form's other fields (agent_create.rs): tone, for whom, what it must reach
             let tone = arg(arguments, "tone", 120);
             proposal.insert("tone".into(), if tone.is_empty() { Value::Null } else { json!(tone) });
@@ -1008,10 +1015,17 @@ pub fn call(config: &Config, agent: &AgentConfig, name: &str, arguments: &Dict) 
         ),
         _ => "Your card is".to_string(),
     };
+    // the new agent sets up its own watcher or routine (launch.rs): never one made for it, never « it can't »
+    let after = if name == PROPOSE_AGENT && config.guide.first_turns {
+        " Once they tap it, it gets your brief and starts on its first step itself, with its own tools (watchers, \
+         routines and tasks included): don't make them for it, and never say it can't."
+    } else {
+        ""
+    };
     Ok(tool_text(
         &format!(
             "{card} shown under your reply. Say so in one sentence, in the language they wrote in; nothing \
-             happens until they tap it."
+             happens until they tap it.{after}"
         ),
         false,
     ))
@@ -1559,11 +1573,24 @@ async fn agent_card(
     let config = state.config();
     let agent = config.agents.get(&agent.name).cloned().unwrap_or(agent);
     crate::beta_measures::card_accepted(&config, None, now());
-    hand_over(&config, &agent, &from.display_name, &str_of(proposal, "handover"), lang)?;
-    // its first words say what she asked for, not its kind's generic line (bug 15/11)
-    crate::welcome::wait_for_role(&config, &agent, &kind, lang, Some(&role));
+    let handover = str_of(proposal, "handover");
+    hand_over(&config, &agent, &from.display_name, &handover, lang)?;
+    let launched = config.guide.first_turns;
+    if launched {
+        // launched (launch.rs): its creator's brief in its conversation, and it starts on its first step at once
+        let brief = crate::launch::Brief {
+            role: role.clone(),
+            tone: str_of(proposal, "tone"),
+            known: handover,
+            first: Some(str_of(proposal, "first")).filter(|f| !f.trim().is_empty()).into_iter().collect(),
+        };
+        crate::launch::spawn(state, from, vec![(agent.clone(), brief)], lang);
+    } else {
+        // its first words say what she asked for, not its kind's generic line (bug 15/11)
+        crate::welcome::wait_for_role(&config, &agent, &kind, lang, Some(&role));
+    }
     let answer = json!({"type": "agent", "kind": kind, "agent": created_json(&config, &agent), "family": false,
-                        "suggested": suggested});
+                        "suggested": suggested, "launched": launched});
     keep_answer(&config, id, &answer)?;
     refresh(&config);
     Ok((201, answer))

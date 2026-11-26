@@ -26,12 +26,12 @@
 //! the answer of a card fully accepted is kept for a repeated tap. « Non merci »: the same subject isn't proposed again
 //! for 30 days, as for any card.
 //!
-//! Then each new agent takes ONE first turn (Alex, 2026-10-29: « comme Grok Bot, chaque bot démarre avec tout ce qu'il
-//! faut »), started by the bridge in a new conversation of its own (« Premiers pas »): it reads its mission and writes
-//! a short message (what it understood, what it will do), its first actions as cards (`propose_task`, or
-//! `notebook_task` proposals for what the person does), at most one background task within the usual rules. The turns
-//! run one at a time across the whole place, only after the tap, never when the month's AI credit is used (credit.rs),
-//! and their message lands in the Boîte as a hand-back does (handback.rs).
+//! Then each new agent is launched (Alex, 2026-10-29: « comme Grok Bot, chaque bot démarre avec tout ce qu'il faut »;
+//! 26/11, launch.rs): the guide's brief in its own main conversation (its role, its mission, its first actions, the
+//! usual rule), and it starts on it at once: a short message (what it understood, what it does first), then the first
+//! step within the usual rules (cards, at most one background task). The turns run one at a time across the whole
+//! place, only after the tap, never when the month's AI credit is used (credit.rs). Until 26/11 that turn ran in a
+//! conversation of its own (« Premiers pas ») and its message went to the Boîte.
 //!
 //! `[guide] agents_max` (the offer's hook, 0 = no limit): the card shows the places left, and the tool and the tap
 //! respect it.
@@ -107,9 +107,6 @@ impl Drop for Creating {
         CREATING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
     }
 }
-
-/// One first turn at a time on the whole place.
-static TURNS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// The services an agent may be offered to connect (« Se connecter avec… » and the app's catalog).
 pub(crate) fn services() -> Vec<String> {
@@ -302,43 +299,8 @@ pub fn mission_text(member: &Value, lang: &str) -> String {
     out
 }
 
-/// The first conversation's title.
-pub fn first_title(lang: &str) -> &'static str {
-    match crate::souls::language(Some(lang)) {
-        "fr" => "Premiers pas",
-        "de" => "Erste Schritte",
-        "es" => "Primeros pasos",
-        _ => "First steps",
-    }
-}
 
-/// The hidden note of the first turn (the rules travel in it, as hand-backs do: the prompt cache stays).
-pub fn first_note(from: &str) -> String {
-    format!(
-        "<!--bip:team\nYou were just created by {from}, with a team, for your person; your mission is in your memory. \
-         Write ONE short first message now, in their language, plain words: what you understood (one sentence), what \
-         you will do. Then the first actions as cards, not prose: propose_task for work you can do, notebook_task \
-         action propose for what they do themselves. Start at most one background task, only if the mission clearly \
-         calls for it.\n-->"
-    )
-}
 
-/// The message when the agent can't write it.
-pub fn fallback(lang: &str, name: &str, member: &Value) -> String {
-    let brief = tk::str_or_empty(member.pointer("/mission/brief"));
-    let actions: Vec<String> = member
-        .pointer("/mission/actions")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().map(|x| format!("- {}", tk::str_or_empty(Some(x)))).collect())
-        .unwrap_or_default();
-    let (hello, first) = match crate::souls::language(Some(lang)) {
-        "fr" => (format!("Bonjour, je suis {name}."), "Pour commencer :"),
-        "de" => (format!("Hallo, ich bin {name}."), "Zum Anfang:"),
-        "es" => (format!("Hola, soy {name}."), "Para empezar:"),
-        _ => (format!("Hello, I'm {name}."), "To begin:"),
-    };
-    format!("{hello} {brief}\n\n{first}\n{}", actions.join("\n"))
-}
 
 fn member_of<'a>(proposal: &'a Dict, id: &str) -> Option<&'a Value> {
     proposal.get("members").and_then(Value::as_array)?.iter().find(|m| tk::str_or_empty(m.get("id")) == id)
@@ -577,54 +539,31 @@ pub async fn accept(
             .into_iter()
             .filter(|(a, _)| !proposal.get("done").and_then(Value::as_object).is_some_and(|d| d.values().any(|v| v == &json!(a.name))))
             .collect();
-        spawn_first_turns(state.clone(), id.to_string(), fresh, from.display_name.clone(), lang.to_string());
+        spawn_first_turns(state.clone(), id.to_string(), fresh, from.clone(), lang.to_string());
     }
     Ok(crate::web::json_response(201, &answer))
 }
 
-/// The first turns, in the background, one at a time on the whole place.
-pub fn spawn_first_turns(state: AppState, card: String, agents: Vec<(AgentConfig, Value)>, from: String, lang: String) {
-    if agents.is_empty() {
-        return;
-    }
-    tokio::spawn(async move {
-        for (agent, member) in agents {
-            let _one = TURNS.lock().await;
-            if crate::credit::now_at(None).paused() {
-                tracing::info!(target: "bipbridge::guide", agent = %agent.name, "first turn skipped: the month's credit is used");
-                continue;
-            }
-            first_turn(&state, &card, &agent, &member, &from, &lang).await;
-        }
-    });
+/// The first turns (launch.rs): each new agent gets Bip's brief (its role, its mission, its first actions, the rule) in
+/// its own conversation and starts on it, one at a time on the whole place.
+pub fn spawn_first_turns(state: AppState, _card: String, agents: Vec<(AgentConfig, Value)>, from: AgentConfig, lang: String) {
+    let launches: Vec<(AgentConfig, crate::launch::Brief)> =
+        agents.into_iter().map(|(agent, member)| (agent, brief_of(&member))).collect();
+    crate::launch::spawn(&state, &from, launches, &lang);
 }
 
-async fn first_turn(state: &AppState, card: &str, agent: &AgentConfig, member: &Value, from: &str, lang: &str) {
-    let title = first_title(lang);
-    // a new agent's Hermes may take a moment to answer
-    let mut session = None;
-    for _ in 0..20 {
-        let agent = state.config().agent(Some(&agent.name)).cloned().unwrap_or_else(|| agent.clone());
-        match state.hermes.create_session(&agent, title).await {
-            Ok(id) => {
-                session = Some(id);
-                break;
-            }
-            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(3)).await,
-        }
+/// A member's brief for its launch: its role, its mission, its first actions.
+pub fn brief_of(member: &Value) -> crate::launch::Brief {
+    crate::launch::Brief {
+        role: tk::str_or_empty(member.get("role")),
+        tone: String::new(),
+        known: tk::str_or_empty(member.pointer("/mission/brief")),
+        first: member
+            .pointer("/mission/actions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|x| tk::str_or_empty(Some(x))).collect())
+            .unwrap_or_default(),
     }
-    let Some(session) = session else {
-        tracing::warn!(target: "bipbridge::guide", agent = %agent.name, "first turn: no conversation could be opened");
-        return;
-    };
-    let agent = state.config().agent(Some(&agent.name)).cloned().unwrap_or_else(|| agent.clone());
-    let mut pipeline = crate::background_turn::Pipeline::of(state);
-    pipeline.poll = 1.0;
-    let mut request =
-        crate::handback::Request::new(&agent, &session, format!("team:{card}:{}", agent.name), title, first_note(from));
-    request.turn_max = 240.0;
-    request.fallback = fallback(lang, &agent.display_name, member);
-    crate::handback::deliver(&pipeline, &request).await;
 }
 
 #[cfg(test)]
@@ -718,9 +657,9 @@ mod tests {
              un mail. À brancher par ton utilisateur : mail."
         );
         assert!(mission_text(m, "en").starts_with("Your mission: "));
-        assert!(first_note("Bip").starts_with("<!--bip:team\n") && first_note("Bip").ends_with("-->"));
-        assert!(first_note("Bip").contains("propose_task"));
-        assert_eq!(first_title("fr-FR"), "Premiers pas");
-        assert!(fallback("fr", "Ventes", m).contains("- Lister les prospects"));
+        // its launch (launch.rs): its role, its mission, its first actions in order
+        let brief = brief_of(m);
+        assert_eq!((brief.role.as_str(), brief.known.as_str()), ("Suit les ventes", "Le plan vise 200 abonnés en mars."));
+        assert_eq!(brief.first, ["Lister les prospects", "Préparer un mail"]);
     }
 }

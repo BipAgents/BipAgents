@@ -1,11 +1,13 @@
 """A team in one card (bridge-rs/src/guide_team.rs, 2026-10-29): the guide's `propose_team` makes one card; « Créer
 l'équipe » with 4 of its 6 agents makes those 4, each with its mission in its memory as data, a group discussion
-with them, then ONE first turn each, one at a time, in a new conversation whose message lands in the Boîte; a
-repeated tap answers the same; « Non merci » keeps the subject from coming back; only the guide may propose it."""
+with them, then each one launched (launch.rs, 26/11): the guide's brief in its own conversation (role, mission, first
+actions, the rule) and its first turn on it, one at a time; a repeated tap answers the same; « Non merci » keeps the
+subject from coming back; only the guide may propose it."""
 import threading
 import time
 
-from bbkit.common import AUTH
+from bbkit.common import AUTH, sse
+from bbkit.fakes import CLOSE
 from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
@@ -60,18 +62,13 @@ def test_a_team_card_creates_the_ticked_agents_with_their_mission_and_first_turn
     assert [m["name"] for m in p["members"]] == NAMES and p["members"][0]["color"] == "#123451"
     assert p["members"][0]["mission"]["actions"] == ["Lire la partie Ventes", "Proposer un premier point"]
 
-    fakes.hermes.rounds = 2
-    fakes.hermes.run_output = "J'ai lu ma mission : je commence par ta partie du plan."
-    running_at_once = []
-    stop = threading.Event()
-
-    def sample():
-        while not stop.is_set():
-            running_at_once.append(sum(1 for r in list(fakes.hermes.started.values()) if r["status"] == "running"))
-            time.sleep(0.05)
-
-    sampler = threading.Thread(target=sample, daemon=True)
-    sampler.start()
+    # the launches' turns (launch.rs): the first one held until the test lets it end, the others over at once
+    gate = threading.Event()
+    first = len(fakes.hermes.started) + 1
+    said = "J'ai lu ma mission : je commence par ta partie du plan."
+    fakes.hermes.runs[f"r{first}"] = [gate, sse("run.completed", run_id=f"r{first}", output=said), CLOSE]
+    for n in range(first + 1, first + 12):
+        fakes.hermes.runs[f"r{n}"] = [sse("run.completed", run_id=f"r{n}", output=said), CLOSE]
     accepted = bridge.post(f"/v1/guide/proposals/{p['id']}/accept", headers=AUTH,
                            json={"members": ["m1", "m2", "m4", "m6"], "lang": "fr"})
     assert accepted.status_code == 201, accepted.text
@@ -92,21 +89,24 @@ def test_a_team_card_creates_the_ticked_agents_with_their_mission_and_first_turn
     assert again.status_code == 200 and again.json() == made
     assert bridge.get("/v1/guide", headers=AUTH).json()["proposals"] == []
 
-    # one first turn each, in a new conversation « Premiers pas », one at a time, its message pointed at by the Boîte
-    # (the journal; the message itself stays in that conversation: background_turn.rs)
-    def boite():
-        rows = bridge.get("/v1/notifications", headers=AUTH).json()["notifications"]
-        return [r for r in rows if r["agent"] in ids and r["type"] == "reply"]
+    # each one launched, one at a time: the guide's brief in its own main conversation, then its first turn on it
+    def launched():
+        return [r for r in list(fakes.hermes.started.values()) if r["agent"] in ids]
 
-    assert wait_until(lambda: len(boite()) == 4, timeout=60), boite()
-    stop.set()
-    sampler.join()
-    assert max(running_at_once) == 1
-    first = sorted(agent for agent, body in fakes.hermes.created if agent in ids and body["title"] == "Premiers pas")
-    assert first == sorted(ids)
-    runs = [r for r in fakes.hermes.started.values() if r["agent"] in ids]
-    assert len(runs) == 4 and all(r["input"].startswith("<!--bip:team\n") and "propose_task" in r["input"] for r in runs)
-    assert all(r["preview"] == fakes.hermes.run_output for r in boite())
+    assert wait_until(lambda: len(launched()) == 1, timeout=30), bridge.log_tail()
+    time.sleep(1.0)
+    assert len(launched()) == 1   # the next one waits for this turn to end
+    gate.set()
+    assert wait_until(lambda: len(launched()) == 4, timeout=30), launched()
+    runs = launched()
+    assert sorted(r["agent"] for r in runs) == sorted(ids)
+    for r in runs:
+        assert "<!--bip:launch" in r["input"] and "Message from " in r["input"] and "(@agent): Bienvenue " in r["input"]
+    ventes = next(r for r in runs if r["agent"] == "ventes")["input"]
+    assert "Ton rôle : S'occupe de ventes." in ventes and "Ce que je sais déjà : Le plan prévoit 100 abonnés" in ventes
+    assert "Pour commencer :\n1. Lire la partie Ventes\n2. Proposer un premier point\n" in ventes
+    # in its main conversation (no « Premiers pas » conversation of its own any more)
+    assert not [agent for agent, body in fakes.hermes.created if agent in ids and body["title"] == "Premiers pas"]
     # its first actions as cards: what the agent proposes lands in « Tâches de fond »
     give_token(bridge, "ventes", VENTES_TOKEN)
     proposed = call(bridge, "propose_task", {"title": "Lire la partie Ventes", "prompt": "Lis la partie ventes."},

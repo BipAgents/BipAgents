@@ -231,7 +231,16 @@ def assert_made_as_asked(bridge, home, agent, wish=WISH):
     soul = (home / "profiles" / agent / "SOUL.md").read_text()
     assert wish in soul and "doux et encourageant" in soul, soul
     # its first words when she opens it (welcome.rs, shown by both apps as its first bubble): her wish, not the kind's
-    welcome = bridge.get("/v1/guide", headers=AUTH).json()["welcome"][agent]
+    welcome = bridge.get("/v1/guide", headers=AUTH).json()["welcome"].get(agent)
+    if welcome is None:
+        # made from a card: launched instead (launch.rs, 26/11): Bip's brief in its conversation says her wish as its
+        # role, and its first message answers it
+        def brief():
+            return [r["input"] for r in list(bridge.fakes.hermes.started.values())
+                    if r["agent"] == agent and "<!--bip:launch" in r["input"]]
+        assert wait_until(brief, timeout=30), bridge.log_tail()
+        assert "Ton rôle : " in brief()[0] and "semi-marathon de mars" in brief()[0], brief()[0]
+        return
     assert "semi-marathon de mars" in welcome["text"] and KIND_WELCOME not in welcome["text"], welcome["text"]
     assert not KIND_CHIPS & set(welcome["suggestions"]), welcome["suggestions"]
 
