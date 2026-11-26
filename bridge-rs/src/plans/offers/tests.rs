@@ -127,6 +127,30 @@ fn the_contract_s_kinds_and_texts_are_the_bridge_s() {
     assert_eq!(top("fr", "Vie", "Lisbonne"), card["top"].as_str().unwrap());
 }
 
+/// An offer's push says its question alone, in the four languages and in English for another (Alex 26/11: the
+/// notification's title already names the agent, « Vie · IA »); the bridge's own cards too, a mailbox's consent card
+/// (« Réponses dues ») among them.
+#[test]
+fn an_offer_s_notification_is_its_question_alone_in_every_language() {
+    assert_eq!(TEXTS.iter().map(|t| t.lang).collect::<Vec<_>>(), ["fr", "en", "de", "es"]);
+    for (lang, question) in [
+        ("fr", "Je regarde les hôtels près de Baixa ?"),
+        ("en", "Shall I look at hotels near Baixa?"),
+        ("de", "Soll ich nach Hotels bei Baixa schauen?"),
+        ("es", "¿Miro hoteles cerca de Baixa?"),
+        ("it", "Guardo gli hotel vicino a Baixa?"),
+    ] {
+        assert_eq!(notification(lang, question), question, "{lang}");
+        assert_eq!(texts(lang).notification, "{question}", "{lang}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let consent = crate::plans::sources::consent_offer(&config, "vie", "acct", "alex@proton.me", now());
+    let lang = lang_of(&config, "vie");
+    assert_eq!(bridge_line(lang, &consent), consent.label);
+    assert_eq!(consent.label, fill(crate::plans::sources::texts(lang).consent, &[("mailbox", "alex@proton.me")]));
+}
+
 #[test]
 fn an_offer_kind_the_agent_cannot_do_is_refused_and_not_in_its_tool_description() {
     // what it can do here, now: nothing but what its tools and rights allow

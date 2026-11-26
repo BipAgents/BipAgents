@@ -653,13 +653,13 @@
         "agent": "vie",
         "c": "t_contract",
         "r": "bip-offer-0123456789ab",
-        "enc": "BGw+Irpanti1Gge/ybkPSq0YPmkv3ztFgIucKLGA1wOFL55GolHdFR68vwmYm7BtlBvc23RpTp584BOSySDCSRFEXSqP3XxjMLIzcRYiCmUDGHhqqxj7FeC/nBdfViV+S+aZL0cuowAGlLTNN3l9D5YrixNfFM+GeuZDFA9C9w581Yuzia5/G3WAzMahxRtQB8wucWDTECS6RMCpIpA8u4/meCvpcx5BaRNls41h"
+        "enc": "BOK4s2Rvkmf859BS3PGxgdNwDcg3adjETBi72aHq97HM6St3H9GT13lLXYXlFz08/UKw5rB5aJUF5YLpmJabHYofcjRxVCWPMw7L6R7vuY0aTPxbM7A2Isl1SzPVmUXH5O2u2AgPKMQmsH7hjZZ3+MGJTpi07u7nmAlG7zGWjhpfAxCuL+JnvHticcJdVBB1yvWbwUDzYi2LJzpIOfw7/B+OeiI="
       },
       "shown": {
         "v": 1,
         "t": "mail_card",
         "title": "Vie",
-        "body": "Propose : Je regarde les hôtels ?"
+        "body": "Je regarde les hôtels ?"
       }
     },
     {

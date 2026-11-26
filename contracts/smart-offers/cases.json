@@ -118,7 +118,7 @@
    "idea": "true: a day's pass's idea"
   },
   "bip_detail": "an app 1.0's « i »: the prompt, then uses_text, later_text, site_text, one a line (the outside line first, the first card's hint last)",
-  "notification": "contracts/notifications card/offer: « Propose : {question} », never urgent"
+  "notification": "contracts/notifications card/offer: the question alone (« {question} »), never urgent"
  },
  "answers": {
   "once": "one turn of the agent with exactly the prompt (contracts/offers); a routine the card showed starts with it (made with routine_schedule in that turn: the same rhythm, no later end, once, within 20 min): no card of its own; a watcher keeps its connector card; anything paying, sending, booking, deleting, sharing keeps its own card",
