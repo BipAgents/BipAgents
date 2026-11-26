@@ -62,7 +62,7 @@ their server on the all-included offer. Everything personal goes here, with that
   person's provider in `/v1/agents/{id}/email`), vault items (`/v1/vault`; on the person's own server, a payment card's number, expiry, holder and postcode go
   there too, `bridge-rs/src/cards.rs`; on a server of the offer they stay on the phone and are sent, with the security
   code (typed, or remembered on that phone behind Face ID / fingerprint when the person chose so: Keychain / Android
-  Keystore, `App/Model/CardCodes.swift`, `CardCodeStore.kt`), only for a payment the person approves), SSH public keys (`/v1/ssh/keys`), voice
+  Keystore, `App/Model/CardCodes.swift`, `CardCodeStore.kt`), only for a payment the person approves), voice
   server settings.
 - **Health ("Santé")** (`App/Features/Settings/HealthSync.swift`, `android/.../health/HealthSync.kt`): one summary a
   day, sent with `PUT /v1/health-data/days` to every bridge where at least one agent has "Santé" turned on, with only
@@ -405,11 +405,11 @@ store alone (StoreKit products and storefront, Play Billing products and country
   servers paired again with the new device (new keys). So the guichet can give access to whoever controls the email
   address (and the authenticator app): that is by design; every new device is reported to the others and by email
   with a link that removes it (which changes the keys again), and logged. Removing a device, or a recovery, also
-  changes the subscription's purchase token and the claim token of each server paired again, and removes the SSH keys
-  on those servers: what the removed device kept opens nothing; the devices left use their own account token, and add
-  their SSH keys again (security review of 2026-11-26). The authenticator's secret is kept encrypted
-  by the guichet. Recovery with no code at all (after 24 hours) stays for when email can't be received. The guichet
-  never reads conversations.
+  changes the subscription's purchase token and the claim token of each server paired again, and removes any SSH key
+  left in those servers' accounts (the offer has no SSH since 2026-11-26): what the removed device kept opens nothing;
+  the devices left use their own account token (security review of 2026-11-26). The authenticator's secret is kept
+  encrypted by the guichet. Recovery with no code at all (after 24 hours) stays for when email can't be received. The
+  guichet never reads conversations.
 - On a server of the offer, the software is installed for Kerfy Studio and runs at a hosting provider. The app's
   encryption does not protect against whoever runs that machine.
 - **Invitations to a server of a shared plan:** the guichet holds the server's pairing secret, AI key and claim token (it issued
