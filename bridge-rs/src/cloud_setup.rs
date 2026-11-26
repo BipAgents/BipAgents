@@ -166,12 +166,8 @@ pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
     // and any SSH key put in the account since the place started (security review 2026-11-26, E3; the app adds none
     // since 26/11, ssh_keys.rs): nothing a removed device left may open it. After the keys above, so that nothing in
     // those files can keep a removed device's key valid. Only in the place's home from the config, never $HOME
-    // (ssh_keys::folder).
-    match crate::ssh_keys::forget_all(&config) {
-        Ok(0) => {}
-        Ok(gone) => tracing::info!(gone, "reopen: the account's SSH keys removed"),
-        Err(e) => tracing::error!(error = %e, "reopen: the account's SSH keys could not be removed"),
-    }
+    // (ssh_keys::folder); a failure is logged, and the next start removes them all again (ssh_keys::at_start).
+    crate::ssh_keys::forget_at_reopen(&config);
     Ok(key)
 }
 

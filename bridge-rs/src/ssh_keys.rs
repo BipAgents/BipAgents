@@ -11,8 +11,9 @@
 //!
 //! What opened the account before goes: every key of its ~/.ssh/authorized_keys and authorized_keys2 ([`forget_all`]),
 //! when a place of the offer starts ([`at_start`]) and at a reopen (cloud_setup::reopen: a device removed from the
-//! person's account, a recovery; security review E3). Only in the place's home from the config
-//! ([`Config::place_home`], only while `cloud`), never $HOME: without it nothing is touched.
+//! person's account, a recovery; security review E3); a failure is logged as an error and tried again at each start.
+//! Only in the place's home from the config ([`Config::place_home`], only while `cloud`), never $HOME: without it
+//! nothing is touched.
 
 use std::path::{Path, PathBuf};
 
@@ -79,14 +80,33 @@ pub fn forget_all(config: &Config) -> std::io::Result<usize> {
     }
 }
 
-/// At each start of a place of the offer ([`forget_all`]): no key left to open its account, whatever an app or
-/// anything else put there before.
-pub fn at_start(config: &Config) {
+/// When a place of the offer starts ([`at_start`]) and at a reopen ([`forget_at_reopen`]): [`forget_all`], said in
+/// the log. A failure is never silent (an error); keys a reopen could not remove go at the next start, since every
+/// start of a place removes them anyway: one mechanism, no mark to keep. Whether none are left.
+fn forget_logged(config: &Config, when: &str) -> bool {
     match forget_all(config) {
-        Ok(0) => {}
-        Ok(gone) => tracing::info!(gone, "start: the account's SSH keys removed (no SSH on a place of the offer)"),
-        Err(e) => tracing::error!(error = %e, "start: the account's SSH keys could not be removed"),
+        Ok(gone) => {
+            if gone > 0 {
+                tracing::info!(gone, when, "the account's SSH keys removed (no SSH on a place of the offer)");
+            }
+            true
+        }
+        Err(e) => {
+            tracing::error!(error = %e, when, "the account's SSH keys could not be removed: tried again at each start");
+            false
+        }
     }
+}
+
+/// At each start of a place of the offer (create_app): no key left to open its account, whatever an app, a reopen
+/// that failed or anything else put there before.
+pub fn at_start(config: &Config) -> bool {
+    forget_logged(config, "start")
+}
+
+/// At a reopen (cloud_setup::reopen), with every device key: the same. The reopen goes on whatever happens.
+pub fn forget_at_reopen(config: &Config) -> bool {
+    forget_logged(config, "reopen")
 }
 
 fn forget_in(home: &Path) -> std::io::Result<usize> {
@@ -209,5 +229,26 @@ mod tests {
         assert_eq!(folder(&config).as_deref(), Some(home.path()));
         assert_eq!(forget_all(&config).unwrap(), 1);
         assert_eq!(keys(home.path()), 0);
+    }
+
+    /// A reopen whose keys can't go is never silent, and they go at the next start of the place, which removes them
+    /// at each start anyway (review of fix-device-removal: no reopen's failure left behind).
+    #[test]
+    fn keys_a_reopen_could_not_remove_go_at_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".ssh"), "a file where the folder should be").unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.cloud = true;
+        config.place_home = Some(home.to_string_lossy().into_owned());
+        assert!(!forget_at_reopen(&config));
+        assert!(!at_start(&config), "still failing: tried again at each start");
+        std::fs::remove_file(home.join(".ssh")).unwrap();
+        std::fs::create_dir(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/authorized_keys"), format!("{GOOD}\n")).unwrap();
+        assert!(at_start(&config));
+        assert_eq!(keys(&home), 0);
+        assert!(at_start(&config), "nothing left: nothing to do");
     }
 }
