@@ -1826,7 +1826,14 @@ pub fn save_agent(config: &SharedConfig, agent: &AgentConfig) -> anyhow::Result<
     let renamed = config.get().agents.get(&agent.name).is_some_and(|a| a.display_name != agent.display_name);
     config.put_agent(agent.clone());
     if renamed {
-        crate::guide::refresh(&config.get()); // the guide's list of agents
+        let config = config.get();
+        crate::guide::refresh(&config); // the guide's list of agents
+        // the other agents' contacts name it as it is now (26/11: a name of before stayed there)
+        let links = crate::peers::Links::new(&crate::py::join(&config.data_dir(), "peers.json"));
+        let households = crate::households::Households::new(&crate::households::path_for(&config));
+        if let Err(exc) = crate::peers::refresh(&config, &links, Some(&households)) {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "contacts not renamed");
+        }
     }
     Ok(())
 }
