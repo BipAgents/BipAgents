@@ -2,7 +2,7 @@
 
 # Política de uso aceptable de la oferta todo incluido
 
-> Última actualización: 13 de noviembre de 2026.
+> Última actualización: 26 de noviembre de 2026.
 
 ## 1. Para qué sirve
 
@@ -50,7 +50,7 @@ su consentimiento, nada de suplantar a nadie (condiciones de uso, sección 10).
 ## 3. Tu responsabilidad
 
 Respondes de lo que haces tú y de lo que hacen tus agentes desde tu servidor, con tu acuerdo o porque tu configuración lo
-permite, también por el acceso SSH. Lo que leen tus agentes (páginas web, correos, archivos) puede contener
+permite. Lo que leen tus agentes (páginas web, correos, archivos) puede contener
 instrucciones ocultas destinadas a desviarlos: mantén activadas las solicitudes de aprobación y da a cada agente solo
 los accesos que necesita (condiciones de uso, sección 9).
 

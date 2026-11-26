@@ -153,8 +153,8 @@ toevoegt, met de modules (`bridge-rs/src/<naam>.rs`) die het doen, en wat hij be
 
 - De installer ([`installer/`](../installer/)) zet Hermes, de bridge, stemmen en sandboxen met één commando op en
   houdt ze bij. `place_backup.rs` toont back-ups en hun sleutel; `place_import.rs` haalt je eigen Hermes binnen;
-  `place_move.rs` verhuist een plek naar een andere server; `ssh_keys.rs` laat de persoon inloggen op zijn eigen
-  account.
+  `place_move.rs` verhuist een plek naar een andere server; `ssh_keys.rs` houdt de plekken van het aanbod
+  dicht voor SSH.
 - `space.rs`: de opslag van een plek versleuteld in rust (standaard uit).
 
 ## Het alles-in-één-aanbod

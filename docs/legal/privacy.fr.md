@@ -2,7 +2,7 @@
 
 # Politique de confidentialité de BipAgents
 
-> Dernière mise à jour : 25 novembre 2026.
+> Dernière mise à jour : 26 novembre 2026.
 
 ## En bref
 
@@ -591,7 +591,7 @@ chiffrées de la base. Les bits de DeviceCheck sont gardés par Apple.
 **Où.** Sur un serveur loué à OVHcloud (centres de données dans l'Union européenne) ou à Hetzner (Allemagne ou
 Finlande), pour toutes les personnes de l'offre, y compris celles qui vivent hors de l'Union.
 
-**Ce qui s'y trouve.** Ce que décrit la section 5.1, et les clés SSH publiques que tu ajoutes depuis l'app. Le guichet
+**Ce qui s'y trouve.** Ce que décrit la section 5.1. Le guichet
 de Kerfy Studio (le service qui gère les places) connaît l'adresse de ta place et l'empreinte de son certificat, pour
 que ton téléphone s'y connecte et pour la déplacer en cas de panne.
 
@@ -1092,8 +1092,9 @@ coupe-les ou désinstalle l'app. Pour les données de ton serveur, c'est toi qui
 fournisseur de modèle ou de ton hébergeur, adresse-toi à eux.
 
 **Avec l'offre tout compris**, ton compte relie ces données à toi : nous pouvons y donner accès, les corriger ou les
-effacer. Tu accèdes toi-même au contenu de ta place, par l'app ou par SSH, et tu peux le copier à tout moment. Pour
-supprimer ton compte : section 5.2.
+effacer. Tu accèdes toi-même au contenu de ta place par l'app, et tu peux le copier à tout moment avec le bouton
+« Télécharger mes données » des Réglages (à partir de la version 1.1.1 de l'app ; avant, l'app permet déjà d'exporter
+ton Carnet). Pour supprimer ton compte : section 5.2.
 
 **Si tu vis en Californie ou ailleurs aux États-Unis.** Kerfy Studio ne vend ni ne partage tes données personnelles au
 sens de la loi californienne (California Consumer Privacy Act) et ne fait aucune publicité ciblée. L'app et nos sites

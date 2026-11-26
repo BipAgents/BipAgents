@@ -158,8 +158,8 @@ sie bewusst Hermes überlässt.
 
 - Der Installer ([`installer/`](../installer/)) richtet Hermes, die Bridge, Stimmen und Sandboxen mit einem Befehl
   ein und hält sie aktuell. `place_backup.rs` zeigt Backups und ihren Schlüssel; `place_import.rs` holt dein eigenes
-  Hermes herein; `place_move.rs` zieht einen Platz auf einen anderen Server um; `ssh_keys.rs` lässt die Person sich in
-  ihr eigenes Konto einloggen.
+  Hermes herein; `place_move.rs` zieht einen Platz auf einen anderen Server um; `ssh_keys.rs` hält die Plätze des
+  Angebots für SSH geschlossen.
 - `space.rs`: der Speicher eines Platzes, im Ruhezustand verschlüsselt (standardmäßig aus).
 
 ## Das Rundum-Angebot

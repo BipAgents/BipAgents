@@ -2,7 +2,7 @@
 
 # Richtlinie zur zulässigen Nutzung des Alles-inklusive-Angebots
 
-> Zuletzt aktualisiert: 13. November 2026.
+> Zuletzt aktualisiert: 26. November 2026.
 
 ## 1. Wozu sie dient
 
@@ -52,7 +52,7 @@ einer anderen Person ohne ihre Einwilligung, kein Auftreten unter fremdem Namen 
 ## 3. Deine Verantwortung
 
 Du stehst für das ein, was du und deine Agenten von deinem Server aus tun, mit deinem Einverständnis oder weil deine
-Konfiguration es erlaubt, auch über den SSH-Zugang. Was deine Agenten lesen (Webseiten, E-Mails, Dateien), kann
+Konfiguration es erlaubt. Was deine Agenten lesen (Webseiten, E-Mails, Dateien), kann
 versteckte Anweisungen enthalten, die sie missbrauchen sollen: Lass die Freigabeanfragen eingeschaltet und gib jedem
 Agenten nur die Zugänge, die er braucht (Nutzungsbedingungen, Abschnitt 9).
 

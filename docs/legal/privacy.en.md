@@ -2,7 +2,7 @@ English · [Français](privacy.fr.md) · [Deutsch](privacy.de.md) · [Español](
 
 # BipAgents privacy policy
 
-> Last updated: 25 November 2026.
+> Last updated: 26 November 2026.
 
 ## In short
 
@@ -556,7 +556,7 @@ measures (section 5.12) then stay up to 30 days in the encrypted copies of the d
 **Where.** On a machine rented from OVHcloud (data centres in the European Union) or from Hetzner (Germany or Finland),
 for everyone in the offer, including people who live outside the Union.
 
-**What is there.** What section 5.1 describes, and the public SSH keys you add from the app. Kerfy Studio's guichet
+**What is there.** What section 5.1 describes. Kerfy Studio's guichet
 (the service that manages the servers) knows your server's address and its certificate's fingerprint, so that your phone
 can connect to it and so that it can be moved in case of an outage.
 
@@ -1023,8 +1023,9 @@ cannot find this data about you: to stop notifications, turn them off or uninsta
 your server yourself; for the data held by your model provider or your hosting provider, contact them.
 
 **With the all-included offer**, your account links this data to you: we can give you access to it, correct it or
-erase it. You access the content of your server yourself, through the app or over SSH, and you can copy it at any time.
-To delete your account: section 5.2.
+erase it. You access the content of your server yourself, through the app, and you can copy it at any time with the
+"Download my data" button in Settings (from version 1.1.1 of the app; before that, the app already lets you export
+your Notebook). To delete your account: section 5.2.
 
 **If you live in California or elsewhere in the United States.** Kerfy Studio does not sell or share your personal
 data within the meaning of California law (California Consumer Privacy Act) and does no targeted advertising. The app

@@ -2,7 +2,7 @@
 
 # Allgemeine Verkaufsbedingungen des Alles-inklusive-Angebots
 
-> Zuletzt aktualisiert: 18. November 2026.
+> Zuletzt aktualisiert: 26. November 2026.
 
 ## 1. Gegenstand
 
@@ -92,8 +92,6 @@ Für jede Person des Tarifs:
   noch gesponsert.
 - **Die Stimmen der Bips**, auf ihrem Telefon, wenn es das kann, sonst von ihrem Server.
 - **Eine verschlüsselte Sicherung wenige Minuten nach jeder Aktivität und mindestens einmal am Tag** (Abschnitt 9).
-- **Ein SSH-Zugang** zum Konto ihres Servers, von einem Computer aus, dessen Schlüssel in der App hinzugefügt wurde
-  (Einstellungen › Alles-inklusive-Angebot › SSH-Zugang), ohne Administratorrechte (root).
 
 **Das KI-Guthaben des Tarifs**: 5,00 € (Solo), 9,00 € (Duo) oder 16,00 € (Familie) Nutzung des KI-Modells pro Monat,
 geteilt von allen Personen des Tarifs, in der App als geschätzte Zahl von Nachrichten angezeigt: etwa 7.000, 13.000
@@ -300,14 +298,18 @@ Abschnitt 5.10).
 - **Ruhezustand**: Ein Server ohne Anfrage der App seit 14 Tagen und ohne geplante Routine schläft ein; er wacht auf,
   wenn du die App öffnest, in wenigen Augenblicken. Nichts geht verloren.
 - **Updates**: Kerfy Studio aktualisiert die Software der Server (BipAgents, Hermes Agent) in Wellen und kann zur
-  vorherigen Version zurückkehren, wenn eine Welle schiefgeht. Ein Update kann Änderungen ersetzen, die du per SSH an
+  vorherigen Version zurückkehren, wenn eine Welle schiefgeht. Ein Update kann Änderungen ersetzen, die du an
   den von BipAgents installierten Dateien vorgenommen hast.
 - **Technische Überwachung**: Die Maschinen schicken Kerfy Studio technische Daten (Arbeitsspeicher, Festplatte, Last, ob
   die Software jedes Servers läuft und ob sie gerade eine Aufgabe erledigt, ihre Version, die Uhrzeit ihrer letzten
   Sicherung, deine Zeitzone) und, in den ersten Tagen eines Servers, einige Nutzungsmesswerte
   ([Datenschutzerklärung](privacy.de.md), Abschnitte 5.6 und 5.12), nie Inhalte.
-- Bewahre eine Kopie dessen auf, was dir wichtig ist: Mit dem SSH-Zugang kannst du deine Dateien jederzeit
-  herunterladen.
+- Bewahre eine Kopie dessen auf, was dir wichtig ist: Die Schaltfläche „Meine Daten herunterladen“ in den Einstellungen
+  der App gibt dir jederzeit ein Archiv deiner Daten (Unterhaltungen, Notizbuch, Dateien, Gedächtnis deiner Agenten),
+  ohne Geheimnisse wie Passwörter und Zugangsschlüssel. Sie ist ab Version 1.1.1 der App verfügbar; davor kannst du in
+  der App bereits dein Notizbuch exportieren. Dein Server hat keinen SSH-Zugang. Wenn du gehen willst, nimmst du alles
+  mit: Hermes Agent ist freie Software, BipAgents funktioniert auch mit deinem eigenen Computer oder deinem eigenen
+  Server, wo der SSH-Zugang möglich bleibt, und dieses Archiv bringt deine Daten dorthin.
 
 ## 10. Zulässige Nutzung
 
@@ -356,8 +358,8 @@ Studio den KI-Schlüssel eines Servers abschalten und ihn sofort sperren, zu den
   1226 des französischen Zivilgesetzbuchs).
 - **Ende des Angebots**: Stellt Kerfy Studio das Alles-inklusive-Angebot ein, wirst du mindestens 30 Tage vorher in der
   App informiert; das Abo wird nicht mehr verlängert, du behältst deinen Server bis zum Ende des bezahlten Monats und
-  kannst seinen Inhalt per SSH herunterladen; bei einem Jahresabo werden dir die bezahlten, nicht genutzten Monate
-  erstattet.
+  kannst seinen Inhalt in der App herunterladen („Meine Daten herunterladen“); bei einem Jahresabo werden dir die
+  bezahlten, nicht genutzten Monate erstattet.
 
 ## 12. Widerrufsrecht
 
@@ -423,7 +425,7 @@ Kerfy Studio haftet insbesondere nicht:
 - für eine Zahlung, die ein Agent mit deiner Karte getätigt und du bestätigt hast, noch für eine verweigerte Erstattung
   durch deine Bank, es sei denn, die Zahlung beruht auf einem Fehler des Dienstes (ein anderer Betrag, eine andere
   Website oder Karte als die von dir bestätigte);
-- für das, was du selbst auf deinem Server tust, insbesondere per SSH;
+- für das, was du selbst auf deinem Server tust;
 - für einen Verlust des Zugangs, weil du alle deine Geräte und deinen Wiederherstellungscode verloren hast;
 - für die Dienste Dritter, die du mit deinen Agenten verbindest (E-Mail, Websites, Online-Konten).
 

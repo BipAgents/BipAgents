@@ -2,7 +2,7 @@
 
 # Datenschutzerklärung von BipAgents
 
-> Zuletzt aktualisiert: 25. November 2026.
+> Zuletzt aktualisiert: 26. November 2026.
 
 ## Kurz gesagt
 
@@ -626,7 +626,7 @@ verschlüsselten Kopien der Datenbank. Die DeviceCheck-Bits bewahrt Apple auf.
 **Wo.** Auf einer Maschine, die bei OVHcloud (Rechenzentren in der Europäischen Union) oder bei Hetzner (Deutschland oder
 Finnland) gemietet ist, für alle Personen des Angebots, auch für die, die außerhalb der Union leben.
 
-**Was dort liegt.** Was Abschnitt 5.1 beschreibt, und die öffentlichen SSH-Schlüssel, die du in der App hinzufügst. Der
+**Was dort liegt.** Was Abschnitt 5.1 beschreibt. Der
 Guichet von Kerfy Studio (der Dienst, der die Server verwaltet) kennt die Adresse deines Servers und den Fingerabdruck
 seines Zertifikats, damit sich dein Telefon damit verbinden kann und um ihn bei einem Ausfall zu verlegen.
 
@@ -1127,8 +1127,9 @@ schalte sie aus oder deinstalliere die App. Die Daten auf deinem Server verwalte
 Modellanbieter oder deinem Hoster wende dich an sie.
 
 **Mit dem Alles-inklusive-Angebot** verbindet dein Konto diese Daten mit dir: Wir können dir Auskunft geben, sie
-berichtigen oder löschen. Auf den Inhalt deines Servers greifst du selbst zu, über die App oder per SSH, und du kannst
-ihn jederzeit kopieren. Um dein Konto zu löschen: Abschnitt 5.2.
+berichtigen oder löschen. Auf den Inhalt deines Servers greifst du selbst zu, über die App, und du kannst
+ihn jederzeit mit der Schaltfläche „Meine Daten herunterladen“ in den Einstellungen kopieren (ab Version 1.1.1 der
+App; davor kannst du in der App bereits dein Notizbuch exportieren). Um dein Konto zu löschen: Abschnitt 5.2.
 
 **Wenn du in Kalifornien oder anderswo in den USA lebst.** Kerfy Studio verkauft und teilt deine personenbezogenen Daten
 nicht im Sinne des kalifornischen Rechts (California Consumer Privacy Act) und macht keine zielgerichtete Werbung. Die

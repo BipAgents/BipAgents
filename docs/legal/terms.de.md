@@ -2,7 +2,7 @@
 
 # Nutzungsbedingungen von BipAgents
 
-> Zuletzt aktualisiert: 25. November 2026.
+> Zuletzt aktualisiert: 26. November 2026.
 
 ## 1. Gegenstand
 
@@ -107,9 +107,8 @@ Wenn du deinen eigenen Computer oder Server nutzt, bist du verantwortlich:
   ihr Alter an.
 
 Mit dem Alles-inklusive-Angebot kümmert sich Kerfy Studio um die Maschine, ihre Updates und die Sicherungen deines
-Servers; du bleibst verantwortlich für deine Geräte, deinen Wiederherstellungscode, die Einhaltung der Bedingungen der
-Dienste, die du mit deinen Agenten verbindest, und für das, was du per SSH tust
-([Bedingungen des Angebots](offer.de.md)).
+Servers; du bleibst verantwortlich für deine Geräte, deinen Wiederherstellungscode und die Einhaltung der Bedingungen
+der Dienste, die du mit deinen Agenten verbindest ([Bedingungen des Angebots](offer.de.md)).
 
 ## 8. Was KI kann und was nicht
 

@@ -146,7 +146,7 @@ that do it, and what it deliberately leaves to Hermes.
 
 - The installer ([`installer/`](../installer/)) sets up Hermes, the bridge, voices and sandboxes in one command and
   updates them. `place_backup.rs` exposes backups and their key; `place_import.rs` brings your own Hermes in;
-  `place_move.rs` moves a place to another server; `ssh_keys.rs` lets the person log in to their own account.
+  `place_move.rs` moves a place to another server; `ssh_keys.rs` keeps the offer's places closed to SSH.
 - `space.rs`: a place's space encrypted at rest (off by default).
 
 ## The all-included offer

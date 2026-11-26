@@ -156,7 +156,7 @@ solo programa en Rust, `bipbridge`). Esta página recoge lo que añade, área po
 
 - El instalador ([`installer/`](../installer/)) monta Hermes, el bridge, las voces y los sandboxes con un comando y
   los actualiza. `place_backup.rs` expone las copias de seguridad y su clave; `place_import.rs` trae tu propio Hermes;
-  `place_move.rs` muda un espacio a otro servidor; `ssh_keys.rs` permite a la persona entrar en su propia cuenta.
+  `place_move.rs` muda un espacio a otro servidor; `ssh_keys.rs` mantiene cerrados a SSH los espacios de la oferta.
 - `space.rs`: el almacenamiento del espacio cifrado en reposo (desactivado por defecto).
 
 ## La oferta todo incluido

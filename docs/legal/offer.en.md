@@ -2,7 +2,7 @@ English · [Français](offer.fr.md) · [Deutsch](offer.de.md) · [Español](offe
 
 # Terms of sale of the all-included offer
 
-> Last updated: 18 November 2026.
+> Last updated: 26 November 2026.
 
 ## 1. Purpose
 
@@ -85,8 +85,6 @@ For each person in the plan:
   (https://github.com/NousResearch/hermes-agent); BipAgents is not published, endorsed or sponsored by Nous Research.
 - **The Bips' voices**, on their phone when it can, otherwise from their server.
 - **An encrypted backup a few minutes after each activity, and at least once a day** (section 9).
-- **SSH access** to their server's account, from a computer whose key was added in the app (Settings › All-included plan
-  › SSH access), without administrator (root) rights.
 
 **The plan's AI credit**: €5.00 (Solo), €9.00 (Duo) or €16.00 (Family) of AI model use each month, shared by everyone
 in the plan, shown in the app as an estimated number of messages: about 7,000, 13,000 or 24,000 messages a month with
@@ -279,13 +277,18 @@ policy](privacy.en.md), section 5.10).
 - **Sleep**: a server with no request from the app for 14 days and no scheduled routine goes to sleep; it wakes up when
   you open the app, in a few moments. Nothing is lost.
 - **Updates**: Kerfy Studio updates the servers' software (BipAgents, Hermes Agent) in waves, and can go back to the
-  previous version if a wave goes wrong. An update may replace changes you made, over SSH, to the files BipAgents
+  previous version if a wave goes wrong. An update may replace changes you made to the files BipAgents
   installs.
 - **Technical monitoring**: the machines send Kerfy Studio technical data (memory, disk, load, whether each server's
   software runs and whether it is in the middle of a task, its version, the time of its latest backup, your time zone)
   and, in a server's first days, a few usage measures ([privacy policy](privacy.en.md), sections 5.6 and 5.12), never
   any content.
-- Keep a copy of what matters to you: SSH access lets you get your files back at any time.
+- Keep a copy of what matters to you: the "Download my data" button, in the app's Settings, gives you at any time an
+  archive of your data (conversations, Notebook, files, your agents' memory), without secrets such as passwords and
+  access keys. It is available from version 1.1.1 of the app; before that, the app already lets you export your
+  Notebook. Your server has no SSH access. To leave with everything: Hermes Agent is open-source software, BipAgents
+  also works with your own computer or your own server, where SSH access remains possible, and this archive lets you
+  take your data there.
 
 ## 10. Acceptable use
 
@@ -331,7 +334,8 @@ under the conditions of that policy.
   stop the breach, except in an emergency or for a serious breach (articles 1224 to 1226 of the French Civil Code).
 - **End of the offer**: if Kerfy Studio stops the all-included offer, you are told in the app at least 30 days in
   advance; the subscription is no longer renewed, you keep your server until the end of the paid month and you can get
-  its content back over SSH; for a yearly subscription, the months paid and not used are refunded.
+  its content back with the app's "Download my data" button; for a yearly subscription, the months paid and not used
+  are refunded.
 
 ## 12. Right of withdrawal
 
@@ -394,7 +398,7 @@ In particular, Kerfy Studio is not liable for:
   service;
 - a payment made by an agent with your card that you approved, nor a refusal by your bank to refund it, unless the
   payment results from a defect of the service (an amount, site or card different from what you approved);
-- what you do yourself on your server, in particular over SSH;
+- what you do yourself on your server;
 - a loss of access due to the loss of all your devices and of your recovery code;
 - the third-party services you connect to your agents (email, websites, online accounts).
 
