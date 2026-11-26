@@ -1412,13 +1412,13 @@ async fn first_run_route(State(state): State<AppState>, Json(body): Json<FirstRu
                 lang: body.lang.clone().filter(|l| !l.is_empty()),
                 ..Default::default()
             };
-            let agent = crate::agents_admin::create_agent(
-                &state.config,
-                &request,
-                &state.http,
-                &crate::agents_admin::default_run(),
-            )
+            // in a task of its own: an app that gives up waiting never leaves it half made (agent_making.rs)
+            let (shared, http) = (state.config.clone(), state.http.clone());
+            let agent = crate::agent_making::detached(async move {
+                crate::agents_admin::create_agent(&shared, &request, &http, &crate::agents_admin::default_run()).await
+            })
             .await
+            .and_then(|made| made)
             .map_err(creation_failed)?;
             (agent, true)
         }
@@ -1470,6 +1470,105 @@ pub(crate) fn take_proposal(config: &Config, id: &str) -> anyhow::Result<Option<
     })
 }
 
+/// The answer while a card's agent is still being made (202, agent_making.rs): its name and kind, no agent yet.
+pub(crate) fn creating_json(name: &str, kind: &str) -> Value {
+    json!({"type": "agent", "creating": true, "name": name, "kind": kind, "agent": null})
+}
+
+/// Fully accepted cards whose answer is kept for a repeated tap (a team's, an agent's).
+fn keep_answer(config: &Config, id: &str, answer: &Value) -> anyhow::Result<()> {
+    let kept = answer.clone();
+    change(config, |s| {
+        s.proposals.retain(|p| str_of(p, "id") != id);
+        s.team_answers.insert(id.to_string(), kept);
+        while s.team_answers.len() > crate::guide_team::ANSWERS_KEPT {
+            let Some(oldest) = s.team_answers.keys().next().cloned() else { break };
+            s.team_answers.remove(&oldest);
+        }
+    })
+}
+
+/// « Créer X »: the agent made as the form makes it (or the family's, through its route), its look, the tiles that
+/// need nothing, its handover and first words; the card's answer kept for a tap again. Run in a task of its own
+/// (`accept`): nothing here depends on the request still being there.
+async fn agent_card(
+    state: &AppState,
+    id: &str,
+    proposal: &Dict,
+    body: &Accept,
+    from: &AgentConfig,
+    lang: &str,
+) -> crate::agent_making::Made {
+    let kind = str_of(proposal, "kind");
+    let name = body
+        .name
+        .as_deref()
+        .map(tk::squeeze)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| str_of(proposal, "name"));
+    let role = body
+        .role
+        .as_deref()
+        .map(tk::squeeze)
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| str_of(proposal, "role"));
+    let tone = str_of(proposal, "tone");
+    let family = body.for_whom.as_deref().map_or(str_of(proposal, "for") == "family", |f| f == "family");
+    if family {
+        // the family's agent, made by the family route (agent_create.rs)
+        let card = crate::agent_create::FamilyCard {
+            name: &name,
+            role: &role,
+            tone: &tone,
+            lang,
+            first_names: &strings(proposal, "members"),
+            people: body.people.clone(),
+        };
+        let agent = crate::agent_create::family_from_card(state, &card).await?;
+        note_requested(&state.config(), &agent.name);
+        let config = state.config();
+        crate::beta_measures::card_accepted(&config, None, now());
+        let answer = json!({"type": "agent", "kind": "home", "agent": created_json(&config, &agent), "family": true,
+                            "suggested": []});
+        keep_answer(&config, id, &answer)?;
+        refresh(&config);
+        return Ok((201, answer));
+    }
+    let request = crate::agents_admin::NewAgent {
+        name,
+        kind: Some(kind.clone()),
+        lang: Some(lang.to_string()),
+        group: body.group.clone(),
+        role: Some(role.clone()),
+        tone: Some(tone).filter(|t| !t.is_empty()),
+        ..Default::default()
+    };
+    let agent = {
+        let _guard = crate::agents_admin::LOCK.lock().await;
+        crate::agents_admin::create_agent(&state.config, &request, &state.http, &crate::agents_admin::default_run())
+            .await
+            .map_err(creation_failed)?
+    };
+    // its look and the tiles that need nothing, as the form does; the others wait for the person (`suggested`)
+    let tools = strings(proposal, "tools");
+    crate::guide_team::look_and_tools(state, &agent, &kind, None, &tools).await;
+    let mut suggested: Vec<String> =
+        tools.into_iter().filter(|t| !crate::guide_team::ON_AT_CREATION.contains(&t.as_str())).collect();
+    suggested.extend(strings(proposal, "services"));
+    note_requested(&state.config(), &agent.name);
+    let config = state.config();
+    let agent = config.agents.get(&agent.name).cloned().unwrap_or(agent);
+    crate::beta_measures::card_accepted(&config, None, now());
+    hand_over(&config, &agent, &from.display_name, &str_of(proposal, "handover"), lang)?;
+    // its first words say what she asked for, not its kind's generic line (bug 15/11)
+    crate::welcome::wait_for_role(&config, &agent, &kind, lang, Some(&role));
+    let answer = json!({"type": "agent", "kind": kind, "agent": created_json(&config, &agent), "family": false,
+                        "suggested": suggested});
+    keep_answer(&config, id, &answer)?;
+    refresh(&config);
+    Ok((201, answer))
+}
+
 async fn accept(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
@@ -1506,83 +1605,20 @@ async fn accept(
             if !config.hermes.enabled() {
                 return Err(HttpError::new(409, "this install does not manage its agents (set up by hand)"));
             }
+            // in a task of its own (agent_making.rs): an app that gives up waiting never cuts it in half; past
+            // its wait the answer is « still being made » (202), the same tap again waits for the same agent
+            let shown = body.name.as_deref().map(tk::squeeze).filter(|n| !n.is_empty()).unwrap_or_else(|| str_of(&proposal, "name"));
             let kind = str_of(&proposal, "kind");
-            let name = body
-                .name
-                .as_deref()
-                .map(tk::squeeze)
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| str_of(&proposal, "name"));
-            let role = body
-                .role
-                .as_deref()
-                .map(tk::squeeze)
-                .filter(|r| !r.is_empty())
-                .unwrap_or_else(|| str_of(&proposal, "role"));
-            let tone = str_of(&proposal, "tone");
-            let family = body.for_whom.as_deref().map_or(str_of(&proposal, "for") == "family", |f| f == "family");
-            if family {
-                // the family's agent, made by the family route (agent_create.rs)
-                let card = crate::agent_create::FamilyCard {
-                    name: &name,
-                    role: &role,
-                    tone: &tone,
-                    lang: &lang,
-                    first_names: &strings(&proposal, "members"),
-                    people: body.people.clone(),
-                };
-                let agent = crate::agent_create::family_from_card(&state, &card).await?;
-                note_requested(&state.config(), &agent.name);
-                take_proposal(&state.config(), &id)?;
-                let config = state.config();
-                crate::beta_measures::card_accepted(&config, None, now());
-                refresh(&config);
-                return Ok(web::json_response(
-                    201,
-                    &json!({"type": "agent", "kind": "home", "agent": created_json(&config, &agent), "family": true,
-                            "suggested": []}),
-                ));
+            let card = id.clone();
+            let made = crate::agent_making::run_or_wait(&format!("card:{id}"), crate::agent_making::answer_wait(&config), move || {
+                async move { agent_card(&state, &card, &proposal, &body, &from, &lang).await }
+            })
+            .await;
+            match made {
+                Some(Ok((status, answer))) => Ok(web::json_response(status, &answer)),
+                Some(Err(err)) => Err(err),
+                None => Ok(web::json_response(202, &creating_json(&shown, &kind))),
             }
-            let request = crate::agents_admin::NewAgent {
-                name,
-                kind: Some(kind.clone()),
-                lang: Some(lang.clone()),
-                group: body.group.clone(),
-                role: Some(role.clone()),
-                tone: Some(tone).filter(|t| !t.is_empty()),
-                ..Default::default()
-            };
-            let agent = {
-                let _guard = crate::agents_admin::LOCK.lock().await;
-                crate::agents_admin::create_agent(
-                    &state.config,
-                    &request,
-                    &state.http,
-                    &crate::agents_admin::default_run(),
-                )
-                .await
-                .map_err(creation_failed)?
-            };
-            // its look and the tiles that need nothing, as the form does; the others wait for the person (`suggested`)
-            let tools = strings(&proposal, "tools");
-            crate::guide_team::look_and_tools(&state, &agent, &kind, None, &tools).await;
-            let mut suggested: Vec<String> =
-                tools.into_iter().filter(|t| !crate::guide_team::ON_AT_CREATION.contains(&t.as_str())).collect();
-            suggested.extend(strings(&proposal, "services"));
-            note_requested(&state.config(), &agent.name);
-            take_proposal(&state.config(), &id)?;
-            let config = state.config();
-            let agent = config.agents.get(&agent.name).cloned().unwrap_or(agent);
-            crate::beta_measures::card_accepted(&config, None, now());
-            hand_over(&config, &agent, &from.display_name, &str_of(&proposal, "handover"), &lang)?;
-            // its first words say what she asked for, not its kind's generic line (bug 15/11)
-            crate::welcome::wait_for_role(&config, &agent, &kind, &lang, Some(&role));
-            refresh(&config);
-            Ok(web::json_response(
-                201,
-                &json!({"type": "agent", "kind": kind, "agent": created_json(&config, &agent), "family": false,
-                        "suggested": suggested}),
-            ))
         }
         Some("project") => {
             let name = body

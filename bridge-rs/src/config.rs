@@ -644,11 +644,14 @@ pub struct GuideConfig {
     pub team_max: usize,
     pub agents_max: usize,
     pub first_turns: bool,
+    /// How long a creation's request waits before answering « still being made » (agent_making.rs): 25 s, under the
+    /// apps' own waits (1 to 80).
+    pub answer_wait_seconds: u64,
 }
 
 impl Default for GuideConfig {
     fn default() -> Self {
-        GuideConfig { team_max: 6, agents_max: 0, first_turns: true }
+        GuideConfig { team_max: 6, agents_max: 0, first_turns: true, answer_wait_seconds: 25 }
     }
 }
 
@@ -1873,6 +1876,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         team_max: i(guide_t, "team_max", gd.team_max as i64)?.clamp(1, 6) as usize,
         agents_max: i(guide_t, "agents_max", gd.agents_max as i64)?.clamp(0, 1000) as usize,
         first_turns: b(guide_t, "first_turns", gd.first_turns),
+        answer_wait_seconds: i(guide_t, "answer_wait_seconds", gd.answer_wait_seconds as i64)?.clamp(1, 80) as u64,
     };
 
     let place_t = table(data, "place");

@@ -191,7 +191,8 @@ def test_claiming_sets_the_model_once_and_creates_the_agents_left(bridges, fakes
     """A claim that failed half-way (the second agent's profile) is tried again without redoing what it did."""
     bridge, cloud = cloud_bridge(bridges, fakes)
     cloud.done()
-    bridge.commands.rule("hermes", ["profile", "create", "maison"], exit=1, stderr="disk full", times=1)
+    # twice: the bridge tries a failed creation once more itself (agents_admin.rs `retryable`, 26/11)
+    bridge.commands.rule("hermes", ["profile", "create", "maison"], exit=1, stderr="disk full", times=2)
     wanted = json.dumps({"model": {"provider": "openrouter", "name": "z-ai/glm-5.3", "key": "sk-or-0123456789",
                                    "vision": True},
                          "agents": [{"name": "Quotidien", "kind": "daily"}, {"name": "Maison", "kind": "home"}],
@@ -221,19 +222,21 @@ def test_claiming_sets_the_model_once_and_creates_the_agents_left(bridges, fakes
 
 def test_a_claim_retried_after_its_profile_was_left_makes_the_agent_under_another_id(bridges, fakes):
     """13/11 (lab, public beta): the first try made the agent's profile, then failed; every retry then met « A profile
-    named 'quotidien' already exists ». The profiles' folders count when the id is chosen: the retry succeeds."""
+    named 'quotidien' already exists ». Since 26/11 a creation that fails is tried once more on the profile it made,
+    then what it made is removed (agents_admin.rs `discard_unfinished`): the claim's retry makes it again, same id."""
     bridge, cloud = cloud_bridge(bridges, fakes)
     cloud.done()
-    bridge.commands.rule("hermes", ["-p", "quotidien", "tools"], exit=1, stderr="gateway gone", times=1)
+    bridge.commands.rule("hermes", ["-p", "quotidien", "tools"], exit=1, stderr="gateway gone", times=2)
     failed = bridge.post("/v1/setup/claim", json=claim_body(cloud.challenge()))
     assert failed.status_code == 502
-    assert (bridge.root / ".hermes" / "profiles" / "quotidien" / "config.yaml").is_file()   # what it left
+    assert len([c for c in bridge.commands.of("hermes") if c[:3] == ["-p", "quotidien", "tools"]]) == 2
+    assert not (bridge.root / ".hermes" / "profiles" / "quotidien").exists()   # nothing left half made
     bridge.commands.clear()
     agents = bridge.post("/v1/setup/claim", json=claim_body(cloud.challenge()))
     assert agents.status_code == 200, agents.text
-    assert agents.json()["agents"] == [{"id": "quotidien-2", "name": "Quotidien"}]
+    assert agents.json()["agents"] == [{"id": "quotidien", "name": "Quotidien"}]
     creates = [c[2] for c in bridge.commands.of("hermes") if c[:2] == ["profile", "create"]]
-    assert creates == ["quotidien-2"]
+    assert creates == ["quotidien"]
 
 
 def test_a_place_of_the_reserve_is_claimed_in_seconds_its_first_agent_made_before(bridges, fakes):

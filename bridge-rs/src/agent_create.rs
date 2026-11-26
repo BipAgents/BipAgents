@@ -200,9 +200,14 @@ async fn ensure_guide(state: &AppState, lang: &str) -> ApiResult<(AgentConfig, b
                 lang: Some(lang.to_string()),
                 ..Default::default()
             };
-            crate::agents_admin::create_agent(&state.config, &request, &state.http, &crate::agents_admin::default_run())
-                .await
-                .map_err(guide::creation_failed)?
+            // in a task of its own: an app that gives up waiting never leaves it half made (agent_making.rs)
+            let (shared, http) = (state.config.clone(), state.http.clone());
+            crate::agent_making::detached(async move {
+                crate::agents_admin::create_agent(&shared, &request, &http, &crate::agents_admin::default_run()).await
+            })
+            .await
+            .and_then(|made| made)
+            .map_err(guide::creation_failed)?
         }
     };
     let config = state.config();
