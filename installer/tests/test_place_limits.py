@@ -8,6 +8,8 @@ import pwd
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 GB = 1024 ** 3
 
@@ -321,23 +323,28 @@ def test_the_reserve_is_root_s_and_given_back_only_as_root_s(tmp_path):
 def test_the_disk_level_s_folders_in_a_new_place_are_its_own(tmp_path, monkeypatch):
     """Real-server test of 2026-10-31: the seat agent told a new place its level (~/.local/state/bipagents/disk.json)
     before its install, making ~/.local root's; the install then could not make ~/.local/bin. Each missing folder is
-    the place's account's, and nothing is made outside its home."""
+    the place's account's (given by its descriptor: never a name a link could swap), and nothing is made outside its
+    home."""
     agent = _seat_agent()
     home = tmp_path / "bip2"
     home.mkdir()
     owned = []
-    monkeypatch.setattr(agent.os, "chown", lambda path, uid, gid, **kw: owned.append((os.path.relpath(path, home),
-                                                                                         uid, gid, kw)))
-    monkeypatch.setattr(agent.os, "fchown", lambda fd, uid, gid: None)
+
+    def fchown(fd, uid, gid):
+        st = os.fstat(fd)
+        for rel in (".local", ".local/state", ".local/state/bipagents"):
+            if os.path.isdir(home / rel) and os.path.samestat(st, os.stat(home / rel)):
+                owned.append((rel, uid, gid))
+    monkeypatch.setattr(agent.os, "fchown", fchown)
     agent.write_credit(str(home / ".local/state/bipagents/disk.json"), {"state": "ok"}, 1002, 1002, str(home))
     assert json.loads((home / ".local/state/bipagents/disk.json").read_text()) == {"state": "ok"}
-    kw = {"follow_symlinks": False}
-    assert owned == [(".local", 1002, 1002, kw), (".local/state", 1002, 1002, kw),
-                     (".local/state/bipagents", 1002, 1002, kw)]
+    assert owned == [(".local", 1002, 1002), (".local/state", 1002, 1002), (".local/state/bipagents", 1002, 1002)]
+    assert oct((home / ".local").stat().st_mode & 0o777) == "0o755"
     # there already: nothing made again
     owned.clear()
     agent.write_credit(str(home / ".local/state/bipagents/credit.json"), {"state": "ok"}, 1002, 1002, str(home))
     assert owned == []
     # never outside the home
-    agent.make_folders(str(tmp_path / "elsewhere" / "deep"), 1002, 1002, str(home))
+    with pytest.raises(OSError):
+        agent.write_credit(str(tmp_path / "elsewhere" / "deep" / "x.json"), {}, 1002, 1002, str(home))
     assert not (tmp_path / "elsewhere").exists()
