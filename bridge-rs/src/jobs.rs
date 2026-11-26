@@ -334,6 +334,59 @@ fn left_for_run(config: &crate::config::Config, job: &Dict) -> f64 {
     task_budget(config, job) - prices_of(config, job).of_tokens(job.get("before"))
 }
 
+/// Steps a budget proposed after a budget pause pays for (`needed_eur`): a handful, so the task gets somewhere.
+pub const STEPS_PROPOSED: f64 = 5.0;
+
+/// What one more step of a run costs at least, in euros: its next model call reading what its last one read (at the
+/// run's cache share, runs.rs `cap`) and writing what its calls wrote on average. None before its first call.
+pub fn step_cost(prices: &Prices, usage: &crate::runs::RunUsage) -> Option<f64> {
+    if usage.calls == 0 || usage.last_input <= 0 {
+        return None;
+    }
+    let written = usage.output.max(0) as f64 / f64::from(usage.calls);
+    Some(prices.next_call(usage) + written * prices.output / 1e6)
+}
+
+/// Euros up to the next cent (a budget the apps show and send to the cent), one cent at least.
+pub fn cents_up(euros: f64) -> f64 {
+    ((euros * 100.0) - 1e-9).ceil().max(1.0) / 100.0
+}
+
+/// A task paused at its budget: what one more step costs (`step_eur`) and the total budget that pays for
+/// `STEPS_PROPOSED` more (`needed_eur`: what the apps' « Continuer » gives when it is more than their small step).
+fn note_step(job: &mut Dict, spent: f64, step: Option<f64>) {
+    match step.filter(|s| s.is_finite() && *s > 0.0) {
+        Some(step) => {
+            job.insert("step_eur".into(), json!((step * 1e6).round() / 1e6));
+            job.insert("needed_eur".into(), json!(cents_up(spent + STEPS_PROPOSED * step)));
+        }
+        None => {
+            job.insert("step_eur".into(), Value::Null);
+            job.insert("needed_eur".into(), Value::Null);
+        }
+    }
+}
+
+/// Why a task paused at its budget can't go on with `total` euros in all (its new budget): one more step costs more
+/// than that leaves, so it would only stop again at once. None when it can.
+fn short_of_a_step(config: &crate::config::Config, job: &Dict, total: f64, spent: f64) -> Option<String> {
+    if job.get("reason") != Some(&json!("budget")) {
+        return None;
+    }
+    let step = job.get("step_eur").and_then(Value::as_f64).filter(|s| *s > 0.0)?;
+    if total - spent >= step {
+        return None;
+    }
+    let offer = crate::handover::on_offer();
+    let needed =
+        job.get("needed_eur").and_then(Value::as_f64).unwrap_or_else(|| cents_up(spent + STEPS_PROPOSED * step));
+    Some(format!(
+        "one more step of this task costs about {}, more than this budget leaves: give it at least {} in all",
+        budget_text(config, step, offer),
+        budget_text(config, needed, offer)
+    ))
+}
+
 /// A mailbox scan (mail_scan.rs) in the common shape.
 pub fn scan_view(job: &Dict, running: bool) -> Dict {
     let mut state = job.get("state").map(py::py_str).unwrap_or_else(|| "none".into());
@@ -391,7 +444,7 @@ fn counted_tokens(job: &Dict) -> Option<Value> {
 
 /// `task_view`, on a place of the offer (the tokens as Hermes counts them) or at home (`counted_tokens`).
 pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
-    const KEEP: [&str; 22] = [
+    const KEEP: [&str; 24] = [
         "id",
         "kind",
         "agent",
@@ -415,6 +468,9 @@ pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
         // seen by the person (a finished task, 19/11); its list as it last was (its screen once it ended)
         "seen",
         "steps",
+        // paused at its budget: what one more step costs, and the budget in all that pays for a few (`note_step`)
+        "step_eur",
+        "needed_eur",
     ];
     // an extraction from an archive (archives/records_fill.rs): its euros, its cap, the documents read
     const EXTRACT: [&str; 5] = ["archive", "progress", "model", "counts", "max_tokens"];
@@ -1246,6 +1302,8 @@ impl Jobs {
             ("started", started),
             ("finished", Value::Null),
             ("runs", json!(runs)),
+            ("step_eur", Value::Null),
+            ("needed_eur", Value::Null),
             ("stopping", Value::Null),
             ("waiting_since", Value::Null),
             ("wait_told", Value::Null),
@@ -1465,9 +1523,21 @@ impl Jobs {
         let braked = (status != "completed").then(|| self.braked(agent, &run_id)).flatten();
         let looped = braked.is_some().then(|| json!("loop"));
         let stopping = job.get("stopping").filter(|v| py::truthy(v)).cloned().or(capped).or(looped);
+        // its starting budget paid for one model call and no more (the call's tools never ran on): said in plain
+        // words with what would do, never a silent pause (`tell_end`)
+        let mut short = false;
         if stopping.is_some() || ["cancelled", "canceled", "interrupted"].contains(&status.as_str()) {
             job.insert("state".into(), json!("paused"));
             job.insert("reason".into(), stopping.unwrap_or(json!("interrupted")));
+            if job.get("reason") == Some(&json!("budget")) {
+                // what one more step costs, from the run's real tokens: a « Continuer » that can't pay for it would
+                // only stop again at once (`short_of_a_step`)
+                let config = self.config.get();
+                let usage = self.hub.as_ref().and_then(|hub| hub.run_progress(&agent.name, &run_id)).and_then(|p| p.usage);
+                let step = usage.and_then(|u| step_cost(&prices_of(&config, job), &u));
+                note_step(job, eur_spent(&config, job), step);
+                short = step.is_some() && int_of(job.get("runs")) <= 1 && usage.is_some_and(|u| u.calls <= 1);
+            }
         } else if status == "completed" {
             // its words, never its hidden spoken version (spoken.rs): the report, its page and its note are read
             full = tk::strip(&crate::spoken::strip(&output)).to_string();
@@ -1499,7 +1569,7 @@ impl Jobs {
         if let (true, Some(from), Some(handback)) = (state_of(job) == "done", from, self.handback.clone()) {
             self.hand_back(&handback, agent, job, &from, &full).await;
         } else if state_of(job) == "done" || reason == json!("budget") || reason == json!("time") {
-            self.tell_end(agent, job).await;
+            self.tell_end(agent, job, short).await;
         } else if let (Some(said), true, Some(tell)) = (braked, reason == json!("loop"), &self.tell) {
             let body = push_body(&self.config.get(), agent, PAUSED_BODY);
             let line = format!("{body}{} {}\n{said}", colon(body), tk::str_or_empty(job.get("title")));
@@ -1568,10 +1638,14 @@ impl Jobs {
         *job = latest;
     }
 
-    async fn tell_end(&self, agent: &AgentConfig, job: &Dict) {
+    async fn tell_end(&self, agent: &AgentConfig, job: &Dict, short: bool) {
         let Some(tell) = &self.tell else { return };
-        let body = push_body(&self.config.get(), agent, if state_of(job) == "done" { DONE_BODY } else { PAUSED_BODY });
-        let line = format!("{body}{} {}", colon(body), tk::str_or_empty(job.get("title")));
+        let config = self.config.get();
+        let body = push_body(&config, agent, if state_of(job) == "done" { DONE_BODY } else { PAUSED_BODY });
+        let mut line = format!("{body}{} {}", colon(body), tk::str_or_empty(job.get("title")));
+        if let (true, Some(total)) = (short, job.get("needed_eur").and_then(Value::as_f64)) {
+            line = format!("{line}\n{}", budget_short_line(&config, agent, total, crate::handover::on_offer()));
+        }
         let session = job.get("session_id").filter(|v| !v.is_null()).map(py::py_str);
         tell(agent.name.clone(), session, line, tk::str_or_empty(job.get("id")), body.into()).await;
     }
@@ -1656,9 +1730,17 @@ impl Jobs {
                 job.insert("budget_eur".into(), json!(euros.max(spent_now + 0.01)));
             }
             None if spent_now >= task_budget(&config, &job) => {
-                return Err(job_error("the budget is used up: give a bigger one"))
+                return Err(job_error(&short_of_a_step(&config, &job, spent_now, spent_now).map_or_else(
+                    || "the budget is used up: give a bigger one".to_string(),
+                    |why| format!("the budget is used up: {why}"),
+                )))
             }
             None => {}
+        }
+        // paused at its budget: a budget that can't pay for one more step would only stop it again at once (its run
+        // capped before its second call, nothing done): said, with what would do, instead of a silent new pause
+        if let Some(why) = short_of_a_step(&config, &job, task_budget(&config, &job), spent_now) {
+            return Err(job_error(&format!("Not resumed: {why}")));
         }
         let words = tk::head(tk::strip(message.unwrap_or("")), 2000).to_string();
         // a task queued before its first run (no room then: `launch`) starts with its own words
@@ -1952,7 +2034,9 @@ instead (they start it with one tap) and tell them so in one plain sentence.",
                 true,
             ));
         }
-        Some(Some(euros)) => euros.max(0.01),
+        // a smaller one of its own (the tool never says the default's amount: a model makes one up, a few cents) is
+        // a task that may not pay for its first step: the default, the ceiling the person allows, is the budget
+        Some(Some(_)) => default,
     };
     // only the person starts tasks, or the agent in their turn: a background task never starts its siblings (review
     // 1, 19/11: several at once per agent now); it proposes them, the person starts them
@@ -2128,6 +2212,23 @@ pub fn budget_text(config: &crate::config::Config, euros: f64, offer: bool) -> S
     } else {
         format!("{} tokens", thousands(task_cost::configured(config).tokens_for(euros)))
     }
+}
+
+/// The push's second line for a task whose starting budget paid for one model call and no more, in the agent's
+/// language: the budget in all that pays for a few more steps (`needed_eur`), in euros on a place of the offer, in
+/// tokens at home (its screens' unit).
+pub fn budget_short_line(config: &crate::config::Config, agent: &AgentConfig, total: f64, offer: bool) -> String {
+    let lang = crate::handback::language_of(config, agent);
+    let n = crate::names::names(&lang);
+    let amount = if offer {
+        crate::shared_expenses::money((cents_up(total) * 100.0).round() as i64, "EUR", n.lang, false)
+    } else {
+        let tokens = task_cost::configured(config).tokens_for(total);
+        let digits = thousands(tokens);
+        let digits = if n.lang == "en" { digits } else { digits.replace(',', if n.lang == "fr" { "\u{202f}" } else { "." }) };
+        format!("{digits} {}", n.tokens)
+    };
+    n.task_budget_short.replace("{total}", &amount)
 }
 
 /// What the agent is told once its task started (or why it could not).
@@ -2805,5 +2906,67 @@ mod tests {
         let flat = json!({"budget_eur": 0.2, "prices": task_cost::configured_on(&config, true).to_value(),
                           "tokens": {"input": 1_200_000, "output": 40_000, "cached": 1_140_000}});
         assert_eq!(task_view_on(flat.as_object().unwrap(), false)["tokens"], flat["tokens"]);
+    }
+
+    /// Alex 26/11 (an offer place, 1.1): a background task an agent started paused at « budget » at once, nothing
+    /// done, and « Reprendre » didn't get it going. A budget that pays for its first model call only is capped before
+    /// the second (the call's tools never go on): now the pause keeps what one more step costs and the budget in all
+    /// that pays for a few (`note_step`), and a resume that can't pay for one step is refused with that amount.
+    #[test]
+    fn a_budget_short_of_a_step_is_said_with_what_would_do() {
+        use crate::runs::RunUsage;
+        let config = crate::config::Config::with_key("k");
+        let glm = Prices { input: 0.10, cached: 0.02, output: 0.35 };
+        // its first call: 150 k read, nothing from the cache yet, 900 written
+        let first = RunUsage { calls: 1, input: 150_000, output: 900, cached: 0, last_input: 150_000 };
+        let step = step_cost(&glm, &first).unwrap();
+        assert!((step - (0.015 + 0.000315)).abs() < 1e-12, "{step}");
+        // once warm the same read costs a fifth: the next step at the run's cache share
+        let warm = RunUsage { calls: 4, input: 600_000, output: 3_600, cached: 540_000, last_input: 150_000 };
+        assert!((step_cost(&glm, &warm).unwrap() - (15_000.0 * 0.10 + 135_000.0 * 0.02 + 900.0 * 0.35) / 1e6).abs() < 1e-12);
+        assert_eq!(step_cost(&glm, &RunUsage::default()), None, "before its first call: unknown");
+        let spent = glm.of_usage(&first);
+        let mut job = json!({"reason": "budget", "budget_eur": 0.02, "prices": glm.to_value(),
+                             "tokens": {"input": 150_000, "output": 900, "cached": 0}}).as_object().cloned().unwrap();
+        note_step(&mut job, spent, Some(step));
+        assert_eq!(job["step_eur"], json!(0.015315));
+        assert_eq!(job["needed_eur"], json!(0.10), "what it took and five steps more, to the cent above");
+        // 0.02 € in all, 0.0153 € spent: what is left can't pay for one step
+        let why = short_of_a_step(&config, &job, 0.02, spent).unwrap();
+        assert!(why.starts_with("one more step of this task costs about "), "{why}");
+        assert!(why.ends_with("give it at least 181,818 tokens in all"), "{why}");   // at home, in tokens
+        assert!(short_of_a_step(&config, &job, 0.0253, spent).is_some(), "one cent more: still short");
+        assert_eq!(short_of_a_step(&config, &job, 0.10, spent), None, "what it proposed: enough");
+        assert_eq!(short_of_a_step(&config, &job, 0.22, spent), None, "the apps' « Continuer (+0,20 €) »");
+        let mut other = job.clone();
+        other.insert("reason".into(), json!("stopped"));
+        assert_eq!(short_of_a_step(&config, &other, 0.02, spent), None, "paused by the person: as before");
+        note_step(&mut job, spent, None);
+        assert!(job["step_eur"].is_null() && job["needed_eur"].is_null());
+        assert_eq!(short_of_a_step(&config, &job, 0.02, spent), None, "no step known (an older Hermes): as before");
+        assert_eq!((cents_up(0.0918), cents_up(0.09), cents_up(0.0)), (0.10, 0.09, 0.01));
+    }
+
+    /// The push's second line when the starting budget paid for one call only, in the agent's language, euros on a
+    /// place of the offer, tokens at home.
+    #[test]
+    fn a_budget_short_of_a_step_in_plain_words() {
+        let config = crate::config::Config::with_key("k");
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        assert_eq!(
+            budget_short_line(&config, &agent, 0.10, true),
+            "Its starting budget doesn't pay for even one step of this work: to go on, it needs at least €0.10 in all."
+        );
+        assert_eq!(
+            budget_short_line(&config, &agent, 0.10, false),
+            "Its starting budget doesn't pay for even one step of this work: to go on, it needs at least 181,818 tokens in all."
+        );
+        assert_eq!(
+            crate::names::names("fr").task_budget_short.replace("{total}", "0,10 €"),
+            "Son budget de départ ne paie même pas une étape de ce travail : pour continuer, il lui faut au moins 0,10 € en tout."
+        );
+        for lang in ["fr", "en", "de", "es"] {
+            assert!(crate::names::names(lang).task_budget_short.contains("{total}"), "{lang}");
+        }
     }
 }

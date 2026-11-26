@@ -410,6 +410,8 @@ pub fn job_item(job: &Dict, now: f64) -> Option<Value> {
         "max_tokens": job.get("max_tokens").cloned().unwrap_or(Value::Null),
         "eur": job.get("eur").cloned().unwrap_or(Value::Null),
         "budget_eur": job.get("budget_eur").cloned().unwrap_or(Value::Null),
+        // paused at its budget: the budget in all that pays for a few more steps (jobs.rs `note_step`)
+        "needed_eur": job.get("needed_eur").cloned().unwrap_or(Value::Null),
     });
     let when_text = match state {
         "waiting" => "Attend ton accord",

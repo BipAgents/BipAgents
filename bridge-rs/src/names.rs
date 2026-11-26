@@ -33,6 +33,11 @@ pub struct Names {
     /// « Tâche de fond en attente », and why in plain words (a task waiting long for room, jobs.rs `tell_long_waits`).
     pub task_waiting: &'static str,
     pub task_waiting_why: &'static str,
+    /// A task whose starting budget paid for one model call and no more (jobs.rs `tell_end`): `{total}`, the budget in
+    /// all that pays for a few more steps (`needed_eur`).
+    pub task_budget_short: &'static str,
+    /// « jetons »: a home install's budgets, in tokens.
+    pub tokens: &'static str,
     /// « Rappels » (the phone's reminders).
     pub reminders: &'static str,
     /// « Réglages ».
@@ -75,6 +80,8 @@ pub const NAMES: [Names; 4] = [
         task_proposed: "Tâche de fond proposée",
         task_waiting: "Tâche de fond en attente",
         task_waiting_why: "Trop de choses tournent en ce moment : elle partira toute seule dès qu'il y aura de la place. Tu peux aussi l'annuler.",
+        task_budget_short: "Son budget de départ ne paie même pas une étape de ce travail : pour continuer, il lui faut au moins {total} en tout.",
+        tokens: "jetons",
         reminders: "Rappels",
         settings: "Réglages",
         mailboxes: "Boîtes mail",
@@ -101,6 +108,8 @@ pub const NAMES: [Names; 4] = [
         task_proposed: "Background task suggested",
         task_waiting: "Background task waiting",
         task_waiting_why: "Too much is running right now: it will start by itself as soon as there's room. You can also cancel it.",
+        task_budget_short: "Its starting budget doesn't pay for even one step of this work: to go on, it needs at least {total} in all.",
+        tokens: "tokens",
         reminders: "Reminders",
         settings: "Settings",
         mailboxes: "Mailboxes",
@@ -127,6 +136,8 @@ pub const NAMES: [Names; 4] = [
         task_proposed: "Hintergrundaufgabe vorgeschlagen",
         task_waiting: "Hintergrundaufgabe wartet",
         task_waiting_why: "Gerade läuft zu viel: sie startet von selbst, sobald wieder Platz ist. Du kannst sie auch abbrechen.",
+        task_budget_short: "Ihr Startbudget reicht nicht einmal für einen Schritt dieser Arbeit: um weiterzumachen, braucht sie mindestens {total} insgesamt.",
+        tokens: "Tokens",
         reminders: "Erinnerungen",
         settings: "Einstellungen",
         mailboxes: "Postfächer",
@@ -153,6 +164,8 @@ pub const NAMES: [Names; 4] = [
         task_proposed: "Tarea en segundo plano propuesta",
         task_waiting: "Tarea en segundo plano en espera",
         task_waiting_why: "Ahora mismo hay demasiado en marcha: empezará sola en cuanto haya sitio. También puedes cancelarla.",
+        task_budget_short: "Su presupuesto inicial no alcanza ni para un paso de este trabajo: para seguir, necesita al menos {total} en total.",
+        tokens: "tokens",
         reminders: "Recordatorios",
         settings: "Ajustes",
         mailboxes: "Buzones",

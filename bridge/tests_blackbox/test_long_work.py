@@ -70,10 +70,16 @@ def test_start_task_refuses_more_than_the_direct_budget(bridges, fakes):
     assert "more than the 1,818,181 tokens a task may take without your person's go" in text_of(above)
     assert "propose_task" in text_of(above)
     assert not fakes.hermes.seen("/v1/runs", "POST") and jobs(bridge) == []
-    smaller = call(bridge, "start_task", {"title": "Petite recherche", "instructions": "Cherche.", "budget_eur": 0.5})
-    assert not smaller["isError"] and jobs(bridge)[0]["budget_eur"] == 0.5
-    assert jobs(bridge)[0]["max_tokens"] == DEFAULT_TOKENS // 2
-    assert bridge.delete(f"/v1/jobs/{jobs(bridge)[0]['id']}", headers=AUTH).status_code == 200
+    # a smaller one the agent names (Alex 26/11: the tool never says the default's amount, a model makes one up, a few
+    # cents, and its task may not pay for its first step): the default
+    for smaller in (0.5, 0.01, 0):
+        made = call(bridge, "start_task", {"title": f"Petite recherche {smaller}", "instructions": "Cherche.",
+                                           "budget_eur": smaller})
+        assert not made["isError"], text_of(made)
+        assert text_of(made).startswith("Started in the background (budget about 1,818,181 tokens)")
+        task = next(j for j in jobs(bridge) if j["title"] == f"Petite recherche {smaller}")
+        assert (task["budget_eur"], task["max_tokens"]) == (1.0, DEFAULT_TOKENS)
+        assert bridge.delete(f"/v1/jobs/{task['id']}", headers=AUTH).status_code == 200
 
 
 def test_on_a_place_of_the_offer_the_direct_budget_is_told_in_euros(bridges, fakes):
