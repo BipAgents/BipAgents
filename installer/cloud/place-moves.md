@@ -195,8 +195,15 @@ The seat agent does not put these in the beat yet, because asking would wake sle
   on its way, and the rules are exclusions only. The source reads the home through a read-only `nosymfollow` bind of
   it in a mount namespace of the copy's own, so a link swapped in fails the copy. The target receives into
   `~/.bipagents-move-in`, a folder of root's alone (0700): `prepare` moves the fresh place's own folders there first,
-  each rsync writes from a descriptor of the folder checked (never a path through the home), and `finish` moves
-  them back into the home, by name, in folders opened without following a link.
+  each rsync writes from a descriptor of the folder checked (never a path through the home), and `finish` gives the
+  copies to the target's ids while they are still there (by descriptors: once in the home they are the place's), then
+  moves them back into the home, by name, in folders opened without following a link.
+- **Condition before turning on the encrypted places** (`[space_keys] encrypt = true`, bridge-rs/src/space.rs): an
+  encrypted place replaces `~/.hermes`, `~/.config/bipagents` and `~/.local/state/bipagents` with links to
+  `~/.local/share/bipagents/space/open/<name>`, and a move refuses a root with a link on its way, so such a place
+  cannot move. Before encryption is on (it is off in production, no place sealed, 26/11), the move must translate
+  these three known links to their folders under `space/open/` (checked to be exactly those, inside the home), then
+  walk them by descriptors as for any root.
   restic would add a repository's encryption and an extraction during the downtime. The SSH channel already
   encrypts and authenticates both ends with keys derived from the guichet's one-time key, with no fingerprint to
   relay.

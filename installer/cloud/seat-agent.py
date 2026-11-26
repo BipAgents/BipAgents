@@ -542,7 +542,7 @@ def locked(home):
     try:
         reason = json.loads(raw.decode("utf-8")).get("reason")
         return str(reason)[:120] if reason else "locked"
-    except (AttributeError, ValueError):   # no file (None), or not a JSON object
+    except (AttributeError, ValueError, RecursionError):   # no file (None), not a JSON object, nested too deep
         return None
 
 
@@ -700,7 +700,7 @@ def cards_seen(home, uid=None, now=None, alive=None):
         return None
     try:
         seen = json.loads(raw.decode("utf-8"))
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(seen, dict):
         return None
@@ -887,7 +887,7 @@ def home_json(home, rel):
     raw = home_read(home, rel)
     try:
         value = json.loads(raw.decode("utf-8")) if raw is not None else {}
-    except ValueError:
+    except (ValueError, RecursionError):   # "[[[[...": never the beat's loss
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -898,7 +898,10 @@ def home_toml(home, rel):
     raw = home_read(home, rel)
     if raw is None:
         raise OSError("%s not readable" % rel)
-    return tomllib.loads(raw.decode("utf-8"))
+    try:
+        return tomllib.loads(raw.decode("utf-8"))
+    except RecursionError:   # nested too deep: an error like any other, never the beat's loss
+        raise ValueError("%s nested too deep" % rel)
 
 
 def home_stat(home, rel):
@@ -2134,7 +2137,7 @@ def next_routine(home):
         raw = home_read(home, rel)
         try:
             data = json.loads(raw.decode("utf-8")) if raw is not None else None
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         jobs = data if isinstance(data, list) else data.get("jobs") if isinstance(data, dict) else None
         for job in jobs if isinstance(jobs, list) else []:

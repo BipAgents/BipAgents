@@ -449,6 +449,36 @@ def _rsync3():
     return b"version 3." in subprocess.run(["rsync", "--version"], capture_output=True).stdout
 
 
+def _view_prefix():
+    """The moves' mount namespace: root's own on a server; a user namespace's here, when not root (the battery runs
+    these under `unshare -rm`, root there)."""
+    if os.geteuid() == 0:
+        return ["unshare", "--mount", "--propagation", "private", "--"]
+    return ["unshare", "--user", "--map-root-user", "--mount", "--propagation", "private", "--"]
+
+
+_VIEWS = {}
+
+
+def _need_views(tmp_path):
+    """The source's view (a read-only nosymfollow bind in a mount namespace) can be made here, tried once; else the
+    test is skipped: GitHub's runners refuse unprivileged user namespaces, and a test that copies nothing proves
+    nothing."""
+    if "ok" not in _VIEWS:
+        a, b = tmp_path / "probe-a", tmp_path / "probe-b"
+        a.mkdir()
+        b.mkdir()
+        try:
+            done = subprocess.run(_view_prefix() + ["/bin/sh", "-c", 'mount --bind -- "$1" "$2" && mount -o '
+                                                    'remount,bind,ro,nosymfollow -- "$2"', "probe", str(a), str(b)],
+                                  capture_output=True, timeout=30)
+            _VIEWS["ok"] = done.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            _VIEWS["ok"] = False
+    if not _VIEWS["ok"]:
+        pytest.skip("no mount namespace with a nosymfollow bind here (unprivileged user namespaces refused)")
+
+
 FAKE_SSH = r'''
 import importlib.util, json, os, sys
 config = json.load(open(os.environ["MOVE_TEST_TARGET"]))
@@ -505,9 +535,7 @@ def two_servers(tmp_path, monkeypatch):
         def ssh_args(self):
             return [sys.executable, str(fake)]
     monkeypatch.setattr(pm, "Channel", Channel)
-    if os.geteuid() != 0:
-        monkeypatch.setattr(pm, "VIEW", ["unshare", "--user", "--map-root-user", "--mount", "--propagation",
-                                         "private", "--"], raising=False)
+    monkeypatch.setattr(pm, "VIEW", _view_prefix(), raising=False)
     monkeypatch.setattr(pm, "place", lambda n: _entry(source))
     monkeypatch.setattr(pm, "made_stopped", lambda *a, **k: None)
     monkeypatch.setattr(pm, "bridge", lambda *a, **k: {})
@@ -520,7 +548,8 @@ def two_servers(tmp_path, monkeypatch):
     order.write_text(json.dumps({"seat": 2, "action": "move_out", "move": {
         "id": "m-0123456", "key": KEY, "target": {"address": "203.0.113.9", "port": 2222}, "back_in": 60,
         "drain": False}}))
-    return {"source": source, "target": target, "victim": victim, "plans": plans, "order": str(order),
+    return {"tmp": tmp_path, "source": source, "target": target, "victim": victim, "plans": plans,
+            "order": str(order),
             "root": str(tmp_path / "a" / "moves"), "target_root": str(tmp_path / "b" / "moves"), "config": config,
             "fake": fake}
 
@@ -534,6 +563,7 @@ def _victim_untouched(victim):
 def test_scenario_a_a_link_made_by_the_first_copy_is_never_followed_by_the_next(two_servers, monkeypatch):
     """The review's scenario A, the whole move: a root that is a link to root's folder at the first copy, a real
     folder holding the place's own seat-agent.py at the next."""
+    _need_views(two_servers["tmp"])
     s = two_servers
     os.symlink(s["victim"], s["source"] / "d")
 
@@ -556,6 +586,7 @@ def test_scenario_a_a_link_made_by_the_first_copy_is_never_followed_by_the_next(
 
 @pytest.mark.linux
 def test_scenario_b_a_neighbour_s_folder_never_reaches_the_place_s_new_home(two_servers, tmp_path):
+    _need_views(two_servers["tmp"])
     s = two_servers
     neighbour = tmp_path / "a" / "home" / "bip3" / ".config" / "bipagents"
     neighbour.mkdir(parents=True)
@@ -612,22 +643,76 @@ def test_the_target_writes_only_into_its_folder_of_root_s_whatever_the_stream_sa
 
 
 @pytest.mark.linux
-def test_the_source_reads_no_link_swapped_in_on_a_root_s_way(two_servers, tmp_path):
-    """The view of the home the source's rsync reads: a link on the way (swapped in after the copy's own look)
-    fails the copy, nothing of what it names is sent."""
+def test_the_source_reads_no_link_swapped_in_on_a_root_s_way(two_servers, tmp_path, monkeypatch):
+    """The view of the home the source's rsync reads: the place swaps a folder on a root's way for a link to a
+    neighbour's right after root looked (at a copy), before rsync reads; the copy fails, nothing of the neighbour is
+    sent. (main, which never looks, gets the swap at its first copy's end: its next copy sent the neighbour's file.)"""
     s = two_servers
-    roots = base64.b64encode(json.dumps({"roots": {"d": "via/inner"}}).encode()).decode()
-    assert "error" not in _ask(s, "prepare", roots)
-    outside = tmp_path / "a" / "home" / "bip3"
-    (outside / "inner").mkdir(parents=True)
-    (outside / "inner" / "secret.txt").write_text(SECRET)
-    os.symlink(outside, s["source"] / "via")
-    base = tmp_path / "a" / "moves" / "m-0123456"
-    channel = pm.Channel(str(base), "203.0.113.9", 2222, KEY)
-    with pytest.raises(pm.MoveError):
-        channel.rsync(str(s["source"]), "via/inner/", "roots/d")
+    _need_views(tmp_path)
+    source = s["source"]
+    (source / "via" / "inner").mkdir(parents=True)
+    (source / "via" / "inner" / "mine.txt").write_text("the place's own")
+    neighbour = tmp_path / "a" / "home" / "bip3"
+    (neighbour / "inner").mkdir(parents=True)
+    (neighbour / "inner" / "secret.txt").write_text(SECRET)
+    swapped = []
+
+    def swap():
+        if not swapped:
+            shutil.rmtree(source / "via")
+            os.symlink(neighbour, source / "via")
+            swapped.append(1)
+    real_kind = getattr(pm, "home_kind", None)
+    looks = []
+
+    def home_kind(home, rel):
+        found = real_kind(home, rel)
+        if rel == "via/inner":
+            looks.append(rel)
+            if len(looks) == 2:   # the plan's look, then the first copy's: swapped right after it
+                swap()
+        return found
+    monkeypatch.setattr(pm, "home_kind", home_kind, raising=False)
+    real_save = pm.save
+
+    def save(move_id, root=pm.MOVES, **fields):
+        if fields.get("round") == 1:
+            swap()
+        return real_save(move_id, root, **fields)
+    monkeypatch.setattr(pm, "save", save)
+    s["plans"]["plan"] = lambda home: _plan(home, {"d": str(home / "via" / "inner")})
+    pm.out(s["order"], s["root"])
+    assert swapped
     found = subprocess.run(["grep", "-rl", SECRET, str(s["target"])], capture_output=True, text=True).stdout
-    assert found == ""
+    assert found == "", "the neighbour's file reached the moved place's home: %s" % found
+
+
+@pytest.mark.linux
+def test_the_view_is_refused_when_its_mount_ignores_nosymfollow(tmp_path):
+    """An older util-linux would drop `nosymfollow` without a word: the view is checked (findmnt) before rsync runs,
+    else nothing runs."""
+    _need_views(tmp_path)
+    real = shutil.which("mount")
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    (fakebin / "mount").write_text("#!%s\nimport os, sys\nos.execv(%r, ['mount'] + [a.replace(',nosymfollow', '') "
+                                   "for a in sys.argv[1:]])\n" % (sys.executable, real))
+    (fakebin / "mount").chmod(0o755)
+    home, view = tmp_path / "home", tmp_path / "view"
+    home.mkdir()
+    view.mkdir()
+    ran = tmp_path / "ran"
+
+    def view_runs(path):
+        command = _view_prefix() + ["/bin/sh", "-c", pm.VIEW_SCRIPT, "place-move-view", str(home), str(view),
+                                    "touch", str(ran)]
+        subprocess.run(command, env=dict(os.environ, PATH=path), capture_output=True, timeout=60)
+        found = ran.exists()
+        if found:
+            ran.unlink()
+        return found
+    assert view_runs(os.environ["PATH"]), "the view itself doesn't run here"
+    assert not view_runs("%s:%s" % (fakebin, os.environ["PATH"])), "rsync ran in a view that follows links"
 
 
 @pytest.mark.linux
@@ -635,6 +720,7 @@ def test_a_move_lands_the_place_s_files_in_the_new_home_and_keeps_the_target_s_o
     """The whole move, as it should go: the person's files over the fresh place's, what the rules leave out kept from
     the target (its config's lock: bridgeconf), the fresh files the source doesn't have gone (--delete), the stage
     in MOVE_IN, root's folder for the copies gone."""
+    _need_views(two_servers["tmp"])
     s = two_servers
     src, dst = s["source"], s["target"]
     (src / ".config" / "bipagents" / "bridge.toml").write_text('bridge_key = "old"\n')
@@ -658,3 +744,112 @@ def test_a_move_lands_the_place_s_files_in_the_new_home_and_keeps_the_target_s_o
     assert (dst / pm.MOVE_IN / "stage" / "manifest.json").exists()
     assert not (dst / pm.STAGING).exists()
     assert json.loads((src / pm.MOVED_AWAY).read_text())["move"] == "m-0123456"
+
+
+def test_owners_are_shifted_in_root_s_folder_before_the_place_can_touch_its_files(tmp_path, monkeypatch):
+    """Review of 59ee7434b: `finish` shifted the owners by path after the folders were back in the home, the place's
+    by then: it could swap a folder not walked yet for a link to a neighbour's (its ~/.ssh, given first, lets it in),
+    and root gave it the neighbour's files. Now shifted in STAGING, root's alone, by descriptors, then put back."""
+    home = tmp_path / "home" / "bip3"
+    (home / pm.MOVE_IN).mkdir(parents=True)
+    (home / ".hermes").mkdir()
+    neighbour = tmp_path / "home" / "bip4" / "secrets"
+    (neighbour / "sub").mkdir(parents=True)
+    (neighbour / "sub" / "key").write_text(SECRET)
+    root = str(tmp_path / "moves")
+    roots = {"hermes": ".hermes"}
+    pm.save("m-0123456", root, role="in", seat=3, phase="receiving", roots=roots)
+    pm.set_aside(str(home), roots)
+    copied = home / pm.STAGING / "roots" / "hermes"   # what the copies brought, owned by the source's ids
+    (copied / "zzz" / "sub").mkdir(parents=True)
+    (copied / "a").write_text("x")
+    (copied / "zzz" / "sub" / "f").write_text("y")
+    ours = {os.lstat(copied / rel).st_ino for rel in ("a", "zzz", "zzz/sub", "zzz/sub/f")}
+    me, group = os.getuid(), os.getgid()
+    entry = type("Entry", (), {"pw_dir": str(home), "pw_uid": me + 1, "pw_gid": group + 1, "pw_name": "bip3"})
+    monkeypatch.setattr(pm, "subids", lambda user, path="/etc/subuid": None)
+    monkeypatch.setattr(pm, "as_user", lambda e, args, timeout=0: {"volumes": []})
+    monkeypatch.setattr(pm, "bridge", lambda *a, **k: {"routines": []})
+    monkeypatch.setattr(pm, "gateways_answer", lambda home, timeout=0: [])
+    monkeypatch.setattr(pm, "later_close", lambda move_id: None)
+    swapped, given = [], []
+
+    def the_place(path):
+        """Owner of its new ~/.hermes, it swaps ~/.hermes/zzz for a link to a neighbour's folder that holds a
+        `sub` too, once root has listed zzz and not walked zzz/sub yet (root gives zzz/sub away: its path is
+        in the home)."""
+        zzz = home / ".hermes" / "zzz"
+        if not swapped and str(path).endswith("/zzz/sub") and zzz.is_dir() and not zzz.is_symlink():
+            shutil.rmtree(zzz)
+            os.symlink(neighbour, zzz)
+            swapped.append(1)
+
+    def chown(path, uid, gid, *, dir_fd=None, follow_symlinks=True):
+        given.append(os.stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks).st_ino)
+        the_place(path)
+    monkeypatch.setattr(pm.os, "chown", chown)
+    monkeypatch.setattr(pm.os, "lchown", lambda path, uid, gid: chown(path, uid, gid, follow_symlinks=False))
+    src = {"uid": me, "gid": group, "sub_uid": None, "sub_gid": None}
+    out = pm.finish("m-0123456", entry, {"source": src, "routines": 0}, root)
+    assert out.get("ok"), out
+    assert os.lstat(neighbour / "sub" / "key").st_ino not in given, "root gave a neighbour's file to the place"
+    assert ours <= set(given), "the copies' owners were not all shifted"
+    assert (home / ".hermes" / "a").exists() and not (home / pm.STAGING).exists()
+
+
+# -- review of 59ee7434b: a nesting deep enough for Python's recursion stops nothing ----------------------------------------
+
+DEEP = "[" * 200000
+
+
+def _deep_cards(home):
+    return agent.cards_seen(str(home), alive=lambda pid, uid: True)
+
+
+DEEP_READS = [
+    ("locked", agent.LOCKED, DEEP, lambda home: agent.locked(str(home))),
+    ("measures", agent.MEASURES, DEEP, lambda home: agent.measures(str(home))),
+    ("key service", agent.SPACE_KEY_SERVICE, DEEP, lambda home: agent.vault_key_service(str(home))),
+    ("vault failed", agent.VAULT_STATE, DEEP, lambda home: agent.vault_failed(str(home))),
+    ("time zone", agent.BRIDGE_DATA + "/time.json", DEEP, lambda home: agent.activity(str(home), now=1793000000)),
+    ("backup", agent.BACKUP_STATE, DEEP, lambda home: agent.last_backup("bip2")),
+    ("cards", agent.OFFER_CARDS_SEEN, DEEP, _deep_cards),
+    ("routines", agent.HERMES_HOME + "/cron/jobs.json", DEEP, lambda home: agent.next_routine(str(home))),
+    ("vault state", ".config/bipagents/bridge.toml", "a = " + DEEP, lambda home: agent.vault_state(str(home))),
+    ("sealed key services", ".config/bipagents/bridge.toml", "a = " + DEEP,
+     lambda home: agent.sealed_key_services()),
+    ("moved-away mark", pm.MOVED_AWAY, DEEP, lambda home: pm.home_json(str(home), pm.MOVED_AWAY)),
+]
+
+
+@pytest.mark.parametrize("name,rel,content,read", DEEP_READS, ids=[r[0] for r in DEEP_READS])
+def test_a_file_nested_too_deep_stops_no_read_of_root_s(place, monkeypatch, tmp_path, name, rel, content, read):
+    """json.loads / tomllib.loads on « [[[[… » raise RecursionError: one such file in one home stopped health(), and
+    so every beat of the server."""
+    home, system = place
+    monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "tried"))
+    monkeypatch.setattr(agent, "MAX_SEATS", 1)
+    path = home / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    read(home)   # no RecursionError
+
+
+def test_a_file_nested_too_deep_never_stops_the_beat(place, monkeypatch, tmp_path):
+    home, system = place
+    monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "tried"))
+    monkeypatch.setattr(agent, "MAX_SEATS", 1)
+    monkeypatch.setattr(agent, "door_open", lambda port: False)
+    path = home / agent.LOCKED
+    path.parent.mkdir(parents=True)
+    path.write_text(DEEP)
+    assert agent.health()["1"]["locked"] is None
+
+
+def test_the_place_s_bridge_settings_nested_too_deep_are_an_error_the_move_handles(place):
+    home, system = place
+    path = home / ".config" / "bipagents" / "bridge.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text("a = " + DEEP)
+    with pytest.raises((OSError, ValueError)):
+        pm.bridge_settings(str(home))

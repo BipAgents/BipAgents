@@ -74,7 +74,9 @@ ROOT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # The source reads the place's home through a view of it no link is ever followed in (security review 26/11, E1): the
 # home bound read-only, `nosymfollow` (Linux 5.10, util-linux 2.38), in a mount namespace of the copy's own.
 VIEW = ["unshare", "--mount", "--propagation", "private", "--"]
-VIEW_SCRIPT = 'mount --bind -- "$1" "$2" && mount -o remount,bind,ro,nosymfollow -- "$2" && shift 2 && exec "$@"'
+# The view is checked before rsync runs: an older util-linux would drop nosymfollow without a word.
+VIEW_SCRIPT = ('mount --bind -- "$1" "$2" && mount -o remount,bind,ro,nosymfollow -- "$2" && '
+               'findmnt -n -o OPTIONS --mountpoint "$2" | tr , "\\n" | grep -qx nosymfollow && shift 2 && exec "$@"')
 NO_LINK_DIR = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{5,62}$")
 PKCS8_ED25519 = bytes.fromhex("302e020100300506032b657004220420")
@@ -228,7 +230,7 @@ def home_json(home, rel):
     raw = home_read(home, rel)
     try:
         value = json.loads(raw.decode("utf-8")) if raw is not None else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -402,7 +404,10 @@ def bridge_settings(home):
     raw = home_read(home, ".config/bipagents/bridge.toml")
     if raw is None:
         raise OSError("the place's bridge.toml is not readable")
-    return tomllib.loads(raw.decode("utf-8"))
+    try:
+        return tomllib.loads(raw.decode("utf-8"))
+    except RecursionError:
+        raise ValueError("the place's bridge.toml is nested too deep")
 
 
 def bridge(home, method, path, body=None, timeout=30):
@@ -462,24 +467,37 @@ def shifted(value, own_from, own_to, sub_from, sub_to):
     return value
 
 
-def shift_owners(paths, src, dst):
-    """Every file under `paths` given to the target's ids (rsync kept the source's numbers). Returns how many."""
+def _shift_one(dir_fd, name, src, dst):
+    found = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    uid = shifted(found.st_uid, src["uid"], dst["uid"], src.get("sub_uid"), dst.get("sub_uid"))
+    gid = shifted(found.st_gid, src["gid"], dst["gid"], src.get("sub_gid"), dst.get("sub_gid"))
+    if (uid, gid) == (found.st_uid, found.st_gid):
+        return 0
+    os.chown(name, uid, gid, dir_fd=dir_fd, follow_symlinks=False)
+    return 1
+
+
+def shift_staged(home, src, dst):
+    """The copies' owners given to the target's ids (rsync kept the source's numbers) while they are still in
+    STAGING, root's alone (review of 59ee7434b: once back in the home they are the place's, and a folder it swaps for
+    a link while root walks would lead root's chown to a neighbour's files). By descriptors only: each folder walked
+    from its parent's (os.fwalk, no link followed), each entry changed by name in it, never through a path the place
+    could rename. Returns how many were changed."""
+    folder, kept = staging(home)
     changed = 0
-    for top in paths:
-        if not os.path.lexists(top):
-            continue
-        walk = [(top, [], [])] if not os.path.isdir(top) or os.path.islink(top) else os.walk(top)
-        for here, dirs, names in walk:
-            for path in [here] + [os.path.join(here, n) for n in dirs + names]:
-                try:
-                    st = os.lstat(path)
-                except OSError:
-                    continue
-                uid = shifted(st.st_uid, src["uid"], dst["uid"], src.get("sub_uid"), dst.get("sub_uid"))
-                gid = shifted(st.st_gid, src["gid"], dst["gid"], src.get("sub_gid"), dst.get("sub_gid"))
-                if (uid, gid) != (st.st_uid, st.st_gid):
-                    os.lchown(path, uid, gid)
-                    changed += 1
+    try:
+        tops = [(kept, name) for name in sorted(os.listdir(kept))]
+        if _lexists("stage", folder) is not None:
+            tops.append((folder, "stage"))
+        for parent, name in tops:
+            changed += _shift_one(parent, name, src, dst)
+            if stat.S_ISDIR(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+                for _, dirs, files, at in os.fwalk(name, dir_fd=parent, follow_symlinks=False):
+                    for entry in dirs + files:
+                        changed += _shift_one(at, entry, src, dst)
+    finally:
+        os.close(kept)
+        os.close(folder)
     return changed
 
 
@@ -785,9 +803,8 @@ def finish(move_id, entry, asked, root=MOVES):
     dst = {"uid": entry.pw_uid, "gid": entry.pw_gid, "sub_uid": subids(entry.pw_name),
            "sub_gid": subids(entry.pw_name, "/etc/subgid")}
     roots = checked_roots(read_json(os.path.join(folder(move_id, root), "state.json")).get("roots"))
+    shifted_count = shift_staged(home, asked["source"], dst)   # still root's alone: then into the home
     put_back(home, roots, entry.pw_uid, entry.pw_gid)
-    paths = [os.path.join(home, rel) for rel in roots.values()]   # the target's own word for them, never the source's
-    shifted_count = shift_owners(paths + [os.path.join(home, MOVE_IN)], asked["source"], dst)
     out = as_user(entry, ["move-in", "finish"], timeout=900)
     deadline = time.time() + 120
     while True:
