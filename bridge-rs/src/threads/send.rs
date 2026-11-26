@@ -303,6 +303,13 @@ impl Threads {
             body.insert("kind".into(), json!("message"));
             body.insert("role".into(), json!("person"));
             body.insert("text".into(), json!(words));
+            if let Some((from, name, said)) = super::timeline::peer_of(&words) {
+                // another agent's message on its way (a new agent's launch, launch.rs): drawn as that agent's at once
+                body.insert("role".into(), json!("peer"));
+                body.insert("from".into(), json!(from));
+                body.insert("from_name".into(), json!(name));
+                body.insert("text".into(), json!(said));
+            }
             body.insert("client_id".into(), json!(client_id));
             body.insert("sending".into(), json!(true));
             if !files.is_empty() {

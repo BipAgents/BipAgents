@@ -95,8 +95,9 @@ pub fn interview_note(family: &[String]) -> String {
     format!(
         "{NOTE_OPEN}They want a new agent. Ask ONE short question per message, only what you don't know yet: {}. Then \
          propose_agent with all of it, role: what it is for in their own words, with every specific they gave (goal, \
-         dates, how often…), as they would ask it (« Me préparer à… »), not a label. Nothing is made before they tap \
-         the card.{family_facts}\n-->",
+         dates, how often…), as they would ask it (« Me préparer à… »), not a label; what it must watch or do \
+         regularly goes in first: it sets up its own watcher or routine once made, never you. Nothing is made before \
+         they tap the card.{family_facts}\n-->",
         numbered.join("; ")
     )
 }
@@ -200,9 +201,14 @@ async fn ensure_guide(state: &AppState, lang: &str) -> ApiResult<(AgentConfig, b
                 lang: Some(lang.to_string()),
                 ..Default::default()
             };
-            crate::agents_admin::create_agent(&state.config, &request, &state.http, &crate::agents_admin::default_run())
-                .await
-                .map_err(guide::creation_failed)?
+            // in a task of its own: an app that gives up waiting never leaves it half made (agent_making.rs)
+            let (shared, http) = (state.config.clone(), state.http.clone());
+            crate::agent_making::detached(async move {
+                crate::agents_admin::create_agent(&shared, &request, &http, &crate::agents_admin::default_run()).await
+            })
+            .await
+            .and_then(|made| made)
+            .map_err(guide::creation_failed)?
         }
     };
     let config = state.config();

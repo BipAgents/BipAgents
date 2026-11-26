@@ -279,6 +279,10 @@ pub struct NewAgent {
     pub role: Option<String>,
     #[serde(default)]
     pub tone: Option<String>,
+    /// The app's id of this request (`POST /v1/agents`): the same id again waits for the same creation, never makes
+    /// a second agent (agent_making.rs).
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl Validate for NewAgent {
@@ -288,6 +292,14 @@ impl Validate for NewAgent {
         check_max_len(errors, "group", self.group.as_deref().map(str::trim), crate::agent_groups::MAX_LEN);
         check_max_len(errors, "role", self.role.as_deref(), 600);
         check_max_len(errors, "tone", self.tone.as_deref(), 200);
+        if self.client_id.as_deref().is_some_and(|c| !crate::threads::send::CLIENT_ID.is_match(c)) {
+            errors.push(FieldError::new(
+                "value_error",
+                body_loc("client_id"),
+                "Value error, 8 to 64 letters, digits, - or _".to_string(),
+                json!(self.client_id),
+            ));
+        }
         if let Some(c) = &self.custom {
             nested(errors, "custom", |errors| {
                 if !c.role.is_empty() {
@@ -768,7 +780,18 @@ pub async fn create_agent(
         Some(spare) => from_spare(shared, &planned, spare, http, run).await,
         None => {
             let agent = hub_agent(&config, &planned.profile, &planned.name, &crate::py::token_urlsafe(32));
-            make_profile(shared, &planned, agent, http, run, false).await
+            let _making = Making::hold(std::slice::from_ref(&planned.profile));
+            let mut made = make_profile(shared, &planned, agent.clone(), http, run, false).await;
+            if made.as_ref().is_err_and(retryable) {
+                // once more, the profile kept: a command or the gateway's pick-up that failed once (a busy machine)
+                tracing::warn!(target: "bipbridge::agents", agent = %planned.profile, error = %made.as_ref().err().map(|e| tail(&format!("{e:#}"), 200)).unwrap_or_default(), "agent creation failed once: tried again");
+                made = make_profile(shared, &planned, agent, http, run, true).await;
+            }
+            if made.is_err() {
+                // never left half made: no profile to « link » on the home afterwards
+                discard_unfinished(&shared.get(), &planned.profile, run).await;
+            }
+            made
         }
     };
     if took {
@@ -843,8 +866,19 @@ pub async fn create_agents(
         results.push((i, planned, roleless, made));
     }
     let items: Vec<(PlannedAgent, AgentConfig)> = batch.iter().map(|(_, p, a, _)| (p.clone(), a.clone())).collect();
+    let ids: Vec<String> = items.iter().map(|(p, _)| p.profile.clone()).collect();
+    let _making = Making::hold(&ids);
     let made = make_profiles(shared, items, http, run).await;
-    results.extend(batch.into_iter().zip(made).map(|((i, planned, _, roleless), made)| (i, planned, roleless, made)));
+    for ((i, planned, agent, roleless), mut made) in batch.into_iter().zip(made) {
+        if made.as_ref().is_err_and(retryable) {
+            tracing::warn!(target: "bipbridge::agents", agent = %planned.profile, error = %made.as_ref().err().map(|e| tail(&format!("{e:#}"), 200)).unwrap_or_default(), "agent creation failed once: tried again");
+            made = make_profile(shared, &planned, agent, http, run, true).await;
+        }
+        if made.is_err() {
+            discard_unfinished(&shared.get(), &planned.profile, run).await;
+        }
+        results.push((i, planned, roleless, made));
+    }
     if took {
         crate::agent_pool::refill_soon(shared, http, run);
     }
@@ -869,6 +903,82 @@ pub async fn create_agents(
         out[i] = Some(result);
     }
     out.into_iter().map(|r| r.unwrap_or_else(|| Err(anyhow::anyhow!("not made")))).collect()
+}
+
+/// Profiles this bridge is making now (`create_agent`, `create_agents`): never listed as made on the server
+/// (`unclaimed_profiles`). 26/11, Alex's install: the home offered « Relier » for agents Bip was still making.
+static MAKING: LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+/// In a profile's folder from its `profile create` until the bridge's config lists it: a creation cut short (the
+/// bridge stopped meanwhile) leaves it, and its profile is removed at the next start (`discard_all_unfinished`),
+/// never offered to link.
+pub const MAKING_MARK: &str = ".bipagents-making";
+
+/// Profiles being made, for as long as this lives.
+struct Making(Vec<String>);
+
+impl Making {
+    fn hold(ids: &[String]) -> Self {
+        let mut making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+        making.extend(ids.iter().cloned());
+        Making(ids.to_vec())
+    }
+}
+
+impl Drop for Making {
+    fn drop(&mut self) {
+        let mut making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+        for id in &self.0 {
+            making.remove(id);
+        }
+    }
+}
+
+/// Whether the profile `id` is being made by this bridge, or was left by a creation cut short.
+pub fn being_made(config: &Config, id: &str) -> bool {
+    MAKING.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
+        || PathBuf::from(install_home(config)).join("profiles").join(id).join(MAKING_MARK).exists()
+}
+
+/// A failure worth one more try: a command that failed or ran too long, the gateway not serving it in time. Never a
+/// refusal (a wrong field, the place full) nor the disk (an OS error).
+pub fn retryable(exc: &anyhow::Error) -> bool {
+    exc.downcast_ref::<AgentError>().is_none()
+        && exc.downcast_ref::<LookupError>().is_none()
+        && !too_many(exc)
+        && !is_os_error(exc)
+}
+
+/// A creation that failed for good: what it made of the profile `id` removed (its profile, browser, tools' entry),
+/// unless the bridge's config lists it.
+pub async fn discard_unfinished(config: &Config, id: &str, run: &Run) {
+    if config.agents.contains_key(id) || !PathBuf::from(install_home(config)).join("profiles").join(id).exists() {
+        return;
+    }
+    if crate::agent_pool::discard_profile(config, id, run).await {
+        tracing::info!(target: "bipbridge::agents", agent = %id, "unfinished agent removed");
+    }
+}
+
+/// At start: the profiles a creation cut short left (their mark, no section in the bridge's config), removed.
+pub async fn discard_all_unfinished(config: SharedConfig, run: Run) {
+    let config = config.get();
+    if !config.hermes.enabled() {
+        return;
+    }
+    let root = PathBuf::from(install_home(&config)).join("profiles");
+    let left: Vec<String> = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join(MAKING_MARK).exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|id| PROFILE_ID.is_match(id) && !config.agents.contains_key(id))
+        .filter(|id| !MAKING.lock().unwrap_or_else(|e| e.into_inner()).contains(id))
+        .collect();
+    for id in left {
+        discard_unfinished(&config, &id, &run).await;
+    }
 }
 
 /// A spare for a planned agent (agent_pool.rs), out of the pool: never for the family's agent nor a project agent
@@ -909,6 +1019,9 @@ pub async fn from_spare(
     reserve_agent(shared, &agent)?;
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
     give_tools(&shared.get(), &agent, run).await?;
+    // its Hermes connected to the tools it has now, not the spare's of before until the gateway's next tick (26/11,
+    // Alex: a new agent found its watchers' tool only after he insisted; hermes_control.rs)
+    crate::hermes_control::reload_mcp(&shared.get(), &agent).await;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
     crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, ms = started.elapsed().as_millis() as u64, "spare agent taken");
@@ -958,6 +1071,8 @@ pub async fn make_spares(
             let agent = with_browser(&config, agent, run).await;
             let agent = mount_uploads(shared, &agent, run, false).await?;
             give_tools(&config, &agent, run).await?;
+            // its tools listed now, not at the gateway's next tick (hermes_control.rs): no restart for them
+            crate::hermes_control::reload_mcp(&config, &agent).await;
             Ok(agent)
         }
         .await;
@@ -997,11 +1112,22 @@ pub async fn make_profile(
     run: &Run,
     resume: bool,
 ) -> anyhow::Result<AgentConfig> {
+    let started = std::time::Instant::now();
     prepare_profile(shared, planned, &agent, run, resume).await?;
-    // The gateway picks new profiles up within 30 s; its permanent « Bot Chat » is opened as soon as it answers.
+    let prepared = started.elapsed();
+    // `profile create` has the gateway serve it at once; its permanent « Bot Chat » is opened as soon as it answers.
     wait_served(http, &agent, true).await?;
+    let served = started.elapsed();
     let agent = finish_profile(shared, planned, agent, run).await?;
+    let finished = started.elapsed();
+    // its MCP servers connected now, its entries all written (hermes_control.rs: else 60 to 120 s, or a restart)
+    crate::hermes_control::reload_mcp(&shared.get(), &agent).await;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
+    // where a creation's time goes (measured 26/11 on a real Hermes): its profile, its serving, its browser and
+    // section, its tools listed
+    tracing::info!(target: "bipbridge::agents", agent = %agent.name, prepare_ms = prepared.as_millis() as u64,
+                   served_ms = (served - prepared).as_millis() as u64, finish_ms = (finished - served).as_millis() as u64,
+                   tools_ms = (started.elapsed() - finished).as_millis() as u64, "agent profile made");
     Ok(agent)
 }
 
@@ -1040,6 +1166,8 @@ pub async fn make_profiles(
         });
     }
     let made: Vec<AgentConfig> = out.iter().filter_map(|r| r.as_ref().ok().cloned()).collect();
+    let config = shared.get();
+    futures::future::join_all(made.iter().map(|a| crate::hermes_control::reload_mcp(&config, a))).await;
     tools_loaded(shared, &made, http, run).await;
     out
 }
@@ -1060,6 +1188,7 @@ async fn prepare_profile(
     let hermes = install.bin.clone();
     let folder = PathBuf::from(install_home(&config)).join("profiles").join(&profile);
     let made = resume && folder.join("config.yaml").is_file();
+    let started = std::time::Instant::now();
     // The hub's (default profile's) model and settings, never another agent's: cloning the active profile would copy
     // its MCP servers and peer keys. Its own key, its personality.
     if !made {
@@ -1071,6 +1200,11 @@ async fn prepare_profile(
         )
         .await?;
     }
+    if !shared.get().agents.contains_key(&profile) {
+        // until its section is written (`finish_profile`): never taken for a profile of the person's own
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(folder.join(MAKING_MARK), b"")?;
+    }
     // Its key straight into the profile's `.env` (0600, atomic), where `hermes config set` would put it: never on a
     // command line, which every account of a shared server reads in /proc (audit 11/11, BV-6).
     std::fs::create_dir_all(&folder)?;
@@ -1080,21 +1214,41 @@ async fn prepare_profile(
     // A project agent (project_agent.rs) the same: shown to friends, it reaches nobody's files.
     let family =
         crate::family_agent::is_family(&config, &profile) || crate::project_agent::is_project(&config, &profile);
-    if !install.isolated || family {
-        // Same account as this bridge and no sandbox: nothing that reads the disk until the person turns it on.
+    if (!install.isolated || family) && !disk_tools_off(&folder) {
+        // Same account as this bridge and no sandbox: nothing that reads the disk until the person turns it on (a
+        // clone of a hub that has them off already has them off: no `hermes` command, 0.6 s measured 26/11)
         let mut args = strings(&[&hermes, "-p", &profile, "tools", "disable"]);
         args.extend(strings(&DISK_TOOLS));
         args.extend(strings(&["--platform", "api_server"]));
         run(args, env.clone()).await?;
     }
+    let disabled = started.elapsed();
     std::fs::create_dir_all(&folder)?;
     // The bridge's tools in its config.yaml before the gateway loads the profile: Hermes connects a profile's MCP
-    // servers when it loads it, and an entry written after that is only read at its next restart (2026-10-30 bench:
+    // servers when it loads it, and an entry written after that only at its next tick, 60 to 120 s later
+    // (`make_profile` has them reloaded at once, hermes_control.rs; 2026-10-30 bench:
     // a new agent answered its first messages with Hermes' tools only, and wrote « call me Max » into the shared
     // memory instead of using propose_profile). Given again below, once it is saved (its guide blocks, its browser).
     give_tools(&shared.get(), agent, run).await?;
     crate::profile_files::new_soul(&folder, &planned.soul)?;
+    tracing::info!(target: "bipbridge::agents", agent = %profile, commands_ms = disabled.as_millis() as u64,
+                   files_ms = (started.elapsed() - disabled).as_millis() as u64, "agent profile prepared");
     Ok(())
+}
+
+/// Whether a profile's app toolsets are an explicit list without any of `DISK_TOOLS` (what `hermes tools disable`
+/// leaves): then disabling them again changes nothing.
+fn disk_tools_off(folder: &Path) -> bool {
+    let data = crate::shares::profile_config(folder);
+    match data.get("platform_toolsets").and_then(|p| p.get(crate::tool_diet::API_PLATFORM)) {
+        Some(Value::Array(items)) => {
+            let names: Vec<&str> = items.iter().filter_map(Value::as_str).collect();
+            names.len() == items.len()
+                && !names.iter().any(|n| n.starts_with("hermes-"))
+                && !names.iter().any(|n| DISK_TOOLS.contains(n))
+        }
+        _ => false,
+    }
 }
 
 /// A served profile finished: its browser, uploads, section in the bridge's config, guide blocks and tools.
@@ -1108,17 +1262,22 @@ async fn finish_profile(
     let profile = planned.profile.clone();
     let family =
         crate::family_agent::is_family(&config, &profile) || crate::project_agent::is_project(&config, &profile);
+    let started = std::time::Instant::now();
     let mut agent = if family { agent } else { with_browser(&config, agent, run).await };
+    let browser = started.elapsed();
     agent = mount_uploads(shared, &agent, run, false).await?;
     if shared.get().agents.contains_key(&profile) {
         save_agent(shared, &agent)?;
     } else {
         reserve_agent(shared, &agent)?;
     }
+    let _ = std::fs::remove_file(PathBuf::from(install_home(&config)).join("profiles").join(&profile).join(MAKING_MARK));
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
     let before = crate::rules_live::offered_now(&config);
     give_tools(&shared.get(), &agent, run).await?;
     crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
+    tracing::info!(target: "bipbridge::agents", agent = %agent.name, browser_ms = browser.as_millis() as u64,
+                   rest_ms = (started.elapsed() - browser).as_millis() as u64, "agent profile finished");
     Ok(agent)
 }
 
@@ -1299,7 +1458,9 @@ pub async fn wait_served_within(
                     .json(&json!({"title": crate::threads::LEGACY_MAIN_TITLE}))
                     .send()
                     .await;
-                if posted.is_ok() {
+                // made, or there already (a 409 on a title it holds): never a 503 « session_db_unavailable » of a
+                // profile the gateway serves but has not reconciled yet (an answer is not a success, 26/11)
+                if posted.is_ok_and(|r| r.status().is_success() || r.status().as_u16() == 409) {
                     return Ok(());
                 }
             }
@@ -1331,6 +1492,7 @@ pub fn unclaimed_profiles(config: &Config) -> Vec<Dict> {
         if !folder.is_dir()
             || !PROFILE_ID.is_match(&name)
             || crate::agent_pool::is_spare_id(&name) // made ahead by the bridge (agent_pool.rs), never shown
+            || being_made(config, &name) // a creation of the bridge's, under way or cut short
             || config.agents.contains_key(&name)
             || root.join(".deleted").join(&name).exists()
             || !["config.yaml", "SOUL.md", "profile.yaml"].iter().any(|m| folder.join(m).is_file())
@@ -1664,7 +1826,14 @@ pub fn save_agent(config: &SharedConfig, agent: &AgentConfig) -> anyhow::Result<
     let renamed = config.get().agents.get(&agent.name).is_some_and(|a| a.display_name != agent.display_name);
     config.put_agent(agent.clone());
     if renamed {
-        crate::guide::refresh(&config.get()); // the guide's list of agents
+        let config = config.get();
+        crate::guide::refresh(&config); // the guide's list of agents
+        // the other agents' contacts name it as it is now (26/11: a name of before stayed there)
+        let links = crate::peers::Links::new(&crate::py::join(&config.data_dir(), "peers.json"));
+        let households = crate::households::Households::new(&crate::households::path_for(&config));
+        if let Err(exc) = crate::peers::refresh(&config, &links, Some(&households)) {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "contacts not renamed");
+        }
     }
     Ok(())
 }
@@ -2674,8 +2843,25 @@ async fn new_agent(State(state): State<AppState>, Json(body): Json<NewAgent>) ->
     if !state.config().hermes.enabled() {
         return Err(HttpError::new(409, "this install does not manage its agents (set up by hand)"));
     }
+    // in a task of its own (agent_making.rs): never cut by the app giving up; past its wait « still being made »
+    let key = format!("form:{}", body.client_id.clone().unwrap_or_else(|| crate::py::token_hex(8)));
+    let name = body.name.trim().to_string();
+    let wait = crate::agent_making::answer_wait(&state.config());
+    let made = crate::agent_making::run_or_wait(&key, wait, move || async move {
+        form_agent(&state, &body).await
+    })
+    .await;
+    match made {
+        Some(Ok((status, answer))) => Ok(web::json_response(status, &answer)),
+        Some(Err(err)) => Err(err),
+        None => Ok(web::json_response(202, &json!({"creating": true, "name": name}))),
+    }
+}
+
+/// The form's agent, made (`new_agent`).
+async fn form_agent(state: &AppState, body: &NewAgent) -> crate::agent_making::Made {
     let _guard = LOCK.lock().await;
-    let agent = match create_agent(&state.config, &body, &state.http, &default_run()).await {
+    let agent = match create_agent(&state.config, body, &state.http, &default_run()).await {
         Ok(agent) => agent,
         Err(exc) => {
             if let Some(e) = exc.downcast_ref::<AgentError>() {
@@ -2688,13 +2874,15 @@ async fn new_agent(State(state): State<AppState>, Json(body): Json<NewAgent>) ->
             return Err(HttpError::new(502, "the agent could not be created: try again in a moment"));
         }
     };
+    // made on the person's request: on the home of each of their phones at once, this one's answer lost or not
+    crate::guide::note_requested(&state.config(), &agent.name);
     // its first conversation opens with its welcome (welcome.rs): a kind's own, or the one of an agent with its role
     // (the person's words, a kind's agent's too: bug 15/11)
     let kind = if body.custom.is_some() { "custom" } else { body.kind.as_deref().unwrap_or("custom") };
     let lang = body.lang.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| crate::notebook::place_language(&state.config()).unwrap_or_else(|| "fr".into()));
     let role = body.custom.as_ref().map(|c| c.role.as_str()).or(body.role.as_deref());
     crate::welcome::wait_for_role(&state.config(), &agent, kind, &lang, role);
-    Ok(web::json_response(201, &created(&state.config(), &agent)))
+    Ok((201, created(&state.config(), &agent)))
 }
 
 /// A profile created on the server (listed under `unclaimed` by GET /v1/agents), served to the app.

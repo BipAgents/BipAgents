@@ -106,6 +106,7 @@ pub mod templates_catalogue;
 pub mod templates_scrub;
 pub mod agents_admin;
 /// Spare agents made ahead, so a new agent is files only (no Python counterpart).
+pub mod agent_making;
 pub mod agent_pool;
 /// How each agent answers: short, balanced, detailed or the person's own style (no Python counterpart).
 pub mod answer_style;
@@ -192,6 +193,7 @@ pub mod favicons;
 pub mod agent_create;
 pub mod guide;
 pub mod guide_team;
+pub mod launch;
 pub mod welcome;
 pub mod background_turn;
 pub mod handback;
@@ -313,6 +315,7 @@ pub mod secrets;
 /// coffre » (16/11), off unless the place is enrolled (`bipbridge vault-keys enable`).
 pub mod sealed_keys;
 /// The agents' Hermes copies of the vault in memory, on a place enrolled for sealed keys: lot 2 of « Clé du coffre ».
+pub mod hermes_control;
 pub mod hermes_copies;
 
 pub use app::AppState;

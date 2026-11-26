@@ -473,7 +473,7 @@ fn calls_of(row: &Row) -> Vec<(Option<String>, String, String)> {
 /// A peer's message in the agent's Bot Chat (« Message from 🤖 Vie (@vie): … »): (its sender's id, the name it signed
 /// with without Hermes' emoji badge, its words alone). The apps draw it from these fields; they never read the
 /// « Message from » line (iOS drew it twice).
-fn peer_of(text: &str) -> Option<(String, String, String)> {
+pub(crate) fn peer_of(text: &str) -> Option<(String, String, String)> {
     static PEER: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*Message from (.+?) \(@([\w.-]+)\):\s*([\s\S]*)$").expect("valid regex"));
     let caps = PEER.captures(text)?;

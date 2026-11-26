@@ -395,6 +395,8 @@ impl AppState {
             self.spawn(crate::shared_memory::run_forever(self.clone()));
             self.spawn(crate::shares::mirror_forever(self.config.clone()));
             self.spawn(crate::agent_tools::register_all(self.config.clone(), agents_admin::default_run()));
+            // a creation cut short by the bridge's stop: its half-made profile removed, never offered to link
+            self.spawn(agents_admin::discard_all_unfinished(self.config.clone(), agents_admin::default_run()));
             // an agent's thread that an unpatched Hermes v0.22.5 moved aside, put back (welcome.rs)
             self.spawn(crate::welcome::restore_moved_aside_all(self.clone()));
             let shared = self.config.clone();

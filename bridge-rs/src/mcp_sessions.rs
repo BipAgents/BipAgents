@@ -150,6 +150,9 @@ impl Sessions {
     /// Session `id` listed `fingerprint`.
     pub fn listed(&self, id: &str, fingerprint: &str) {
         if let Some(session) = lock(&self.sessions).get_mut(id) {
+            if session.listed.is_none() {
+                tracing::info!(target: "bipbridge::agents", agent = %session.agent, "tools listed");
+            }
             session.listed = Some(fingerprint.to_string());
             session.listed_at = crate::py::time_time();
             session.differs = None;

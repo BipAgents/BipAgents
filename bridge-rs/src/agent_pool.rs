@@ -225,31 +225,39 @@ pub fn abandoned(config: &Config) -> Vec<String> {
 pub async fn discard_abandoned(config: &Config, run: &Run) -> Vec<String> {
     let ids = abandoned(config);
     for id in &ids {
-        let mut env = std::collections::BTreeMap::new();
-        if !config.hermes.home.is_empty() {
-            env.insert("HERMES_HOME".to_string(), config.hermes.home.clone());
+        if discard_profile(config, id, run).await {
+            tracing::info!(agent = %id, "abandoned spare agent removed");
         }
-        let command = vec![config.hermes.bin.clone(), "profile".into(), "delete".into(), id.clone(), "--yes".into()];
-        if let Err(exc) = run(command, env).await {
-            // a folder cut short before Hermes made it a profile: ours alone (a spare id is never the person's)
-            let folder = profile_folder(config, id);
-            if folder.exists() {
-                if let Err(removed) = std::fs::remove_dir_all(&folder) {
-                    tracing::warn!(agent = %id, error = %format!("{exc:#}; {removed}"), "abandoned spare agent not removed");
-                    continue;
-                }
-            }
-        }
-        if crate::browsers::folder(config, id).exists() {
-            if let Err(exc) = crate::browsers::remove(config, id, run).await {
-                tracing::warn!(agent = %id, error = %format!("{exc:#}"), "abandoned spare agent's browser not removed");
-            }
-        }
-        crate::sandbox::forget(config, id, run).await;
-        crate::agent_tools::forget(config, id);
-        tracing::info!(agent = %id, "abandoned spare agent removed");
     }
     ids
+}
+
+/// A profile no agent of this bridge has removed as a deleted agent is (agents_admin.rs `delete_agent`): its profile,
+/// browser, volumes, tools' token (an abandoned spare, a creation that failed for good). Whether its profile went.
+pub async fn discard_profile(config: &Config, id: &str, run: &Run) -> bool {
+    let mut env = std::collections::BTreeMap::new();
+    if !config.hermes.home.is_empty() {
+        env.insert("HERMES_HOME".to_string(), config.hermes.home.clone());
+    }
+    let command = vec![config.hermes.bin.clone(), "profile".into(), "delete".into(), id.to_string(), "--yes".into()];
+    if let Err(exc) = run(command, env).await {
+        // a folder cut short before Hermes made it a profile: ours alone (never a profile the person made)
+        let folder = profile_folder(config, id);
+        if folder.exists() {
+            if let Err(removed) = std::fs::remove_dir_all(&folder) {
+                tracing::warn!(agent = %id, error = %format!("{exc:#}; {removed}"), "agent's profile not removed");
+                return false;
+            }
+        }
+    }
+    if crate::browsers::folder(config, id).exists() {
+        if let Err(exc) = crate::browsers::remove(config, id, run).await {
+            tracing::warn!(agent = %id, error = %format!("{exc:#}"), "agent's browser not removed");
+        }
+    }
+    crate::sandbox::forget(config, id, run).await;
+    crate::agent_tools::forget(config, id);
+    true
 }
 
 /// Spares made ready, added to the pool.
