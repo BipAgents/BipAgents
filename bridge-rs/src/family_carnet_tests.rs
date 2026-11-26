@@ -236,3 +236,47 @@ fn oublie_ca_and_the_familys_writes_never_lose_one_another() {
     assert_eq!(texts.iter().filter(|t| t.starts_with("lait ")).count(), 100, "a member's write lost: {texts:?}");
     assert!(!texts.iter().any(|t| t.contains("Marc")), "{texts:?}");
 }
+
+/// The family Carnet's screens have the person's structure (Alex 26/11): a category lists its pages and lists, each
+/// with its count, never its items one by one; the sommaire counts them.
+#[test]
+fn a_family_category_lists_its_pages_and_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::notebook::tests_config(dir.path());
+    let mut data = demo("fr");
+    file_all(&mut data);
+    let file = crate::family_agent::notebook_file(&config);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, Value::Object(data.clone()).to_string()).unwrap();
+    let today = Local::now().date_naive();
+    let fr = vec!["fr".to_string()];
+    let screen = |id: &str| category_at(&config, id, &fr, today).unwrap();
+    let rows = |v: &Value| -> Vec<(String, String, u64)> {
+        v["pages"].as_array().unwrap().iter().map(|p| (s(&p["title"]), s(&p["kind"]), p["notes"].as_u64().unwrap())).collect()
+    };
+    // Courses: the list once, with the things still to buy (« Café » is bought)
+    let shopping = screen("shopping");
+    let list = rows(&shopping);
+    assert_eq!(list, [("Courses".to_string(), "list".to_string(), 4)]);
+    assert_eq!(shopping["pages"][0]["open"], json!({"list": "courses"}));
+    assert_eq!(shopping["count"], json!(1));
+    // the 1.1 apps' latest items stay
+    assert!(!shopping["recent"].as_array().unwrap().is_empty());
+    // Dates: the lists and pages with a day to come, the soonest first
+    let dates = screen("dates");
+    let next: Vec<String> = dates["pages"].as_array().unwrap().iter().map(|p| s(&p["next"]["date"])).collect();
+    assert!(!next.is_empty() && next.windows(2).all(|w| w[0] <= w[1]), "{next:?}");
+    assert!(next.iter().all(|d| d.as_str() >= today.to_string().as_str()));
+    // the sommaire counts these rows
+    let summary = summary_at(&config, &fr, today, &[]);
+    for line in summary["categories"].as_array().unwrap() {
+        let id = s(&line["id"]);
+        assert_eq!(line["count"], json!(screen(&id)["pages"].as_array().unwrap().len()), "{id}");
+    }
+    // nothing listed but pages and lists
+    for id in c::FAMILY {
+        if let Ok(v) = category_at(&config, id, &fr, today) {
+            assert!(v["pages"].as_array().unwrap().iter().all(|p| p["kind"] == "page" || p["kind"] == "list"), "{id}");
+        }
+    }
+}

@@ -843,11 +843,34 @@ static DUTCH_YEARLY: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"verjaardag|jarig|trouwdag|huwelijksdag").expect("valid regex"));
 
 /// « 1/2 tasse », « 3/4 » : a number over another of one digit each, without a year and without a word that says a
-/// day before it, is not a date here; « 14/11 », « 14/2 », « le 3/11 », « le 3/4 » are (review 2 of S1, R11).
+/// day before it, is not a date here; « 14/11 », « 14/2 », « le 3/11 », « le 3/4 » are (review 2 of S1, R11). Nor,
+/// without such a word or a year (Alex 26/11: a line of tastes in Dates), a mark (« 8/10 », « 15/20 »), a size by age
+/// (« 10/12 ans », « 6/8 years ») or « 24/7 ».
 static FRACTION: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(\b(?:le|du|au|on|the|am|vom|bis|el|del|op|tot|until|jusqu au|avant le|apres le)\s+)?\b(\d{1,2})/(\d{1,2})\b(/\d{4})?")
-        .expect("valid regex")
+    regex::Regex::new(concat!(
+        r"(\b(?:le|du|au|on|the|am|vom|bis|el|del|op|tot|until|jusqu au|avant le|apres le)\s+)?\b(\d{1,2})/(\d{1,2})\b(/\d{4})?",
+        r"(\s*(?:ans|years?|yrs?|jahre|jahren|anos|ano|jaar|mois|months?|monate|monaten|meses|maanden)\b)?"
+    ))
+    .expect("valid regex")
 });
+
+/// A text without what only looks like a day (`FRACTION`): what `date_in` reads a note's date in.
+pub fn without_fractions(plain: &str) -> String {
+    FRACTION
+        .replace_all(plain, |c: &regex::Captures| {
+            let (n, m): (u32, u32) = (c[2].parse().unwrap_or(0), c[3].parse().unwrap_or(0));
+            let said = c.get(1).is_some() || c.get(4).is_some();
+            let fraction = c[2].len() == 1 && c[3].len() == 1;
+            let mark = (m == 10 || m == 20) && n <= m;
+            let age = c.get(5).is_some();
+            if !said && (fraction || mark || age || (n, m) == (24, 7)) {
+                " ".to_string()
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned()
+}
 
 /// The date a note's text carries. Yearly when the text says so (a birthday, an anniversary, a wedding: mod.rs
 /// `YEARLY`, or its label); a day with its year as written; a day without a year (« devis reçu le 3 octobre ») is
@@ -858,15 +881,7 @@ pub fn when_of(text: &str, noted: Option<NaiveDate>, today: NaiveDate) -> Option
     for (nl, en) in DUTCH_MONTHS.iter() {
         plain = nl.replace_all(&plain, *en).into_owned();
     }
-    plain = FRACTION
-        .replace_all(&plain, |c: &regex::Captures| {
-            if c.get(1).is_some() || c.get(4).is_some() || c[2].len() == 2 || c[3].len() == 2 {
-                c[0].to_string()
-            } else {
-                " ".to_string()
-            }
-        })
-        .into_owned();
+    plain = without_fractions(&plain);
     let (month, day, year) = super::date_in(&plain)?;
     let birthday = lexicon::split_label(text).and_then(|(l, _)| lexicon::label_of(&l)).is_some_and(|l| l.id == "birthday");
     if super::YEARLY.is_match(&plain) || DUTCH_YEARLY.is_match(&plain) || birthday {

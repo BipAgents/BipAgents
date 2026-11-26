@@ -30,7 +30,9 @@
       "open": {
         "path": "Domaines/Famille.md"
       },
-      "fold": "famille ta soeur claire durand son mari marc durand et leurs enfants"
+      "fold": "famille ta soeur claire durand son mari marc durand et leurs enfants",
+      "page_kind": "area",
+      "group": "family"
     },
     {
       "id": "line:p000000000d:000000000f",
@@ -102,7 +104,8 @@
       "open": {
         "path": "Domaines/Finances.md"
       },
-      "fold": "finances le budget du mois et les contrats a renouveler"
+      "fold": "finances le budget du mois et les contrats a renouveler",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000010:0000000032",
@@ -157,7 +160,8 @@
       "open": {
         "path": "Domaines/Maison.md"
       },
-      "fold": "maison l appartement les travaux de la cuisine et les voisins"
+      "fold": "maison l appartement les travaux de la cuisine et les voisins",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000011:0000000034",
@@ -271,7 +275,8 @@
       "open": {
         "path": "Domaines/Travail.md"
       },
-      "fold": "travail ton poste chez atelier lumiere et ton entretien annuel"
+      "fold": "travail ton poste chez atelier lumiere et ton entretien annuel",
+      "page_kind": "area"
     },
     {
       "id": "line:p0000000012:0000000039",
@@ -328,7 +333,11 @@
       "fold": "claire durand claire ta soeur infirmiere a nantes mariee a marc",
       "aliases": [
         "Claire"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Sœur",
+      "group": "family",
+      "close": true
     },
     {
       "id": "line:p0000000013:000000003b",
@@ -446,7 +455,11 @@
       "fold": "lucas bernard lucas ton ami de la course a pied le dimanche matin",
       "aliases": [
         "Lucas"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Ami",
+      "group": "friends",
+      "close": true
     },
     {
       "id": "line:p0000000014:0000000040",
@@ -543,7 +556,11 @@
       "fold": "marc durand marc le mari de claire ta soeur et le papa d ines et tom menuisier il prepare le devis de ta cuisine allergique aux noix",
       "aliases": [
         "Marc"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Beau-frère",
+      "group": "family",
+      "close": true
     },
     {
       "id": "line:p0000000015:0000000044",
@@ -815,7 +832,10 @@
       "fold": "sophie laurent sophie ta voisine du 3e elle a un double de tes cles",
       "aliases": [
         "Sophie"
-      ]
+      ],
+      "page_kind": "person",
+      "link": "Voisine",
+      "group": "others"
     },
     {
       "id": "line:p0000000016:0000000051",
@@ -887,7 +907,8 @@
       "open": {
         "path": "Sujets/Anniversaire d’Inès.md"
       },
-      "fold": "anniversaire d ines ines fete ses 8 ans samedi 4 decembre chez claire theme les licornes"
+      "fold": "anniversaire d ines ines fete ses 8 ans samedi 4 decembre chez claire theme les licornes",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000017:0000000054",
@@ -959,7 +980,8 @@
       "open": {
         "path": "Sujets/Changer de voiture.md"
       },
-      "fold": "changer de voiture une hybride d occasion 15 000 au maximum"
+      "fold": "changer de voiture une hybride d occasion 15 000 au maximum",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000018:0000000057",
@@ -1015,7 +1037,8 @@
       "open": {
         "path": "Sujets/Impôts 2026.md"
       },
-      "fold": "impots 2026 declaration en ligne a verifier avant la fin du mois"
+      "fold": "impots 2026 declaration en ligne a verifier avant la fin du mois",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000003:000000000b",
@@ -1069,7 +1092,8 @@
       "open": {
         "path": "Sujets/Jardin.md"
       },
-      "fold": "jardin"
+      "fold": "jardin",
+      "page_kind": "subject"
     },
     {
       "id": "page:p0000000001",
@@ -1084,7 +1108,8 @@
       "open": {
         "path": "Sujets/Rénovation cuisine.md"
       },
-      "fold": "renovation cuisine devis de marc recu 8 900 il reste a choisir le plan de travail et a fixer la date des travaux"
+      "fold": "renovation cuisine devis de marc recu 8 900 il reste a choisir le plan de travail et a fixer la date des travaux",
+      "page_kind": "subject"
     },
     {
       "id": "line:p0000000001:0000000059",
@@ -1312,7 +1337,8 @@
       "open": {
         "path": "Sujets/Voyage Japon.md"
       },
-      "fold": "voyage japon avril 12 jours tokyo kyoto osaka les vols sont a reserver bientot"
+      "fold": "voyage japon avril 12 jours tokyo kyoto osaka les vols sont a reserver bientot",
+      "page_kind": "subject"
     },
     {
       "id": "line:p000000001a:0000000064",
@@ -1405,7 +1431,8 @@
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md"
       },
-      "fold": "week end a lisbonne quatre jours a lisbonne avec claire du 4 decembre au 7 decembre vols et hotel reserves"
+      "fold": "week end a lisbonne quatre jours a lisbonne avec claire du 4 decembre au 7 decembre vols et hotel reserves",
+      "page_kind": "trip"
     },
     {
       "id": "line:p000000001b:0000000068",
@@ -1689,7 +1716,8 @@
       "open": {
         "path": "Toi.md"
       },
-      "fold": "toi tu vis a nantes tu cours le dimanche et tu prepares un voyage au japon"
+      "fold": "toi tu vis a nantes tu cours le dimanche et tu prepares un voyage au japon",
+      "page_kind": "self"
     },
     {
       "id": "line:p000000001c:0000000076",

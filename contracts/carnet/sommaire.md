@@ -50,7 +50,7 @@ en, de, es, nl for Alex to confirm (visible text).
   two years ahead, or a yearly one: a line with a date in its text, a task's due date, a record's next date (warranty
   end, renewal, end, expiry, booking day — never a purchase's day). Yearly only when the text says so (a birthday, an
   anniversary, a wedding); a day without a year that says nothing yearly (« devis reçu le 3 octobre ») is the day
-  nearest to when it was noted; « 1/2 » is not a date, « 14/11 » is. Pages themselves are not in `dates`. **The
+  nearest to when it was noted; « 1/2 » is not a date, « 14/11 » is; nor, without a word saying a day (« le ») or a year, a mark (« 8/10 », « 15/20 »), a size by age (« 10/12 ans ») or « 24/7 » (26/11: a line of tastes was in Dates). Pages themselves are not in `dates`. **The
   index never depends on the day** (so its version and ETag change only with the Carnet): no `dates` among its
   categories; each item carries `date` (a day) or `yearly` (« MM-DD »), and the phone adds `dates` (`yearly` always,
   a `date` within `dated`: 90 days back, 730 ahead). The bridge's live answers (search, summary, a category's page,
@@ -151,7 +151,7 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S3 | `GET /v1/notebook/search?q=&lang=&category=&space=&online=&groups=&sommaire=` | `groups=1`: today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (`online=1` only: the connected drives the person allowed, online only; else null); `sommaire=1`: only `groups`, `counts`, `online` (today's keys not made); neither: today's answer only (an installed 1.0 app's search never makes the copy); `category`, `space` narrow it; `private=1`: Santé's, behind the lock, read and kept nowhere |
 | S3 | `PUT /v1/drives/{service}/carnet {carnet}` | « Chercher aussi ici depuis le Carnet » (Alex's decision 4: off by default, a switch per connected drive): the drive as listed, `carnet` added (`GET /v1/drives` lists it on each drive) |
 | S4 | `GET /v1/notebook/summary?space=&lang=` | the sommaire ready to show (`Summary`, §3b): kept searches with their count, total, categories with count and grey words, « Toi » first in Personnes, the moment's card, Santé locked; `spaces`, the selector (§3c); 400 `space_unknown` |
-| S4 | `GET /v1/notebook/category/{id}?space=&filter=&lang=` | a category's page (`CategoryPage`, §3b): sub-filters with counts, « Cherché ici » (3), the latest (20, of `filter` when given); `category/health?private=1`: Santé's, behind the lock, read now and kept nowhere (no sub-filter, no search kept); 404 `category_unknown`, 400 `filter_unknown`, 403 `health_locked` |
+| S4 | `GET /v1/notebook/category/{id}?space=&filter=&lang=` | a category's page (`CategoryPage`, §3b): its pages ready to show (`pages`, `groups`: Alex 26/11), Papiers' sub-filters with counts, « Cherché ici » (3), the latest notes for the 1.1 apps (20, of `filter` when given); `category/health?private=1`: Santé's, behind the lock, read now and kept nowhere (no sub-filter, no search kept); 404 `category_unknown`, 400 `filter_unknown`, 403 `health_locked` |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space, `state.json`), their count from the bridge; POST `{q, title?, space?, category?}` or `{id, title}`, DELETE `?id=` → the space's `KeptList`; 409 `kept_full`, 404 `kept_unknown`, 400 `kept_empty`, `number_refused`, `category_not_given` |
 | S4 | `POST /v1/notebook/searched` | `{q, category?, space?, private?}`: a search made (3 a category for « Cherché ici » and the grey words, `searched.json`, never shown to the agents, never in the copy; with Santé open — `category: health` or `private: true` — never kept) → 204; `DELETE ?q=&space=&category=`: the one of these words, or all → 204 |
 | S5 | `GET/PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off at first; also the home's `settings.separate_spaces`; 422 not a bool) |
@@ -159,8 +159,9 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S5 | `?space=all\|perso\|pro` | on summary (`spaces`: the selector), category, kept, searched (S4), search (400 `space_unknown` now; ignored with `private=1`) and index (one space's copy, its own ETag); `POST /v1/notebook/page` `space?` (the app's open tab) |
 | S6 | `/v1/family-agent/notebook/{summary,category/{id},search,index,kept,searched,categorize,categorize/undo}` | the family Carnet's (§6), relayed by the members' bridges as today (`FamilySummary`, `FamilyCategoryPage`, `FamilySearch`, `FamilyIndex`, `KeptList`, `FamilyCategorized`, `FamilyUndone`) |
 
-**Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them. A
-note with two categories counts in each of them, `total` and `counts.all` once (change 5 of 22/11; §1).
+**Counts.** A search's `counts.<id>` counts its items (pages, lines, tasks, records, documents); `counts.all` all of
+them. A note with two categories counts in each of them, `counts.all` once (change 5 of 22/11; §1). The sommaire's
+category `count` counts the pages its screen lists (§3b « Pages », Alex 26/11); its `total` the notes.
 
 **Items.** Everything the phone lists (index entries, search groups, a category's recent ones) is an `Item`: `id`
 (stable, never a text, a path or a file's name: `page:<page key>` — its `id`, else `f` + a hash of its path —,
@@ -199,16 +200,32 @@ cases are written on them.
 
 `bridge-rs/src/notebook/summary.rs`; the rules in full: `sommaire.json` `summary`.
 
-- **Counted on the phone's copy** (the index's items, the search's rule): the same notes and counts as the search's
-  chips, Santé never there. A category's line is shown when it has a note; Santé's always (but in `pro`), locked:
-  `count: null`, no word, no `first`.
-- **Grey words** (`hint`): the category's 3 latest searches made, else its 3 latest titles. **`first`**: « Toi » in
-  Personnes, else the latest note. **Latest**: the newest noted first; in Dates, what is to come first.
+- **Counted on the phone's copy** (the index's items), Santé never there. A category's line is shown when its screen
+  lists a page; Santé's always (but in `pro`), locked: `count: null`, no word, no `first`.
+- **Pages** (Alex 26/11, « Personnes > liste de personnes > Sujets… Maison > liste des sujets > liste des notes »;
+  `bridge-rs/src/notebook/structure.rs`): a category's screen lists its **pages** (`CategoryPage.pages`,
+  `CategoryEntry`), each with its number of notes; a tap opens the page (its sections, their notes). A page is in a
+  category by its own `categories` (§1), never by one of its lines; a records' page (Achats, Abonnements…) by its
+  records' (`kind: records`, `notes` its records there); a line, a task or a document is never a row (a file is
+  never shown by its raw name: « photo.jpg » in Personnes, 26/11). Personnes: « Toi » first (no group), then the
+  people by `group` — `family`, `friends`, `work`, `others`, from the head of their « Qui c'est » (else « En bref »):
+  « Ton beau-frère, … » → `link` « Beau-frère » —, then the other pages filed there (`subjects`; a group page « Amis »
+  or the family's area under its group). Elsewhere: by name, archived last; Sujets then Personnes when both. Dates:
+  the pages with a date to come (a yearly one's next, a day within `dated.after`), the soonest first, `next` (the day,
+  what it is: its line's label) on each. `groups`: the headers in order, only with two groups or more (their names:
+  `categories.groups_proposed`, for Alex). The copy carries what the phones need to make the same list without a
+  network: a page's `page_kind`, a person's `link` and `group`, `close`, `icon` (`IndexItem`). A bridge from before
+  26/11 sends no `pages`: the app makes them from its copy (the same rule; the examples:
+  `fake-bridge/<lang>/pages.json`, made on `index.json`).
+- **Grey words** (`hint`): the category's 3 latest searches made, else the titles of its 3 pages last written in (in
+  Dates, the soonest). **`first`**: the first page its screen lists (« Toi » in Personnes). **Latest** (`recent`, the
+  1.1 apps'): the newest noted first; in Dates, what is to come first.
 - **The moment's card** (`card`): one at a time, the first that waits of `sorted`, `ask`, `follow` (today's, still
   open), `misplaced`, `review`, each as its own route shows it; null in Pro.
-- **Sub-filters**: Papiers by the records' type and the notes' words (invoice, contract, warranty in 5 languages),
-  Argent (an open task or a day to come; subscriptions; purchases), Dates (to Sunday, to the month's end, later),
-  Personnes (« Toi » and the « proches », the others). Their names are proposed (`titles_proposed`, for Alex).
+- **Sub-filters**: Papiers only, counted in pages: Factures (a page's words), Contrats (the contracts' records page,
+  or a page's words), Garanties (the purchases' records page, or a page's words); `filter` narrows `pages` (and
+  `recent`). Argent's, Dates' and Personnes' went with the lines (Alex 26/11: they meant nothing for a list of
+  pages). Their names are proposed (`titles_proposed`, for Alex).
 - **Kept searches**: the words as typed (a date phrase is counted again each day), 6 a space, never a number or a
   reference, never Santé; in the phone's copy (`kept`, every space's), the copy's version moving with them.
 - **Searches made**: `searched.json`, 3 a category and a space; without a category, under the best result's; never
@@ -321,7 +338,7 @@ app shows the family sommaire only when it is listed, and falls back to today's 
 | Route (`/v1/family-agent/notebook/…`) | What |
 |---|---|
 | `GET summary?lang=` | `FamilySummary`: the family's categories in `categories.order.family` (one without a note left out, never Santé), each with its count, grey words (the person's 3 latest searches there, else the 3 latest notes: an item's line, a page's title) and `first`; the household's kept searches with their count; « Avec Marie, Léa et Tom » (`with`: the household's others); `version` and `epoch` of the copy |
-| `GET category/{id}?lang=` | `FamilyCategoryPage`: the count, the person's « Cherché ici » (`searched`), the 20 latest (Dates: the soonest to come first); 404 `category_unknown` for an id that is not the family's (`money`, `trips`, `work`, `health`) |
+| `GET category/{id}?lang=` | `FamilyCategoryPage`: its pages and lists (`pages`, `FamilyCategoryEntry`, Alex 26/11: the person's structure; a list of things by its title, a list of tasks or of dates under each category its items have, `notes` its items there not done; Dates: those with a day to come, the soonest first) and their count, the person's « Cherché ici » (`searched`), the 20 latest notes (Dates: the soonest to come first); 404 `category_unknown` for an id that is not the family's (`money`, `trips`, `work`, `health`) |
 | `GET search?q=&category=&lang=` | `FamilySearch`: by category in the order of their best result, the two best each, the chips' `counts` (the rule of `search-parity.json`) |
 | `GET index?since=&epoch=&lang=` | `FamilyIndex`: the phone's copy, as `/v1/notebook/index` (ETag `"<epoch>-v<version>-<languages>"`, 304, gzip, `since`/`epoch` diffs); `left: true` (epoch `left`, version 0, nothing in it, ETag `"left"`): this person has no family Carnet (any more) — the phone **erases its copy, its file too**. 502 (the holder does not answer): the phone keeps its copy |
 | `GET/POST/DELETE kept` | the household's kept searches, **common** (6, `family-notebook.json` `kept`): POST `{q, title?, category?}` or `{id, title}`, DELETE `?id=` → `KeptList` (`space` null); S4's codes |

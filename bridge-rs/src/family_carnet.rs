@@ -731,13 +731,70 @@ fn item_view(f: &Finder, at: usize, today: NaiveDate) -> Value {
     v
 }
 
-/// What a note shows in the grey words: an item its line, a page its title.
-fn shown_text(e: &Entry) -> &str {
-    if e.kind == "page" {
-        &e.title
-    } else {
-        &e.line
+/// A row of a family category's screen (Alex 26/11, the same structure as the person's own: structure.rs): a page,
+/// or a list with its items there (a list of tasks or of dates under each category its items have; done ones left).
+struct Row {
+    id: String,
+    title: String,
+    open: Value,
+    page: bool,
+    notes: usize,
+    /// Its newest write (the grey words).
+    latest: f64,
+    next: Option<(NaiveDate, usize)>,
+}
+
+/// The pages and lists of family category `id` on `today`: by title (Dates: those with a date to come, the soonest
+/// first).
+fn rows_in(f: &Finder, when: &[f64], id: &str, today: NaiveDate) -> Vec<Row> {
+    let until = today + chrono::Duration::days(crate::notebook::structure::AHEAD);
+    let mut rows: Vec<Row> = Vec::new();
+    let mut by: HashMap<String, usize> = HashMap::new();
+    for at in 0..f.items.len() {
+        let e = &f.items[at];
+        let stored: Vec<String> = if e.categories.is_empty() { vec!["other".into()] } else { e.categories.clone() };
+        let day = f.day(at, today).filter(|d| *d >= today && *d <= until && !e.done);
+        let here = if id == "dates" { day.is_some() } else { stored.iter().any(|x| x == id) };
+        let page = e.kind == "page";
+        if !here || (!page && e.done) {
+            continue;
+        }
+        let (key, open) = if page {
+            (e.id.clone(), e.open.clone())
+        } else {
+            let list = e.open.get("list").and_then(Value::as_str).unwrap_or_default().to_string();
+            (format!("fam:list:{list}"), json!({"list": list}))
+        };
+        let row = *by.entry(key.clone()).or_insert_with(|| {
+            rows.push(Row { id: key, title: e.title.clone(), open, page, notes: 0, latest: 0.0, next: None });
+            rows.len() - 1
+        });
+        let r = &mut rows[row];
+        r.notes += if page { e.line.lines().filter(|l| !l.trim().is_empty()).count() } else { 1 };
+        r.latest = r.latest.max(when.get(at).copied().unwrap_or(0.0));
+        if let Some(d) = day {
+            if r.next.is_none_or(|(n, _)| d < n) {
+                r.next = Some((d, at));
+            }
+        }
     }
+    if id == "dates" {
+        rows.sort_by(|a, b| a.next.map(|n| n.0).cmp(&b.next.map(|n| n.0)).then_with(|| fold(&a.title).cmp(&fold(&b.title))));
+    } else {
+        rows.sort_by_key(|r| fold(&r.title));
+    }
+    rows
+}
+
+/// A row as the apps show it (`FamilyCategoryEntry`).
+fn row_view(f: &Finder, r: &Row, today: NaiveDate) -> Value {
+    let mut v = json!({"id": r.id, "kind": if r.page { "page" } else { "list" }, "title": r.title, "notes": r.notes,
+                       "open": r.open});
+    if let Some((day, at)) = r.next {
+        v["next"] = json!({"date": day.format("%Y-%m-%d").to_string(), "in_days": (day - today).num_days(),
+                           "what": f.items[at].line.lines().next().unwrap_or_default(), "yearly": f.items[at].yearly.is_some()});
+    }
+    v
 }
 
 /// The family's sommaire (`FamilySummary`): its texts in the app's language (`langs`' last), `with` the others.
@@ -748,20 +805,27 @@ pub fn summary_at(config: &Config, langs: &[String], today: NaiveDate, others: &
     let members = by_category(&f, today);
     let mut lines = Vec::new();
     for id in c::FAMILY {
-        let Some(ats) = members.get(id).filter(|a| !a.is_empty()) else { continue };
-        let ordered = latest(&f, &when, ats, id, today);
+        // what its screen lists (Alex 26/11): its pages and lists, counted as such
+        let rows = rows_in(&f, &when, id, today);
+        if rows.is_empty() {
+            continue;
+        }
+        let mut newest: Vec<&Row> = rows.iter().collect();
+        if id != "dates" {
+            newest.sort_by(|a, b| b.latest.partial_cmp(&a.latest).unwrap_or(std::cmp::Ordering::Equal));
+        }
         let mut hint: Vec<&str> = Vec::new();
-        for at in &ordered {
-            let x = shown_text(&f.items[*at]);
-            if !x.is_empty() && !hint.contains(&x) {
-                hint.push(x);
+        for r in newest {
+            if !r.title.is_empty() && !hint.contains(&r.title.as_str()) {
+                hint.push(&r.title);
                 if hint.len() == HINTS {
                     break;
                 }
             }
         }
-        let mut line = json!({"id": id, "title": c::title(&shown, id), "count": ats.len(), "hint": hint.join(", "), "locked": false});
-        if let Some(at) = ordered.first() {
+        let mut line = json!({"id": id, "title": c::title(&shown, id), "count": rows.len(), "hint": hint.join(", "), "locked": false});
+        let ats = members.get(id).cloned().unwrap_or_default();
+        if let Some(at) = latest(&f, &when, &ats, id, today).first() {
             line["first"] = item_view(&f, *at, today);
         }
         lines.push(line);
@@ -782,8 +846,10 @@ pub fn category_at(config: &Config, id: &str, langs: &[String], today: NaiveDate
     let ats = by_category(&f, today).remove(id).unwrap_or_default();
     let recent: Vec<Value> =
         latest(&f, &when, &ats, id, today).into_iter().take(RECENT).map(|at| item_view(&f, at, today)).collect();
+    let rows = rows_in(&f, &when, id, today);
+    let pages: Vec<Value> = rows.iter().map(|r| row_view(&f, r, today)).collect();
     let title = c::title(&shown, id);
-    Ok(json!({"v": V, "id": id, "title": title, "count": ats.len(), "searched": [], "recent": recent,
+    Ok(json!({"v": V, "id": id, "title": title, "count": rows.len(), "searched": [], "recent": recent, "pages": pages,
               "bar": {"placeholder": texts(&shown).bar_in.replace("{category}", &title)}}))
 }
 

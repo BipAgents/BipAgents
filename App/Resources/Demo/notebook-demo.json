@@ -1,6 +1,6 @@
 {
  "version": 1,
- "comment": "The demo's sample Carnet (invented people), shared by the iPhone and Android apps. Agents are demo.json's ids; « you » is the person, « nightly:<agent> » the nightly pass. {date+N}: the day N days after today. Sections: each page's fixed outline (id and title, in the bridge's order: notebook/template.rs); a document of type page opens demo.json's page of that id; « me » is the person's own page (kind self, « Toi »); health_documents are the private health part's.",
+ "comment": "The demo's sample Carnet (invented people), shared by the iPhone and Android apps. Agents are demo.json's ids; « you » is the person, « nightly:<agent> » the nightly pass. {date+N}: the day N days after today. Sections: each page's fixed outline (id and title, in the bridge's order: notebook/template.rs); a document of type page opens demo.json's page of that id; « me » is the person's own page (kind self, « Toi »); health_documents are the private health part's. Each page's `categories` (the bridge's filing: contracts/carnet/search-bench.json `items`) and a person's `link` and `group` (as the bridge reads them from « Qui c'est »: notebook/structure.rs) let the apps' demo show the sommaire. `more_pages`: a few more people and subjects for the apps' demo only, so that a category's screen shows its structure (Alex 26/11); the search bench and the fake bridge (contracts/carnet) keep the demo of 22/11.",
  "fr": {
   "brief": "En bref",
   "folders": {
@@ -17,6 +17,11 @@
      "Marc"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Beau-frère",
+    "group": "family",
     "contact": "demo-marc",
     "summary": "Le mari de Claire, ta sœur, et le papa d’Inès et Tom. Menuisier : il prépare le devis de ta cuisine. Allergique aux noix.",
     "summary_agent": "daily",
@@ -151,6 +156,11 @@
      "Claire"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Sœur",
+    "group": "family",
     "contact": null,
     "summary": "Ta sœur. Infirmière à Nantes, mariée à Marc.",
     "summary_agent": "daily",
@@ -221,6 +231,11 @@
      "Lucas"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Ami",
+    "group": "friends",
     "contact": null,
     "summary": "Ton ami de la course à pied, le dimanche matin.",
     "summary_agent": "coach",
@@ -280,6 +295,11 @@
      "Sophie"
     ],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "link": "Voisine",
+    "group": "others",
     "contact": null,
     "summary": "Ta voisine du 3e. Elle a un double de tes clés.",
     "summary_agent": "you",
@@ -320,6 +340,9 @@
     "title": "Rénovation cuisine",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "Devis de Marc reçu : 8 900 €. Il reste à choisir le plan de travail et à fixer la date des travaux.",
     "summary_agent": "home",
@@ -424,6 +447,9 @@
     "title": "Voyage Japon",
     "aliases": [],
     "close": false,
+    "categories": [
+     "trips"
+    ],
     "contact": null,
     "summary": "Avril, 12 jours : Tokyo, Kyoto, Osaka. Les vols sont à réserver bientôt.",
     "summary_agent": "daily",
@@ -481,6 +507,9 @@
     "title": "Anniversaire d’Inès",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
     "contact": null,
     "summary": "Inès fête ses 8 ans samedi {date+12}, chez Claire. Thème : les licornes.",
     "summary_agent": "daily",
@@ -527,6 +556,10 @@
     "title": "Impôts 2026",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money",
+     "papers"
+    ],
     "contact": null,
     "summary": "Déclaration en ligne à vérifier avant la fin du mois.",
     "summary_agent": "budget",
@@ -562,6 +595,9 @@
     "title": "Changer de voiture",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "Une hybride d’occasion, 15 000 € au maximum.",
     "summary_agent": "budget",
@@ -597,6 +633,10 @@
     "title": "Famille",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "group": "family",
     "contact": null,
     "summary": "Ta sœur [[Claire Durand]], son mari [[Marc Durand]] et leurs enfants.",
     "summary_agent": "daily",
@@ -643,6 +683,9 @@
     "title": "Maison",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "L’appartement, les travaux de la cuisine et les voisins.",
     "summary_agent": "home",
@@ -699,6 +742,9 @@
     "title": "Finances",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "Le budget du mois et les contrats à renouveler.",
     "summary_agent": "budget",
@@ -734,6 +780,9 @@
     "title": "Travail",
     "aliases": [],
     "close": false,
+    "categories": [
+     "work"
+    ],
     "contact": null,
     "summary": "Ton poste chez Atelier Lumière et ton entretien annuel.",
     "summary_agent": "daily",
@@ -771,6 +820,9 @@
     "title": "Santé",
     "aliases": [],
     "close": false,
+    "categories": [
+     "health"
+    ],
     "contact": null,
     "summary": "Ce que Coach note pour ta santé. Toi seul le vois.",
     "summary_agent": "coach",
@@ -1196,6 +1248,9 @@
    "title": "Toi",
    "aliases": [],
    "close": false,
+   "categories": [
+    "people"
+   ],
    "contact": null,
    "summary": "Tu vis à Nantes, tu cours le dimanche et tu prépares un voyage au Japon.",
    "summary_agent": "daily",
@@ -1283,7 +1338,301 @@
      ]
     }
    ]
-  }
+  },
+  "more_pages": [
+   {
+    "path": "Personnes/Julien Moreau.md",
+    "kind": "person",
+    "title": "Julien Moreau",
+    "aliases": [
+     "Julien"
+    ],
+    "close": false,
+    "categories": [
+     "people",
+     "work"
+    ],
+    "link": "Collègue",
+    "group": "work",
+    "contact": null,
+    "summary": "Ton collègue à l'Atelier Lumière, chef de projet.",
+    "summary_agent": "studio",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Qui c'est",
+      "facts": [
+       {
+        "text": "Collègue à l'Atelier Lumière, chef de projet",
+        "agent": "studio",
+        "days_ago": 12
+       }
+      ]
+     },
+     {
+      "id": "work",
+      "title": "Travail",
+      "facts": [
+       {
+        "text": "Suit le chantier de la boutique de Rennes",
+        "agent": "studio",
+        "days_ago": 3
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Goûts et préférences",
+      "facts": [
+       {
+        "text": "Café serré, jamais de sucre",
+        "agent": "studio",
+        "days_ago": 20
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personnes/Nadia Benali.md",
+    "kind": "person",
+    "title": "Nadia Benali",
+    "aliases": [
+     "Nadia"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Amie",
+    "group": "friends",
+    "contact": null,
+    "summary": "Ton amie d'enfance, à Lyon.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Qui c'est",
+      "facts": [
+       {
+        "text": "Ton amie d'enfance, à Lyon",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Dates",
+      "facts": [
+       {
+        "text": "Anniversaire : {date+60}",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Goûts et préférences",
+      "facts": [
+       {
+        "text": "Adore les films de Miyazaki",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     },
+     {
+      "id": "gifts",
+      "title": "Idées cadeaux",
+      "facts": [
+       {
+        "text": "Un carnet de croquis, elle dessine le soir",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personnes/Jeanne Durand.md",
+    "kind": "person",
+    "title": "Jeanne Durand",
+    "aliases": [
+     "Mamie Jeanne"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Grand-mère",
+    "group": "family",
+    "contact": null,
+    "summary": "Ta grand-mère, à Angers.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Qui c'est",
+      "facts": [
+       {
+        "text": "Ta grand-mère, à Angers",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Dates",
+      "facts": [
+       {
+        "text": "Anniversaire : {date+75}",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "À ne pas oublier",
+      "facts": [
+       {
+        "text": "L'appeler le dimanche midi",
+        "agent": "daily",
+        "days_ago": 30
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personnes/Paul Garnier.md",
+    "kind": "person",
+    "title": "Paul Garnier",
+    "aliases": [
+     "Paul"
+    ],
+    "close": false,
+    "categories": [
+     "people"
+    ],
+    "contact": null,
+    "summary": "Le plombier de l'immeuble.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Qui c'est",
+      "facts": [
+       {
+        "text": "Le plombier de l'immeuble",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "À ne pas oublier",
+      "facts": [
+       {
+        "text": "Passe le mardi matin, prévenir la veille",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Sujets/Chaudière.md",
+    "kind": "subject",
+    "title": "Chaudière",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "L'entretien annuel est prévu, contrat chez Paul Garnier.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "status",
+      "title": "Où on en est",
+      "facts": [
+       {
+        "text": "Entretien annuel le {date+18}",
+        "agent": "home",
+        "days_ago": 4
+       }
+      ]
+     },
+     {
+      "id": "decisions",
+      "title": "Décisions",
+      "facts": [
+       {
+        "text": "Contrat d’entretien avec [[Paul Garnier]]",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     },
+     {
+      "id": "budget",
+      "title": "Chiffres et budget",
+      "facts": [
+       {
+        "text": "Entretien : 140 € par an",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Sujets/Jardin.md",
+    "kind": "subject",
+    "title": "Jardin",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "La haie à tailler avant l’hiver, les bulbes à planter.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "next",
+      "title": "Prochaines étapes",
+      "facts": [
+       {
+        "text": "Tailler la haie avant l’hiver",
+        "agent": "home",
+        "days_ago": 6
+       },
+       {
+        "text": "Planter les bulbes de tulipes",
+        "agent": "home",
+        "days_ago": 6
+       }
+      ]
+     }
+    ]
+   }
+  ]
  },
  "en": {
   "brief": "In brief",
@@ -1301,6 +1650,11 @@
      "Marc"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Brother-in-law",
+    "group": "family",
     "contact": "demo-marc",
     "summary": "Claire’s husband (your sister) and Inès and Tom’s dad. A carpenter: he’s quoting for your kitchen. Allergic to nuts.",
     "summary_agent": "daily",
@@ -1435,6 +1789,11 @@
      "Claire"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Sister",
+    "group": "family",
     "contact": null,
     "summary": "Your sister. A nurse in Nantes, married to Marc.",
     "summary_agent": "daily",
@@ -1505,6 +1864,11 @@
      "Lucas"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Friend",
+    "group": "friends",
     "contact": null,
     "summary": "Your Sunday-morning running friend.",
     "summary_agent": "coach",
@@ -1564,6 +1928,11 @@
      "Sophie"
     ],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "link": "Neighbour",
+    "group": "others",
     "contact": null,
     "summary": "Your neighbour on the 3rd floor. She has a spare set of your keys.",
     "summary_agent": "you",
@@ -1604,6 +1973,9 @@
     "title": "Kitchen renovation",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "Marc’s quote is in: €8,900. The worktop is still to choose and the work date to set.",
     "summary_agent": "home",
@@ -1708,6 +2080,9 @@
     "title": "Japan trip",
     "aliases": [],
     "close": false,
+    "categories": [
+     "trips"
+    ],
     "contact": null,
     "summary": "April, 12 days: Tokyo, Kyoto, Osaka. The flights are to book soon.",
     "summary_agent": "daily",
@@ -1765,6 +2140,9 @@
     "title": "Inès’s birthday",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
     "contact": null,
     "summary": "Inès turns 8 on Saturday {date+12}, at Claire’s. Theme: unicorns.",
     "summary_agent": "daily",
@@ -1811,6 +2189,10 @@
     "title": "Taxes 2026",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money",
+     "papers"
+    ],
     "contact": null,
     "summary": "Online tax return to check before the end of the month.",
     "summary_agent": "budget",
@@ -1846,6 +2228,9 @@
     "title": "New car",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "A used hybrid, €15,000 at most.",
     "summary_agent": "budget",
@@ -1881,6 +2266,10 @@
     "title": "Family",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "group": "family",
     "contact": null,
     "summary": "Your sister [[Claire Durand]], her husband [[Marc Durand]] and their children.",
     "summary_agent": "daily",
@@ -1927,6 +2316,9 @@
     "title": "Home",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "The flat, the kitchen work and the neighbours.",
     "summary_agent": "home",
@@ -1983,6 +2375,9 @@
     "title": "Money",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "The month’s budget and the contracts to renew.",
     "summary_agent": "budget",
@@ -2018,6 +2413,9 @@
     "title": "Work",
     "aliases": [],
     "close": false,
+    "categories": [
+     "work"
+    ],
     "contact": null,
     "summary": "Your job at Atelier Lumière and your annual review.",
     "summary_agent": "daily",
@@ -2055,6 +2453,9 @@
     "title": "Health",
     "aliases": [],
     "close": false,
+    "categories": [
+     "health"
+    ],
     "contact": null,
     "summary": "What Coach notes for your health. Only you see it.",
     "summary_agent": "coach",
@@ -2480,6 +2881,9 @@
    "title": "You",
    "aliases": [],
    "close": false,
+   "categories": [
+    "people"
+   ],
    "contact": null,
    "summary": "You live in Nantes, run on Sundays and are planning a trip to Japan.",
    "summary_agent": "daily",
@@ -2567,7 +2971,301 @@
      ]
     }
    ]
-  }
+  },
+  "more_pages": [
+   {
+    "path": "People/Julien Moreau.md",
+    "kind": "person",
+    "title": "Julien Moreau",
+    "aliases": [
+     "Julien"
+    ],
+    "close": false,
+    "categories": [
+     "people",
+     "work"
+    ],
+    "link": "Colleague",
+    "group": "work",
+    "contact": null,
+    "summary": "Your colleague at Atelier Lumière, a project lead.",
+    "summary_agent": "studio",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Who they are",
+      "facts": [
+       {
+        "text": "Colleague at Atelier Lumière, a project lead",
+        "agent": "studio",
+        "days_ago": 12
+       }
+      ]
+     },
+     {
+      "id": "work",
+      "title": "Work",
+      "facts": [
+       {
+        "text": "Runs the Rennes shop project",
+        "agent": "studio",
+        "days_ago": 3
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Likes and preferences",
+      "facts": [
+       {
+        "text": "Strong coffee, never sugar",
+        "agent": "studio",
+        "days_ago": 20
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "People/Nadia Benali.md",
+    "kind": "person",
+    "title": "Nadia Benali",
+    "aliases": [
+     "Nadia"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Friend",
+    "group": "friends",
+    "contact": null,
+    "summary": "Your childhood friend, in Lyon.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Who they are",
+      "facts": [
+       {
+        "text": "Your childhood friend, in Lyon",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Dates",
+      "facts": [
+       {
+        "text": "Birthday: {date+60}",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Likes and preferences",
+      "facts": [
+       {
+        "text": "Loves Miyazaki films",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     },
+     {
+      "id": "gifts",
+      "title": "Gift ideas",
+      "facts": [
+       {
+        "text": "A sketchbook, she draws in the evenings",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "People/Jeanne Durand.md",
+    "kind": "person",
+    "title": "Jeanne Durand",
+    "aliases": [
+     "Mamie Jeanne"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Grandmother",
+    "group": "family",
+    "contact": null,
+    "summary": "Your grandmother, in Angers.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Who they are",
+      "facts": [
+       {
+        "text": "Your grandmother, in Angers",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Dates",
+      "facts": [
+       {
+        "text": "Birthday: {date+75}",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "Don't forget",
+      "facts": [
+       {
+        "text": "Call her on Sunday at lunchtime",
+        "agent": "daily",
+        "days_ago": 30
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "People/Paul Garnier.md",
+    "kind": "person",
+    "title": "Paul Garnier",
+    "aliases": [
+     "Paul"
+    ],
+    "close": false,
+    "categories": [
+     "people"
+    ],
+    "contact": null,
+    "summary": "The building's plumber.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Who they are",
+      "facts": [
+       {
+        "text": "The building's plumber",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "Don't forget",
+      "facts": [
+       {
+        "text": "Comes on Tuesday mornings, tell him the day before",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Subjects/Boiler.md",
+    "kind": "subject",
+    "title": "Boiler",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "The yearly service is booked, a contract with Paul Garnier.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "status",
+      "title": "Where it stands",
+      "facts": [
+       {
+        "text": "Yearly service on {date+18}",
+        "agent": "home",
+        "days_ago": 4
+       }
+      ]
+     },
+     {
+      "id": "decisions",
+      "title": "Decisions",
+      "facts": [
+       {
+        "text": "Service contract with [[Paul Garnier]]",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     },
+     {
+      "id": "budget",
+      "title": "Figures and budget",
+      "facts": [
+       {
+        "text": "Service: €140 a year",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Subjects/Garden.md",
+    "kind": "subject",
+    "title": "Garden",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "The hedge to trim before winter, the bulbs to plant.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "next",
+      "title": "Next steps",
+      "facts": [
+       {
+        "text": "Trim the hedge before winter",
+        "agent": "home",
+        "days_ago": 6
+       },
+       {
+        "text": "Plant the tulip bulbs",
+        "agent": "home",
+        "days_ago": 6
+       }
+      ]
+     }
+    ]
+   }
+  ]
  },
  "de": {
   "brief": "Kurz gesagt",
@@ -2585,6 +3283,11 @@
      "Marc"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Schwager",
+    "group": "family",
     "contact": "demo-marc",
     "summary": "Claires Mann (deine Schwester) und Papa von Inès und Tom. Schreiner: Er macht das Angebot für deine Küche. Nussallergie.",
     "summary_agent": "daily",
@@ -2719,6 +3422,11 @@
      "Claire"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Schwester",
+    "group": "family",
     "contact": null,
     "summary": "Deine Schwester. Krankenpflegerin in Nantes, mit Marc verheiratet.",
     "summary_agent": "daily",
@@ -2789,6 +3497,11 @@
      "Lucas"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Lauffreund",
+    "group": "friends",
     "contact": null,
     "summary": "Dein Laufpartner am Sonntagmorgen.",
     "summary_agent": "coach",
@@ -2848,6 +3561,11 @@
      "Sophie"
     ],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "link": "Nachbarin",
+    "group": "others",
     "contact": null,
     "summary": "Deine Nachbarin im 3. Stock. Sie hat einen Ersatzschlüssel.",
     "summary_agent": "you",
@@ -2888,6 +3606,9 @@
     "title": "Küchenrenovierung",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "Marcs Angebot ist da: 8.900 €. Arbeitsplatte und Termin fehlen noch.",
     "summary_agent": "home",
@@ -2992,6 +3713,9 @@
     "title": "Japanreise",
     "aliases": [],
     "close": false,
+    "categories": [
+     "trips"
+    ],
     "contact": null,
     "summary": "April, 12 Tage: Tokio, Kyoto, Osaka. Die Flüge bald buchen.",
     "summary_agent": "daily",
@@ -3049,6 +3773,9 @@
     "title": "Inès’ Geburtstag",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
     "contact": null,
     "summary": "Inès wird am Samstag, {date+12}, 8 Jahre alt, bei Claire. Motto: Einhörner.",
     "summary_agent": "daily",
@@ -3095,6 +3822,10 @@
     "title": "Steuern 2026",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money",
+     "papers"
+    ],
     "contact": null,
     "summary": "Die Online-Steuererklärung bis Monatsende prüfen.",
     "summary_agent": "budget",
@@ -3130,6 +3861,9 @@
     "title": "Neues Auto",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "Ein gebrauchter Hybrid, höchstens 15.000 €.",
     "summary_agent": "budget",
@@ -3165,6 +3899,10 @@
     "title": "Familie",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "group": "family",
     "contact": null,
     "summary": "Deine Schwester [[Claire Durand]], ihr Mann [[Marc Durand]] und ihre Kinder.",
     "summary_agent": "daily",
@@ -3211,6 +3949,9 @@
     "title": "Zuhause",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "Die Wohnung, die Küchenarbeiten und die Nachbarn.",
     "summary_agent": "home",
@@ -3267,6 +4008,9 @@
     "title": "Finanzen",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "Das Monatsbudget und die Verträge zum Verlängern.",
     "summary_agent": "budget",
@@ -3302,6 +4046,9 @@
     "title": "Arbeit",
     "aliases": [],
     "close": false,
+    "categories": [
+     "work"
+    ],
     "contact": null,
     "summary": "Deine Stelle bei Atelier Lumière und dein Jahresgespräch.",
     "summary_agent": "daily",
@@ -3339,6 +4086,9 @@
     "title": "Gesundheit",
     "aliases": [],
     "close": false,
+    "categories": [
+     "health"
+    ],
     "contact": null,
     "summary": "Was Coach für deine Gesundheit notiert. Nur du siehst es.",
     "summary_agent": "coach",
@@ -3764,6 +4514,9 @@
    "title": "Du",
    "aliases": [],
    "close": false,
+   "categories": [
+    "people"
+   ],
    "contact": null,
    "summary": "Du wohnst in Nantes, läufst sonntags und planst eine Reise nach Japan.",
    "summary_agent": "daily",
@@ -3851,7 +4604,301 @@
      ]
     }
    ]
-  }
+  },
+  "more_pages": [
+   {
+    "path": "Personen/Julien Moreau.md",
+    "kind": "person",
+    "title": "Julien Moreau",
+    "aliases": [
+     "Julien"
+    ],
+    "close": false,
+    "categories": [
+     "people",
+     "work"
+    ],
+    "link": "Kollege",
+    "group": "work",
+    "contact": null,
+    "summary": "Dein Kollege im Atelier Lumière, Projektleiter.",
+    "summary_agent": "studio",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Wer das ist",
+      "facts": [
+       {
+        "text": "Kollege im Atelier Lumière, Projektleiter",
+        "agent": "studio",
+        "days_ago": 12
+       }
+      ]
+     },
+     {
+      "id": "work",
+      "title": "Arbeit",
+      "facts": [
+       {
+        "text": "Betreut das Projekt des Ladens in Rennes",
+        "agent": "studio",
+        "days_ago": 3
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Vorlieben",
+      "facts": [
+       {
+        "text": "Starker Kaffee, nie Zucker",
+        "agent": "studio",
+        "days_ago": 20
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personen/Nadia Benali.md",
+    "kind": "person",
+    "title": "Nadia Benali",
+    "aliases": [
+     "Nadia"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Freundin",
+    "group": "friends",
+    "contact": null,
+    "summary": "Deine Freundin aus Kindertagen, in Lyon.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Wer das ist",
+      "facts": [
+       {
+        "text": "Deine Freundin aus Kindertagen, in Lyon",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Wichtige Daten",
+      "facts": [
+       {
+        "text": "Geburtstag: {date+60}",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Vorlieben",
+      "facts": [
+       {
+        "text": "Liebt die Filme von Miyazaki",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     },
+     {
+      "id": "gifts",
+      "title": "Geschenkideen",
+      "facts": [
+       {
+        "text": "Ein Skizzenbuch, sie zeichnet abends",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personen/Jeanne Durand.md",
+    "kind": "person",
+    "title": "Jeanne Durand",
+    "aliases": [
+     "Mamie Jeanne"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Großmutter",
+    "group": "family",
+    "contact": null,
+    "summary": "Deine Großmutter, in Angers.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Wer das ist",
+      "facts": [
+       {
+        "text": "Deine Großmutter, in Angers",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Wichtige Daten",
+      "facts": [
+       {
+        "text": "Geburtstag: {date+75}",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "Nicht vergessen",
+      "facts": [
+       {
+        "text": "Sonntagmittag anrufen",
+        "agent": "daily",
+        "days_ago": 30
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personen/Paul Garnier.md",
+    "kind": "person",
+    "title": "Paul Garnier",
+    "aliases": [
+     "Paul"
+    ],
+    "close": false,
+    "categories": [
+     "people"
+    ],
+    "contact": null,
+    "summary": "Der Klempner des Hauses.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Wer das ist",
+      "facts": [
+       {
+        "text": "Der Klempner des Hauses",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "Nicht vergessen",
+      "facts": [
+       {
+        "text": "Kommt dienstagvormittags, am Vortag Bescheid geben",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Themen/Heizkessel.md",
+    "kind": "subject",
+    "title": "Heizkessel",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "Die jährliche Wartung ist geplant, Vertrag bei Paul Garnier.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "status",
+      "title": "Stand der Dinge",
+      "facts": [
+       {
+        "text": "Jährliche Wartung am {date+18}",
+        "agent": "home",
+        "days_ago": 4
+       }
+      ]
+     },
+     {
+      "id": "decisions",
+      "title": "Entscheidungen",
+      "facts": [
+       {
+        "text": "Wartungsvertrag mit [[Paul Garnier]]",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     },
+     {
+      "id": "budget",
+      "title": "Zahlen und Budget",
+      "facts": [
+       {
+        "text": "Wartung: 140 € pro Jahr",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Themen/Garten.md",
+    "kind": "subject",
+    "title": "Garten",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "Die Hecke vor dem Winter schneiden, die Zwiebeln pflanzen.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "next",
+      "title": "Nächste Schritte",
+      "facts": [
+       {
+        "text": "Die Hecke vor dem Winter schneiden",
+        "agent": "home",
+        "days_ago": 6
+       },
+       {
+        "text": "Die Tulpenzwiebeln pflanzen",
+        "agent": "home",
+        "days_ago": 6
+       }
+      ]
+     }
+    ]
+   }
+  ]
  },
  "es": {
   "brief": "En resumen",
@@ -3869,6 +4916,11 @@
      "Marc"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Cuñado",
+    "group": "family",
     "contact": "demo-marc",
     "summary": "El marido de Claire, tu hermana, y el padre de Inès y Tom. Carpintero: prepara el presupuesto de tu cocina. Alérgico a los frutos secos.",
     "summary_agent": "daily",
@@ -4003,6 +5055,11 @@
      "Claire"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Hermana",
+    "group": "family",
     "contact": null,
     "summary": "Tu hermana. Enfermera en Nantes, casada con Marc.",
     "summary_agent": "daily",
@@ -4073,6 +5130,11 @@
      "Lucas"
     ],
     "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Amigo",
+    "group": "friends",
     "contact": null,
     "summary": "Tu amigo de correr los domingos por la mañana.",
     "summary_agent": "coach",
@@ -4132,6 +5194,11 @@
      "Sophie"
     ],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "link": "Vecina",
+    "group": "others",
     "contact": null,
     "summary": "Tu vecina del tercero. Tiene una copia de tus llaves.",
     "summary_agent": "you",
@@ -4172,6 +5239,9 @@
     "title": "Reforma de la cocina",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "Llegó el presupuesto de Marc: 8.900 €. Falta elegir la encimera y fijar la fecha de la obra.",
     "summary_agent": "home",
@@ -4276,6 +5346,9 @@
     "title": "Viaje a Japón",
     "aliases": [],
     "close": false,
+    "categories": [
+     "trips"
+    ],
     "contact": null,
     "summary": "Abril, 12 días: Tokio, Kioto, Osaka. Hay que reservar los vuelos pronto.",
     "summary_agent": "daily",
@@ -4333,6 +5406,9 @@
     "title": "Cumpleaños de Inès",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
     "contact": null,
     "summary": "Inès cumple 8 años el sábado {date+12}, en casa de Claire. Tema: unicornios.",
     "summary_agent": "daily",
@@ -4379,6 +5455,10 @@
     "title": "Impuestos 2026",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money",
+     "papers"
+    ],
     "contact": null,
     "summary": "Revisar la declaración en línea antes de fin de mes.",
     "summary_agent": "budget",
@@ -4414,6 +5494,9 @@
     "title": "Cambiar de coche",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "Un híbrido de segunda mano, 15.000 € como máximo.",
     "summary_agent": "budget",
@@ -4449,6 +5532,10 @@
     "title": "Familia",
     "aliases": [],
     "close": false,
+    "categories": [
+     "people"
+    ],
+    "group": "family",
     "contact": null,
     "summary": "Tu hermana [[Claire Durand]], su marido [[Marc Durand]] y sus hijos.",
     "summary_agent": "daily",
@@ -4495,6 +5582,9 @@
     "title": "Casa",
     "aliases": [],
     "close": false,
+    "categories": [
+     "home"
+    ],
     "contact": null,
     "summary": "El piso, la obra de la cocina y los vecinos.",
     "summary_agent": "home",
@@ -4551,6 +5641,9 @@
     "title": "Finanzas",
     "aliases": [],
     "close": false,
+    "categories": [
+     "money"
+    ],
     "contact": null,
     "summary": "El presupuesto del mes y los contratos por renovar.",
     "summary_agent": "budget",
@@ -4586,6 +5679,9 @@
     "title": "Trabajo",
     "aliases": [],
     "close": false,
+    "categories": [
+     "work"
+    ],
     "contact": null,
     "summary": "Tu puesto en Atelier Lumière y tu entrevista anual.",
     "summary_agent": "daily",
@@ -4623,6 +5719,9 @@
     "title": "Salud",
     "aliases": [],
     "close": false,
+    "categories": [
+     "health"
+    ],
     "contact": null,
     "summary": "Lo que Coach anota sobre tu salud. Solo tú lo ves.",
     "summary_agent": "coach",
@@ -5048,6 +6147,9 @@
    "title": "Tú",
    "aliases": [],
    "close": false,
+   "categories": [
+    "people"
+   ],
    "contact": null,
    "summary": "Vives en Nantes, corres los domingos y preparas un viaje a Japón.",
    "summary_agent": "daily",
@@ -5135,6 +6237,300 @@
      ]
     }
    ]
-  }
+  },
+  "more_pages": [
+   {
+    "path": "Personas/Julien Moreau.md",
+    "kind": "person",
+    "title": "Julien Moreau",
+    "aliases": [
+     "Julien"
+    ],
+    "close": false,
+    "categories": [
+     "people",
+     "work"
+    ],
+    "link": "Compañero",
+    "group": "work",
+    "contact": null,
+    "summary": "Tu compañero en el Atelier Lumière, jefe de proyecto.",
+    "summary_agent": "studio",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Quién es",
+      "facts": [
+       {
+        "text": "Compañero en el Atelier Lumière, jefe de proyecto",
+        "agent": "studio",
+        "days_ago": 12
+       }
+      ]
+     },
+     {
+      "id": "work",
+      "title": "Trabajo",
+      "facts": [
+       {
+        "text": "Lleva el proyecto de la tienda de Rennes",
+        "agent": "studio",
+        "days_ago": 3
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Gustos y preferencias",
+      "facts": [
+       {
+        "text": "Café corto, nunca azúcar",
+        "agent": "studio",
+        "days_ago": 20
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personas/Nadia Benali.md",
+    "kind": "person",
+    "title": "Nadia Benali",
+    "aliases": [
+     "Nadia"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Amiga",
+    "group": "friends",
+    "contact": null,
+    "summary": "Tu amiga de la infancia, en Lyon.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Quién es",
+      "facts": [
+       {
+        "text": "Tu amiga de la infancia, en Lyon",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Fechas",
+      "facts": [
+       {
+        "text": "Cumpleaños: {date+60}",
+        "agent": "daily",
+        "days_ago": 90
+       }
+      ]
+     },
+     {
+      "id": "tastes",
+      "title": "Gustos y preferencias",
+      "facts": [
+       {
+        "text": "Le encantan las películas de Miyazaki",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     },
+     {
+      "id": "gifts",
+      "title": "Ideas de regalo",
+      "facts": [
+       {
+        "text": "Un cuaderno de dibujo, dibuja por las noches",
+        "agent": "daily",
+        "days_ago": 14
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personas/Jeanne Durand.md",
+    "kind": "person",
+    "title": "Jeanne Durand",
+    "aliases": [
+     "Mamie Jeanne"
+    ],
+    "close": true,
+    "categories": [
+     "people"
+    ],
+    "link": "Abuela",
+    "group": "family",
+    "contact": null,
+    "summary": "Tu abuela, en Angers.",
+    "summary_agent": "daily",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Quién es",
+      "facts": [
+       {
+        "text": "Tu abuela, en Angers",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Fechas",
+      "facts": [
+       {
+        "text": "Cumpleaños: {date+75}",
+        "agent": "daily",
+        "days_ago": 120
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "No olvidar",
+      "facts": [
+       {
+        "text": "Llamarla el domingo a mediodía",
+        "agent": "daily",
+        "days_ago": 30
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Personas/Paul Garnier.md",
+    "kind": "person",
+    "title": "Paul Garnier",
+    "aliases": [
+     "Paul"
+    ],
+    "close": false,
+    "categories": [
+     "people"
+    ],
+    "contact": null,
+    "summary": "El fontanero del edificio.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "who",
+      "title": "Quién es",
+      "facts": [
+       {
+        "text": "El fontanero del edificio",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     },
+     {
+      "id": "remember",
+      "title": "No olvidar",
+      "facts": [
+       {
+        "text": "Viene los martes por la mañana, avisar el día antes",
+        "agent": "home",
+        "days_ago": 45
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Temas/Caldera.md",
+    "kind": "subject",
+    "title": "Caldera",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "La revisión anual está prevista, contrato con Paul Garnier.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "status",
+      "title": "Cómo va",
+      "facts": [
+       {
+        "text": "Revisión anual el {date+18}",
+        "agent": "home",
+        "days_ago": 4
+       }
+      ]
+     },
+     {
+      "id": "decisions",
+      "title": "Decisiones",
+      "facts": [
+       {
+        "text": "Contrato de mantenimiento con [[Paul Garnier]]",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     },
+     {
+      "id": "budget",
+      "title": "Cifras y presupuesto",
+      "facts": [
+       {
+        "text": "Mantenimiento: 140 € al año",
+        "agent": "home",
+        "days_ago": 60
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "path": "Temas/Jardín.md",
+    "kind": "subject",
+    "title": "Jardín",
+    "aliases": [],
+    "close": false,
+    "categories": [
+     "home"
+    ],
+    "contact": null,
+    "summary": "Podar el seto antes del invierno, plantar los bulbos.",
+    "summary_agent": "home",
+    "summary_days_ago": 3,
+    "sections": [
+     {
+      "id": "next",
+      "title": "Próximos pasos",
+      "facts": [
+       {
+        "text": "Podar el seto antes del invierno",
+        "agent": "home",
+        "days_ago": 6
+       },
+       {
+        "text": "Plantar los bulbos de tulipán",
+        "agent": "home",
+        "days_ago": 6
+       }
+      ]
+     }
+    ]
+   }
+  ]
  }
 }

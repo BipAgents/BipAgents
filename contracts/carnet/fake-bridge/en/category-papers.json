@@ -2,7 +2,7 @@
   "v": 1,
   "id": "papers",
   "title": "Papers",
-  "count": 10,
+  "count": 4,
   "space": "all",
   "filters": [
     {
@@ -18,7 +18,7 @@
     {
       "id": "warranties",
       "title": "Warranties",
-      "count": 3
+      "count": 1
     }
   ],
   "filter": null,
@@ -301,6 +301,68 @@
       }
     }
   ],
+  "pages": [
+    {
+      "id": "records:contract",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Contracts and insurance",
+      "path": "Records/Contracts and insurance.md",
+      "notes": 1,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Records/Contracts and insurance.md",
+        "records": "contract"
+      }
+    },
+    {
+      "id": "records:paper",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Papers",
+      "path": "Records/Papers.md",
+      "notes": 1,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Records/Papers.md",
+        "records": "paper"
+      }
+    },
+    {
+      "id": "records:purchase",
+      "kind": "records",
+      "page_kind": "records",
+      "title": "Purchases",
+      "path": "Records/Purchases.md",
+      "notes": 3,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Records/Purchases.md",
+        "records": "purchase"
+      }
+    },
+    {
+      "id": "page:p0000000003",
+      "kind": "page",
+      "page_kind": "subject",
+      "title": "Taxes 2026",
+      "path": "Subjects/Taxes 2026.md",
+      "notes": 2,
+      "group": null,
+      "archived": false,
+      "close": false,
+      "open": {
+        "path": "Subjects/Taxes 2026.md"
+      }
+    }
+  ],
+  "groups": [],
   "bar": {
     "placeholder": "Search in Papers"
   }

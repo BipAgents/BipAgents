@@ -173,11 +173,13 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
         let title = if kind == "self" { super::words(lang).me.to_string() } else { page.title.clone() };
         let aliases = page.aliases();
         let summary = super::summary_of(&page.body, w.brief);
+        let (link, group) = super::structure::link_of(page, &kind);
         items.push(json!({"id": page_id, "kind": "page", "part": "main", "path": path, "title": title,
                           "line": crate::tools_knowledge::head(&summary, 240), "categories": filed, "space": "perso",
                           "date": null, "yearly": null, "source": title, "who": "", "noted": null, "archived": archived,
                           "label": null, "answer": null, "page": null, "open": {"path": path},
-                          "fold": fold(&format!("{title} {} {summary}", aliases.join(" "))), "aliases": aliases}));
+                          "fold": fold(&format!("{title} {} {summary}", aliases.join(" "))), "aliases": aliases,
+                          "page_kind": kind, "link": link, "group": group, "close": page.close(), "icon": page.icon()}));
         let sections: Vec<(String, Vec<super::Fact>)> =
             page.sections().into_iter().filter(|(name, _)| fold(name) != fold(w.brief)).collect();
         let texts: Vec<String> = sections.iter().flat_map(|(_, f)| f.iter().map(|x| x.text.clone())).collect();
@@ -299,7 +301,8 @@ fn live(index: &Value) -> Value {
         i["categories"] = json!(cats);
     }
     if let Some(o) = i.as_object_mut() {
-        for k in ["fold", "aliases", "done"] {
+        // (the copy's own keys: an `Item` has none of them)
+        for k in ["fold", "aliases", "done", "page_kind", "link", "group", "close", "icon"] {
             o.remove(k);
         }
     }
@@ -406,27 +409,31 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
         "groups": groups.iter().map(|(g, list)| json!({"category": g, "title": title(lang, g), "count": list.len(),
             "top": list.iter().take(2).map(|i| live(i)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
         "counts": counts, "online": null}));
-    // the sommaire: each category's count and grey words (its latest titles), Santé locked, « Autres » when not empty
-    let line = |id: &str, space: Option<&str>| -> Option<Value> {
-        let mine: Vec<&Value> = shown
-            .iter()
-            .filter(|i| has(i, id) && space.is_none_or(|sp| i["space"] == sp))
-            .collect();
+    // the sommaire: each category's count (the pages its screen lists: structure.rs, Alex 26/11) and grey words (the
+    // titles of its pages last written in), Santé locked, « Autres » when not empty; made on the copy as the phones
+    // make it without a network
+    let (entries, copy_tables) = super::finder::read_copy(&out["index.json"], false);
+    let copy = super::finder::Finder::new(entries, &copy_tables);
+    let line = |id: &str, space: &str, f: &super::finder::Finder| -> Option<Value> {
         if id == "health" {
             return Some(json!({"id": id, "title": title(lang, id), "count": null, "hint": "", "locked": true}));
         }
-        if mine.is_empty() {
+        let rows = super::structure::pages_in(f, id, space, today());
+        if rows.is_empty() {
             return None;
         }
+        let mut newest: Vec<&super::structure::Listed> = rows.iter().collect();
+        if id != "dates" {
+            newest.sort_by(|a, b| b.latest.cmp(&a.latest));
+        }
         let mut names: Vec<String> = Vec::new();
-        for i in &mine {
-            let t = s(&i["title"]);
-            if !names.contains(&t) && names.len() < 3 {
-                names.push(t);
+        for r in newest {
+            if !names.contains(&r.title) && names.len() < 3 {
+                names.push(r.title.clone());
             }
         }
-        Some(json!({"id": id, "title": title(lang, id), "count": mine.len(), "hint": names.join(", "), "locked": false,
-                    "first": live(mine[0])}))
+        Some(json!({"id": id, "title": title(lang, id), "count": rows.len(), "hint": names.join(", "), "locked": false,
+                    "first": items.iter().find(|i| i["id"] == f.items[rows[0].at].id.as_str()).map(live).unwrap_or(Value::Null)}))
     };
     let spaces = |on: bool, selected: &str| -> Value {
         let ids: &[&str] = if on { &["perso", "pro", "family"] } else { &["all", "family"] };
@@ -441,7 +448,7 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     } else {
         ("Notebook", "All the Notebook", "Search the whole Notebook")
     };
-    let lines: Vec<Value> = c::PERSONAL.iter().filter_map(|id| line(id, None)).collect();
+    let lines: Vec<Value> = c::PERSONAL.iter().filter_map(|id| line(id, "all", &copy)).collect();
     out.insert("summary.json".into(), json!({"v": 1, "lang": lang, "title": carnet, "space": "all", "spaces": spaces(false, "all"),
         "kept": kept_full, "card": null, "total": {"count": items.len(), "title": all_notes}, "categories": lines,
         "bar": {"placeholder": bar}, "version": 42}));
@@ -456,23 +463,13 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
             i
         })
         .collect();
-    let pro_lines: Vec<Value> = c::PERSONAL
-        .iter()
-        .filter_map(|id| {
-            let mine: Vec<&Value> = pro_items.iter().filter(|i| has(i, id) && i["space"] == "pro").collect();
-            if *id == "health" || mine.is_empty() {
-                return None;
-            }
-            let hint: Vec<String> = mine.iter().map(|i| s(&i["title"])).fold(Vec::new(), |mut a, t| {
-                if !a.contains(&t) && a.len() < 3 {
-                    a.push(t);
-                }
-                a
-            });
-            Some(json!({"id": id, "title": title(lang, id), "count": mine.len(), "hint": hint.join(", "), "locked": false,
-                        "first": live(mine[0])}))
-        })
-        .collect();
+    let pro_copy = {
+        let sent: Vec<Value> = pro_items.iter().map(compact).collect();
+        let (entries, pro_tables) = super::finder::read_copy(&json!({"items": sent, "dated": {"before": 90, "after": 730}}), false);
+        super::finder::Finder::new(entries, &pro_tables)
+    };
+    let pro_lines: Vec<Value> =
+        c::PERSONAL.iter().filter(|id| **id != "health").filter_map(|id| line(id, "pro", &pro_copy)).collect();
     let pro_total = pro_items.iter().filter(|i| i["space"] == "pro").count();
     out.insert("summary-pro.json".into(), json!({"v": 1, "lang": lang, "title": carnet, "space": "pro", "spaces": spaces(true, "pro"),
         "kept": [], "card": null, "total": {"count": pro_total, "title": all_notes}, "categories": pro_lines,
@@ -480,7 +477,7 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     // a category's page: Papiers, its sub-filters by the records' types and the documents' names
     let papers: Vec<&Value> = shown.iter().filter(|i| has(i, "papers")).collect();
     let count = |f: &dyn Fn(&Value) -> bool| papers.iter().filter(|i| f(i)).count();
-    let filters = vec![
+    let filters = [
         json!({"id": "invoices", "title": title(lang, "invoices"), "count": count(&|i: &Value| fold(&s(&i["line"])).contains("factur") || fold(&s(&i["line"])).contains("invoice") || fold(&s(&i["line"])).contains("devis") || fold(&s(&i["line"])).contains("quote"))}),
         json!({"id": "contracts", "title": title(lang, "contracts"), "count": count(&|i: &Value| i["open"]["record"]["type"] == "contract")}),
         json!({"id": "warranties", "title": title(lang, "warranties"), "count": count(&|i: &Value| i["open"]["record"]["type"] == "purchase")}),
@@ -489,11 +486,42 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     recent.sort_by_key(|i| std::cmp::Reverse(s(&i["noted"])));
     recent.truncate(10);
     let searched = if lang == "fr" { "garantie lave-linge" } else { "washing machine warranty" };
-    out.insert("category-papers.json".into(), json!({"v": 1, "id": "papers", "title": title(lang, "papers"), "count": papers.len(),
-        "space": "all", "filters": filters, "filter": null,
+    let paper_rows = super::structure::pages_in(&copy, "papers", "all", today());
+    let page_filters: Vec<Value> = filters
+        .iter()
+        .map(|f| {
+            let fid = s(&f["id"]);
+            json!({"id": fid, "title": f["title"],
+                   "count": paper_rows.iter().filter(|r| super::structure::in_papers_filter(&copy, r, &fid)).count()})
+        })
+        .collect();
+    out.insert("category-papers.json".into(), json!({"v": 1, "id": "papers", "title": title(lang, "papers"), "count": paper_rows.len(),
+        "space": "all", "filters": page_filters, "filter": null,
         "searched": [{"q": searched, "at": "2026-11-20T18:02:00Z"}], "recent": recent,
+        "pages": paper_rows.iter().map(|r| super::structure::entry_view(&copy, r, today())).collect::<Vec<_>>(),
+        "groups": super::structure::groups_view(&paper_rows, lang),
         "bar": {"placeholder": if lang == "fr" { format!("Cherche dans {}", title(lang, "papers")) } else { format!("Search in {}", title(lang, "papers")) }}}));
     out.insert("kept.json".into(), json!({"kept": kept_full, "max": 6}));
+    // each category's screen (Alex 26/11: its pages, structure.rs), made on the copy as the phones make it without a
+    // network (their tests replay it on index.json): `pages.json` sorts after `index.json`, so the steady ids stay
+    let mut screens = serde_json::Map::new();
+    for id in c::PERSONAL.iter().filter(|id| **id != "health") {
+        let rows = super::structure::pages_in(&copy, id, "all", today());
+        if rows.is_empty() {
+            continue;
+        }
+        let filters: Vec<Value> = super::summary::FILTERS
+            .iter()
+            .filter(|(cat, _)| cat == id)
+            .flat_map(|(_, fs)| fs.iter())
+            .map(|fid| json!({"id": fid, "title": title(lang, fid),
+                              "count": rows.iter().filter(|r| super::structure::in_papers_filter(&copy, r, fid)).count()}))
+            .collect();
+        screens.insert(id.to_string(), json!({"count": rows.len(), "filters": filters,
+            "pages": rows.iter().map(|r| super::structure::entry_view(&copy, r, today())).collect::<Vec<_>>(),
+            "groups": super::structure::groups_view(&rows, lang)}));
+    }
+    out.insert("pages.json".into(), json!({"day": today().to_string(), "lang": lang, "categories": screens}));
     // S2, the bridge's own: the pass over the demo (its categories written in the pages' headers, the same as above),
     // then the home's card
     assert!(super::categories_pass::sort(&config).unwrap().done);
@@ -675,6 +703,31 @@ fn the_sommaire_contract_holds_together() {
                 .collect()
         };
         assert_eq!(filed(&file), filed(&made["index.json"]), "{lang}: fake-bridge/index.json is out of date (BIPAGENTS_WRITE_FAKE_BRIDGE=1)");
+        // each category's screen (Alex 26/11), as the phones make it on that copy: its rows, their links and counts
+        let screens = |v: &Value| -> BTreeMap<String, Vec<String>> {
+            v["categories"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(id, c)| {
+                    let rows = c["pages"].as_array().unwrap().iter().map(|p| {
+                        format!("{} {} {} {} {}", s(&p["title"]), s(&p["group"]), s(&p["link"]), p["notes"], p["next"]["in_days"])
+                    });
+                    (id.clone(), rows.collect())
+                })
+                .collect()
+        };
+        let pages: Value = serde_json::from_str(
+            &std::fs::read_to_string(repo(&format!("contracts/carnet/fake-bridge/{lang}/pages.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(screens(&pages), screens(&made["pages.json"]), "{lang}: fake-bridge/pages.json is out of date (BIPAGENTS_WRITE_FAKE_BRIDGE=1)");
+        for c in pages["categories"].as_object().unwrap().values() {
+            let mut errors = Vec::new();
+            check(&c["pages"], &json!("[CategoryEntry]"), types, "pages.json", &mut errors);
+            check(&c["groups"], &json!("[CategoryGroup]"), types, "pages.json", &mut errors);
+            assert!(errors.is_empty(), "{errors:#?}");
+        }
         assert_eq!(file["items"].as_array().unwrap().len(), made["index.json"]["items"].as_array().unwrap().len());
     }
     // the additive keys name only routes the 1.0 apps read

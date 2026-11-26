@@ -21,8 +21,8 @@
     {
       "id": "shopping",
       "title": "Shopping",
-      "count": 5,
-      "hint": "Coffee, Milk, Wholewheat pasta",
+      "count": 1,
+      "hint": "Shopping",
       "locked": false,
       "first": {
         "id": "fam:list:courses/c5",
@@ -44,8 +44,8 @@
     {
       "id": "people",
       "title": "People",
-      "count": 2,
-      "hint": "Grandma's birthday, Tom's birthday",
+      "count": 1,
+      "hint": "Dates",
       "locked": false,
       "first": {
         "id": "fam:list:dates/d1",
@@ -68,8 +68,8 @@
     {
       "id": "dates",
       "title": "Dates",
-      "count": 6,
-      "hint": "Boiler appointment, Book the Christmas caterer, Grandma's birthday",
+      "count": 2,
+      "hint": "Tasks, Dates",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t1",
@@ -93,7 +93,7 @@
       "id": "home",
       "title": "Home",
       "count": 2,
-      "hint": "Useful codes and numbers, Boiler appointment",
+      "hint": "Useful codes and numbers, Tasks",
       "locked": false,
       "first": {
         "id": "fam:page:p2",
@@ -135,7 +135,7 @@
       "id": "school",
       "title": "School",
       "count": 1,
-      "hint": "Sign Tom up for judo",
+      "hint": "Tasks",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t3",
@@ -157,7 +157,7 @@
       "id": "menus",
       "title": "Menus",
       "count": 3,
-      "hint": "Book the Christmas caterer, This week's meals, Christmas dinner at Marie's",
+      "hint": "Tasks, This week's meals, Dates",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t2",
@@ -175,31 +175,6 @@
           "list": "taches",
           "item": "t2"
         }
-      }
-    },
-    {
-      "id": "other",
-      "title": "Other",
-      "count": 1,
-      "hint": "Return the library books",
-      "locked": false,
-      "first": {
-        "id": "fam:list:taches/t4",
-        "kind": "list_item",
-        "title": "Tasks",
-        "line": "Return the library books",
-        "categories": [
-          "other",
-          "dates"
-        ],
-        "date": "2026-11-21",
-        "who": "Léa",
-        "noted": "2026-11-22",
-        "open": {
-          "list": "taches",
-          "item": "t4"
-        },
-        "done": true
       }
     }
   ],

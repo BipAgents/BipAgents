@@ -67,6 +67,7 @@ pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
 pub mod spaces;
+pub mod structure;
 #[cfg(test)]
 mod spaces_tests;
 pub mod summary;
@@ -3551,7 +3552,9 @@ pub fn upcoming_dates(config: &Config, days: i64, all: bool, today_date: chrono:
                 continue;
             }
             for fact in facts {
-                let Some((month, day, year)) = date_in(&fact.text) else { continue };
+                // (« 8/10 », « 10/12 ans »: not a day, as the copy reads them; categories.rs)
+                let plain = categories::without_fractions(&tk::ascii_fold(&fact.text.to_lowercase()));
+                let Some((month, day, year)) = date_in(&plain) else { continue };
                 let yearly = YEARLY.is_match(&fact.text) || year.is_none();
                 let next = if yearly {
                     let this = chrono::NaiveDate::from_ymd_opt(today_date.year(), month, day);

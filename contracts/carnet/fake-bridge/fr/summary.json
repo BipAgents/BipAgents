@@ -34,23 +34,23 @@
     {
       "id": "people",
       "title": "Personnes",
-      "count": 52,
-      "hint": "Famille, Claire Durand, Lucas Bernard",
+      "count": 7,
+      "hint": "Marc Durand, Anniversaire d’Inès, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "page:p000000000d",
+        "id": "page:p000000001c",
         "kind": "page",
         "part": "main",
-        "path": "Domaines/Famille.md",
-        "title": "Famille",
-        "line": "Ta sœur [[Claire Durand]], son mari [[Marc Durand]] et leurs enfants.",
+        "path": "Toi.md",
+        "title": "Toi",
+        "line": "Tu vis à Nantes, tu cours le dimanche et tu prépares un voyage au Japon.",
         "categories": [
           "people"
         ],
         "space": "perso",
         "date": null,
         "yearly": null,
-        "source": "Famille",
+        "source": "Toi",
         "who": "",
         "noted": null,
         "archived": false,
@@ -58,173 +58,15 @@
         "answer": null,
         "page": null,
         "open": {
-          "path": "Domaines/Famille.md"
+          "path": "Toi.md"
         }
       }
     },
     {
       "id": "dates",
       "title": "Dates",
-      "count": 24,
-      "hint": "Travail, Claire Durand, Lucas Bernard",
-      "locked": false,
-      "first": {
-        "id": "line:p0000000012:0000000039",
-        "kind": "line",
-        "part": "main",
-        "path": "Domaines/Travail.md",
-        "title": "Travail",
-        "line": "Entretien annuel le 27 novembre",
-        "categories": [
-          "work",
-          "dates"
-        ],
-        "space": "perso",
-        "date": "2026-11-27",
-        "yearly": null,
-        "source": "Ce qui compte",
-        "who": "Daily",
-        "noted": "2026-11-19",
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": "page:p0000000012",
-        "open": {
-          "path": "Domaines/Travail.md",
-          "section": "matters"
-        }
-      }
-    },
-    {
-      "id": "money",
-      "title": "Argent",
-      "count": 19,
-      "hint": "Finances, Changer de voiture, Impôts 2026",
-      "locked": false,
-      "first": {
-        "id": "page:p0000000010",
-        "kind": "page",
-        "part": "main",
-        "path": "Domaines/Finances.md",
-        "title": "Finances",
-        "line": "Le budget du mois et les contrats à renouveler.",
-        "categories": [
-          "money"
-        ],
-        "space": "perso",
-        "date": null,
-        "yearly": null,
-        "source": "Finances",
-        "who": "",
-        "noted": null,
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": null,
-        "open": {
-          "path": "Domaines/Finances.md"
-        }
-      }
-    },
-    {
-      "id": "home",
-      "title": "Maison",
-      "count": 27,
-      "hint": "Maison, Jardin, Rénovation cuisine",
-      "locked": false,
-      "first": {
-        "id": "page:p0000000011",
-        "kind": "page",
-        "part": "main",
-        "path": "Domaines/Maison.md",
-        "title": "Maison",
-        "line": "L’appartement, les travaux de la cuisine et les voisins.",
-        "categories": [
-          "home"
-        ],
-        "space": "perso",
-        "date": null,
-        "yearly": null,
-        "source": "Maison",
-        "who": "",
-        "noted": null,
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": null,
-        "open": {
-          "path": "Domaines/Maison.md"
-        }
-      }
-    },
-    {
-      "id": "papers",
-      "title": "Papiers",
       "count": 10,
-      "hint": "Impôts 2026, Vérifier la déclaration pré-remplie, Retrouver les reçus de dons",
-      "locked": false,
-      "first": {
-        "id": "page:p0000000003",
-        "kind": "page",
-        "part": "main",
-        "path": "Sujets/Impôts 2026.md",
-        "title": "Impôts 2026",
-        "line": "Déclaration en ligne à vérifier avant la fin du mois.",
-        "categories": [
-          "money",
-          "papers"
-        ],
-        "space": "perso",
-        "date": null,
-        "yearly": null,
-        "source": "Impôts 2026",
-        "who": "",
-        "noted": null,
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": null,
-        "open": {
-          "path": "Sujets/Impôts 2026.md"
-        }
-      }
-    },
-    {
-      "id": "trips",
-      "title": "Voyages",
-      "count": 26,
-      "hint": "Voyage Japon, Week-end à Lisbonne, Réserver les vols pour Osaka",
-      "locked": false,
-      "first": {
-        "id": "page:p000000001a",
-        "kind": "page",
-        "part": "main",
-        "path": "Sujets/Voyage Japon.md",
-        "title": "Voyage Japon",
-        "line": "Avril, 12 jours : Tokyo, Kyoto, Osaka. Les vols sont à réserver bientôt.",
-        "categories": [
-          "trips"
-        ],
-        "space": "perso",
-        "date": null,
-        "yearly": null,
-        "source": "Voyage Japon",
-        "who": "",
-        "noted": null,
-        "archived": false,
-        "label": null,
-        "answer": null,
-        "page": null,
-        "open": {
-          "path": "Sujets/Voyage Japon.md"
-        }
-      }
-    },
-    {
-      "id": "work",
-      "title": "Travail",
-      "count": 4,
-      "hint": "Travail, Préparer l’entretien annuel",
+      "hint": "Travail, Abonnements, Lucas Bernard",
       "locked": false,
       "first": {
         "id": "page:p0000000012",
@@ -252,33 +94,170 @@
       }
     },
     {
-      "id": "other",
-      "title": "Autres",
-      "count": 1,
-      "hint": "Trier les photos de l’été",
+      "id": "money",
+      "title": "Argent",
+      "count": 5,
+      "hint": "Impôts 2026, Finances, Changer de voiture",
       "locked": false,
       "first": {
-        "id": "task:t000026",
-        "kind": "task",
+        "id": "record:r00002c",
+        "kind": "record",
         "part": "main",
-        "path": "Tâches/Tâches.md",
-        "title": "Trier les photos de l’été",
-        "line": "Trier les photos de l’été",
+        "path": "Fiches/Abonnements.md",
+        "title": "Films en streaming",
+        "line": "Films en streaming · 13,49 € · mensuel · 2026-12-01 · En ligne, à tout moment",
         "categories": [
-          "other"
+          "money",
+          "dates"
         ],
         "space": "perso",
-        "date": null,
+        "date": "2026-12-01",
         "yearly": null,
-        "source": "Tâches",
-        "who": "Daily",
-        "noted": "2026-11-22",
+        "source": "Abonnements",
+        "who": "",
+        "noted": null,
         "archived": false,
         "label": null,
         "answer": null,
         "page": null,
         "open": {
-          "task": "t000026"
+          "record": {
+            "type": "subscription",
+            "id": "r00002c"
+          }
+        }
+      }
+    },
+    {
+      "id": "home",
+      "title": "Maison",
+      "count": 3,
+      "hint": "Rénovation cuisine, Maison, Jardin",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000019",
+        "kind": "page",
+        "part": "main",
+        "path": "Sujets/Jardin.md",
+        "title": "Jardin",
+        "line": "",
+        "categories": [
+          "home"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Jardin",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Sujets/Jardin.md"
+        }
+      }
+    },
+    {
+      "id": "papers",
+      "title": "Papiers",
+      "count": 4,
+      "hint": "Impôts 2026, Achats, Contrats et assurances",
+      "locked": false,
+      "first": {
+        "id": "record:r000006",
+        "kind": "record",
+        "part": "main",
+        "path": "Fiches/Achats.md",
+        "title": "Lave-linge",
+        "line": "2024-12-22 · Lave-linge · Électro Plus · 499 € · bien durable · 2026-12-22",
+        "categories": [
+          "money",
+          "papers",
+          "dates"
+        ],
+        "space": "perso",
+        "date": "2026-12-22",
+        "yearly": null,
+        "source": "Achats",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "record": {
+            "type": "purchase",
+            "id": "r000006"
+          }
+        }
+      }
+    },
+    {
+      "id": "trips",
+      "title": "Voyages",
+      "count": 3,
+      "hint": "Voyage Japon, Week-end à Lisbonne, Réservations",
+      "locked": false,
+      "first": {
+        "id": "record:r00002e",
+        "kind": "record",
+        "part": "main",
+        "path": "Fiches/Réservations.md",
+        "title": "Hôtel, 3 nuits",
+        "line": "2026-12-04 · Hôtel, 3 nuits · Hôtel Rossio · Week-end à Lisbonne",
+        "categories": [
+          "trips",
+          "dates"
+        ],
+        "space": "perso",
+        "date": "2026-12-04",
+        "yearly": null,
+        "source": "Réservations",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "record": {
+            "type": "booking",
+            "id": "r00002e"
+          }
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Travail",
+      "count": 1,
+      "hint": "Travail",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000012",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Ton poste chez Atelier Lumière et ton entretien annuel.",
+        "categories": [
+          "work"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Travail",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Travail.md"
         }
       }
     },

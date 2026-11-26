@@ -21,8 +21,8 @@
     {
       "id": "shopping",
       "title": "Courses",
-      "count": 5,
-      "hint": "Café, Lait, Pâtes complètes",
+      "count": 1,
+      "hint": "Courses",
       "locked": false,
       "first": {
         "id": "fam:list:courses/c5",
@@ -44,8 +44,8 @@
     {
       "id": "people",
       "title": "Personnes",
-      "count": 3,
-      "hint": "Codes et numéros utiles, Anniversaire de Mamie, Anniversaire de Tom",
+      "count": 2,
+      "hint": "Codes et numéros utiles, Dates",
       "locked": false,
       "first": {
         "id": "fam:page:p2",
@@ -66,8 +66,8 @@
     {
       "id": "dates",
       "title": "Dates",
-      "count": 6,
-      "hint": "Rendez-vous chaudière, Réserver le traiteur pour Noël, Anniversaire de Mamie",
+      "count": 2,
+      "hint": "Tâches, Dates",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t1",
@@ -91,7 +91,7 @@
       "id": "home",
       "title": "Maison",
       "count": 2,
-      "hint": "Codes et numéros utiles, Rendez-vous chaudière",
+      "hint": "Codes et numéros utiles, Tâches",
       "locked": false,
       "first": {
         "id": "fam:page:p2",
@@ -134,7 +134,7 @@
       "id": "school",
       "title": "École",
       "count": 1,
-      "hint": "Inscrire Tom au judo",
+      "hint": "Tâches",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t3",
@@ -156,7 +156,7 @@
       "id": "menus",
       "title": "Menus",
       "count": 3,
-      "hint": "Réserver le traiteur pour Noël, Menus de la semaine, Repas de Noël chez Marie",
+      "hint": "Tâches, Menus de la semaine, Dates",
       "locked": false,
       "first": {
         "id": "fam:list:taches/t2",
@@ -174,31 +174,6 @@
           "list": "taches",
           "item": "t2"
         }
-      }
-    },
-    {
-      "id": "other",
-      "title": "Autres",
-      "count": 1,
-      "hint": "Rendre les livres à la médiathèque",
-      "locked": false,
-      "first": {
-        "id": "fam:list:taches/t4",
-        "kind": "list_item",
-        "title": "Tâches",
-        "line": "Rendre les livres à la médiathèque",
-        "categories": [
-          "other",
-          "dates"
-        ],
-        "date": "2026-11-21",
-        "who": "Léa",
-        "noted": "2026-11-22",
-        "open": {
-          "list": "taches",
-          "item": "t4"
-        },
-        "done": true
       }
     }
   ],
