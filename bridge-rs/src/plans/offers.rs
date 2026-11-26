@@ -743,7 +743,7 @@ pub static TEXTS: [Texts; 4] = [
         after_once: "✓ Oui · {question}",
         after_deny: "Non merci · {question}",
         expired: "Passée · {question}",
-        notification: "Propose : {question}",
+        notification: "{question}",
         summary: "{agent} propose : {question}",
         first_card: "Tu règles ses propositions en bas de sa page.",
         route_done: "Trajet pour {place} · {n} min {mode}",
@@ -764,7 +764,7 @@ pub static TEXTS: [Texts; 4] = [
         after_once: "✓ Yes · {question}",
         after_deny: "No thanks · {question}",
         expired: "Expired · {question}",
-        notification: "Suggests: {question}",
+        notification: "{question}",
         summary: "{agent} suggests: {question}",
         first_card: "You can set its suggestions at the bottom of its page.",
         route_done: "Route to {place} · {n} min {mode}",
@@ -785,7 +785,7 @@ pub static TEXTS: [Texts; 4] = [
         after_once: "✓ Ja · {question}",
         after_deny: "Nein danke · {question}",
         expired: "Abgelaufen · {question}",
-        notification: "Schlägt vor: {question}",
+        notification: "{question}",
         summary: "{agent} schlägt vor: {question}",
         first_card: "Seine Vorschläge stellst du unten auf seiner Seite ein.",
         route_done: "Weg nach {place} · {n} Min. {mode}",
@@ -806,7 +806,7 @@ pub static TEXTS: [Texts; 4] = [
         after_once: "✓ Sí · {question}",
         after_deny: "No, gracias · {question}",
         expired: "Caducada · {question}",
-        notification: "Propone: {question}",
+        notification: "{question}",
         summary: "{agent} propone: {question}",
         first_card: "Puedes ajustar sus propuestas al final de su página.",
         route_done: "Trayecto hasta {place} · {n} min {mode}",
@@ -832,8 +832,15 @@ pub fn summary(lang: &str, agent: &str, question: &str) -> String {
     fill(texts(lang).summary, &[("agent", agent), ("question", question)])
 }
 
+/// The push's words: the question alone (Alex 26/11: the notification's title already names the agent, « Vie · IA »).
 pub fn notification(lang: &str, question: &str) -> String {
     fill(texts(lang).notification, &[("question", question)])
+}
+
+/// The push's words of the bridge's own card (`place_bridge`): a replies card's how many wait (sources.rs), any other
+/// (a mailbox's consent, a calendar's, a trip's) its question alone.
+pub fn bridge_line(lang: &str, offer: &Offer) -> String {
+    super::sources::notification(lang, offer).unwrap_or_else(|| notification(lang, &offer.label))
 }
 
 /// The card's top line in an app 1.1: « Vie propose · Lisbonne ».
@@ -2161,8 +2168,7 @@ pub async fn place_bridge(state: &AppState, agent: &AgentConfig, mut offer: Offe
     crate::card_place::place_for(state, agent, &run_id, None).await;
     crate::card_place::taken(&config, &run_id);
     let lang = lang_of(&config, &agent.name);
-    let line = super::sources::notification(lang, &offer).unwrap_or_else(|| notification(lang, &offer.label));
-    state.push.notify_bridge_card(&agent.name, &line, PUSH_KEY, &run_id).await;
+    state.push.notify_bridge_card(&agent.name, &bridge_line(lang, &offer), PUSH_KEY, &run_id).await;
     Ok(offer.id)
 }
 

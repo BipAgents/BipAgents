@@ -271,7 +271,7 @@
     },
     {
       "name": "offer",
-      "about": "An offer to act its agent made (plans/offers.rs, contracts/offers): the neutral line of a request, « Une demande attend ton accord », as a plan's; its sealed words texts.<lang>.notification (« Propose : {question} »); `r` the card's run id, so an older app's « Refuser » answers it through /v1/approve (`deny`: « Non merci »). A plan's offers shown on its card are not pushed.",
+      "about": "An offer to act its agent made (plans/offers.rs, contracts/offers): the neutral line of a request, « Une demande attend ton accord », as a plan's; its sealed words texts.<lang>.notification: the question alone (« {question} », Alex 26/11: the title already names the agent); `r` the card's run id, so an older app's « Refuser » answers it through /v1/approve (`deny`: « Non merci »). A plan's offers shown on its card are not pushed.",
       "bridge": {
         "agent": "vie",
         "context": {
@@ -281,7 +281,7 @@
         "input": {
           "fn": "notify_bridge_card",
           "args": {
-            "line": "Propose : Je regarde les hôtels ?",
+            "line": "Je regarde les hôtels ?",
             "key": "offer_request",
             "id": "bip-offer-0123456789ab"
           }
