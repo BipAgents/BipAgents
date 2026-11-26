@@ -164,10 +164,28 @@ def normalised(value):
     return text
 
 
+MONTH_WORDS = {"janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout", "septembre", "octobre",
+               "novembre", "decembre"}
+
+
+def day_words_out(words):
+    """`words` without the numbers of days, and without the month that follows one: a date's words."""
+    out, after_day = [], False
+    for w in words:
+        if isinstance(w, str) and w.isdigit() and len(w) <= 2:
+            after_day = True
+            continue
+        if not (after_day and w in MONTH_WORDS):
+            out.append(w)
+        after_day = False
+    return out
+
+
 def undated(text):
-    """The offline copy's search `words` without the numbers of days: « 28 novembre » (the run's day + 5) splits into
-    words the day normalisation does not see, so the comparison held only on the day it was recorded (23/11: « 27 »
-    recorded on 22/11)."""
+    """The offline copy's search `words` without the days of its dates: « 28 novembre » (the run's day + 5) splits
+    into words the day normalisation does not see, so the comparison held only on the day it was recorded (23/11:
+    « 27 » recorded on 22/11). Their month too: from 26/11 the run's day + 5 is « 1 decembre », recorded
+    « novembre » (a month with no day before it stays: « Avril, 12 jours »)."""
     try:
         value = json.loads(text)
     except ValueError:
@@ -177,7 +195,7 @@ def undated(text):
         if isinstance(v, dict):
             for k, x in v.items():
                 if k == "words" and isinstance(x, list):
-                    v[k] = [w for w in x if not (isinstance(w, str) and w.isdigit() and len(w) <= 2)]
+                    v[k] = day_words_out(x)
                 else:
                     walk(x)
         elif isinstance(v, list):
