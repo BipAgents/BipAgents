@@ -1,10 +1,13 @@
 {
   "version": 1,
-  "comment": "The demo Carnet's trip (« Mode voyage ») and records, shared by the iPhone and Android apps (2026-10-23). Same shapes as GET /v1/notebook/page (trip) and /v1/notebook/records, dated from today: start_in (days), a booking's day (1 = the first day), {date+N} (« 14 novembre »), {day+N}/{day-N} (an ISO day), next_in (days to a record's next date). The trip page joins the demo's subjects (kind trip).",
+  "comment": "The demo Carnet's trip (« Mode voyage ») and records, shared by the iPhone and Android apps (2026-10-23). Same shapes as GET /v1/notebook/page (trip) and /v1/notebook/records, dated from today: start_in (days), a booking's day (1 = the first day), {date+N} (« 14 novembre »), {day+N}/{day-N} (an ISO day), next_in (days to a record's next date). The trip page joins the demo's subjects (kind trip). Each records type's and the trip's `categories`: the bridge's (contracts/carnet/sommaire.md §1), for the demo's sommaire.",
   "fr": {
     "trip": {
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
+      "categories": [
+        "trips"
+      ],
       "summary": "Quatre jours à Lisbonne avec Claire, du {date+12} au {date+15}. Vols et hôtel réservés.",
       "summary_agent": "daily",
       "destination": "Lisbonne, Portugal",
@@ -254,6 +257,10 @@
         "type": "purchase",
         "title": "Achats",
         "path": "Fiches/Achats.md",
+        "categories": [
+          "money",
+          "papers"
+        ],
         "fields": [
           {
             "id": "date",
@@ -328,6 +335,9 @@
         "type": "subscription",
         "title": "Abonnements",
         "path": "Fiches/Abonnements.md",
+        "categories": [
+          "money"
+        ],
         "fields": [
           {
             "id": "service",
@@ -389,6 +399,9 @@
         "type": "contract",
         "title": "Contrats et assurances",
         "path": "Fiches/Contrats et assurances.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "what",
@@ -432,6 +445,9 @@
         "type": "paper",
         "title": "Papiers",
         "path": "Fiches/Papiers.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "document",
@@ -466,6 +482,9 @@
         "type": "booking",
         "title": "Réservations",
         "path": "Fiches/Réservations.md",
+        "categories": [
+          "trips"
+        ],
         "fields": [
           {
             "id": "date",
@@ -539,6 +558,9 @@
     "trip": {
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
+      "categories": [
+        "trips"
+      ],
       "summary": "Four days in Lisbon with Claire, from {date+12} to {date+15}. Flights and hotel booked.",
       "summary_agent": "daily",
       "destination": "Lisbon, Portugal",
@@ -788,6 +810,10 @@
         "type": "purchase",
         "title": "Purchases",
         "path": "Records/Purchases.md",
+        "categories": [
+          "money",
+          "papers"
+        ],
         "fields": [
           {
             "id": "date",
@@ -862,6 +888,9 @@
         "type": "subscription",
         "title": "Subscriptions",
         "path": "Records/Subscriptions.md",
+        "categories": [
+          "money"
+        ],
         "fields": [
           {
             "id": "service",
@@ -923,6 +952,9 @@
         "type": "contract",
         "title": "Contracts and insurance",
         "path": "Records/Contracts and insurance.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "what",
@@ -966,6 +998,9 @@
         "type": "paper",
         "title": "Papers",
         "path": "Records/Papers.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "document",
@@ -1000,6 +1035,9 @@
         "type": "booking",
         "title": "Bookings",
         "path": "Records/Bookings.md",
+        "categories": [
+          "trips"
+        ],
         "fields": [
           {
             "id": "date",
@@ -1073,6 +1111,9 @@
     "trip": {
       "path": "Themen/Wochenende in Lissabon.md",
       "title": "Wochenende in Lissabon",
+      "categories": [
+        "trips"
+      ],
       "summary": "Vier Tage Lissabon mit Claire, vom {date+12} bis {date+15}. Flüge und Hotel gebucht.",
       "summary_agent": "daily",
       "destination": "Lissabon, Portugal",
@@ -1322,6 +1363,10 @@
         "type": "purchase",
         "title": "Käufe",
         "path": "Unterlagen/Käufe.md",
+        "categories": [
+          "money",
+          "papers"
+        ],
         "fields": [
           {
             "id": "date",
@@ -1396,6 +1441,9 @@
         "type": "subscription",
         "title": "Abonnements",
         "path": "Unterlagen/Abonnements.md",
+        "categories": [
+          "money"
+        ],
         "fields": [
           {
             "id": "service",
@@ -1457,6 +1505,9 @@
         "type": "contract",
         "title": "Verträge und Versicherungen",
         "path": "Unterlagen/Verträge und Versicherungen.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "what",
@@ -1500,6 +1551,9 @@
         "type": "paper",
         "title": "Ausweise und Papiere",
         "path": "Unterlagen/Ausweise und Papiere.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "document",
@@ -1534,6 +1588,9 @@
         "type": "booking",
         "title": "Buchungen",
         "path": "Unterlagen/Buchungen.md",
+        "categories": [
+          "trips"
+        ],
         "fields": [
           {
             "id": "date",
@@ -1607,6 +1664,9 @@
     "trip": {
       "path": "Temas/Fin de semana en Lisboa.md",
       "title": "Fin de semana en Lisboa",
+      "categories": [
+        "trips"
+      ],
       "summary": "Cuatro días en Lisboa con Claire, del {date+12} al {date+15}. Vuelos y hotel reservados.",
       "summary_agent": "daily",
       "destination": "Lisboa, Portugal",
@@ -1856,6 +1916,10 @@
         "type": "purchase",
         "title": "Compras",
         "path": "Registros/Compras.md",
+        "categories": [
+          "money",
+          "papers"
+        ],
         "fields": [
           {
             "id": "date",
@@ -1930,6 +1994,9 @@
         "type": "subscription",
         "title": "Suscripciones",
         "path": "Registros/Suscripciones.md",
+        "categories": [
+          "money"
+        ],
         "fields": [
           {
             "id": "service",
@@ -1991,6 +2058,9 @@
         "type": "contract",
         "title": "Contratos y seguros",
         "path": "Registros/Contratos y seguros.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "what",
@@ -2034,6 +2104,9 @@
         "type": "paper",
         "title": "Documentos personales",
         "path": "Registros/Documentos personales.md",
+        "categories": [
+          "papers"
+        ],
         "fields": [
           {
             "id": "document",
@@ -2068,6 +2141,9 @@
         "type": "booking",
         "title": "Reservas",
         "path": "Registros/Reservas.md",
+        "categories": [
+          "trips"
+        ],
         "fields": [
           {
             "id": "date",
