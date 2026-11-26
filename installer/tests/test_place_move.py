@@ -71,17 +71,21 @@ def test_the_target_lets_in_the_move_s_key_from_the_source_only(tmp_path):
         pm.folder("../etc", str(tmp_path))
 
 
-def test_the_forced_command_allows_rsync_receiving_under_the_place_s_home_only():
-    home = "/home/bip3"
-    ok = ["rsync", "--server", "-logDtpHrze.iLsfxCIvu", "--delete", "--partial", "--numeric-ids", ".",
-          "/home/bip3/.hermes/"]
-    assert pm.allowed_rsync(ok, home)
-    assert not pm.allowed_rsync(ok[:1] + ["--server", "--sender", "-logDtpr", ".", "/home/bip3/.hermes/"], home)
-    assert not pm.allowed_rsync(ok[:-1] + ["/etc/"], home)
-    assert not pm.allowed_rsync(ok[:-1] + ["/home/bip3/../bip/.hermes/"], home)
-    assert not pm.allowed_rsync(ok[:-1] + ["/home/bip30/x/"], home)
-    assert not pm.allowed_rsync(ok[:-1] + ["--rsync-path=sh", "/home/bip3/x/"], home)
-    assert not pm.allowed_rsync(["sh", "-c", "id", "/home/bip3/x"], home)
+def test_the_forced_command_allows_rsync_receiving_into_the_move_s_folders_only():
+    """Its last word names one of the move's folders (a root named at `prepare`, or the stage), never a path: the
+    target resolves it in its own folder of root's (security review 26/11, E1)."""
+    roots = {"hermes": ".hermes"}
+    ok = ["rsync", "--server", "-logDtpHrze.iLsfxCIvu", "--delete", "--partial", "--numeric-ids", ".", "roots/hermes/"]
+    assert pm.allowed_rsync(ok, roots) == "roots/hermes/"
+    assert pm.allowed_rsync(ok[:-1] + ["roots/hermes"], roots) == "roots/hermes"
+    assert pm.allowed_rsync(ok[:-1] + ["stage/"], roots) == "stage/"
+    assert pm.allowed_rsync(ok[:1] + ["--server", "--sender", "-logDtpr", ".", "roots/hermes/"], roots) is None
+    for wrong in ("/home/bip3/.hermes/", "/etc/", "roots/other/", "roots/hermes/x", "roots/../x", "stage",
+                  "roots/", "../roots/hermes/"):
+        assert pm.allowed_rsync(ok[:-1] + [wrong], roots) is None, wrong
+    assert pm.allowed_rsync(ok[:-1] + ["--rsync-path=sh", "roots/hermes/"], roots) is None
+    assert pm.allowed_rsync(ok[:-1] + ["--keep-dirlinks", "roots/hermes/"], roots) is None
+    assert pm.allowed_rsync(["sh", "-c", "id", "roots/hermes/"], roots) is None
 
 
 def test_owners_move_to_the_target_s_ids():
@@ -93,10 +97,21 @@ def test_owners_move_to_the_target_s_ids():
     assert pm.shifted(465536, src["uid"], dst["uid"], src["sub_uid"], dst["sub_uid"]) == 465536
 
 
-def test_folders_go_under_the_target_s_home_and_nothing_outside():
-    assert pm.rehome("/home/bip2/.hermes", "/home/bip2", "/home/bip3") == "/home/bip3/.hermes"
-    with pytest.raises(pm.MoveError):
-        pm.rehome("/srv/data", "/home/bip2", "/home/bip3")
+def test_the_plan_s_folders_are_followed_within_the_real_home_only(tmp_path):
+    home = tmp_path / "bip2"
+    (home / ".hermes").mkdir(parents=True)
+    stage = str(home / pm.STAGE)
+    plan = pm.checked_plan({"home": "/", "stage": stage, "roots": {"hermes": str(home / ".hermes")},
+                            "rules": {"hermes": ["- /cache"]}}, str(home))
+    assert plan == {"roots": {"hermes": ".hermes"}, "rules": {"hermes": ["- /cache"]}}   # the plan's « home » unused
+    for roots in ({"x": "/srv/data"}, {"x": str(home)}, {"x": str(home / ".." / "bip3")}, {"../x": str(home / "a")},
+                  {"a": str(home / "a"), "b": str(home / "a" / "b")}):
+        with pytest.raises(pm.MoveError):
+            pm.checked_plan({"stage": stage, "roots": roots}, str(home))
+    for rel in (".bipagents-move-in", ".local", ".local/state/bipagents/move-in/x", "/abs", "a/../b", ""):
+        with pytest.raises(pm.MoveError):
+            pm.checked_roots({"x": rel})
+    assert pm.checked_roots({"hermes": ".hermes", "data": ".local/share/bipagents"})
 
 
 def test_rsync_s_numbers_are_read():
@@ -207,7 +222,7 @@ def _home(root, name, port, door, address, browser_first):
 def _copy(plan, target_home):
     """What the root's rsync rounds do (with --delete): each root's tree over the target's."""
     for name, path in plan["roots"].items():
-        dest = Path(pm.rehome(path, plan["home"], str(target_home)))
+        dest = target_home / os.path.relpath(path, plan["home"])
         if Path(path).is_dir():
             if dest.exists():
                 shutil.rmtree(dest)
@@ -381,8 +396,8 @@ class _Channel:
             return {"ok": True, "verified": {"bridge": True}}
         return {}
 
-    def rsync(self, source, dest, rules=None, checksum=False, timeout=0):
-        type(self).copied.append((os.path.basename(source.rstrip("/")), checksum))
+    def rsync(self, home, rel, dest, rules=None, checksum=False, timeout=0):
+        type(self).copied.append((os.path.basename(rel.rstrip("/")), checksum))
         return 10, 1
 
 
@@ -392,8 +407,8 @@ def _a_move_out(tmp_path, monkeypatch, drain=True):
     home = tmp_path / "bip2"
     (home / ".hermes").mkdir(parents=True)
     (home / ".config" / "bipagents").mkdir(parents=True)
-    stage = home / "stage"
-    stage.mkdir()
+    stage = home / pm.STAGE
+    stage.mkdir(parents=True)
     entry = type("E", (), {"pw_dir": str(home), "pw_name": "bip2", "pw_uid": 4242, "pw_gid": 4242})
     monkeypatch.setattr(pm, "place", lambda n: entry)
     monkeypatch.setattr(pm, "Channel", _Channel)
@@ -474,7 +489,7 @@ def test_a_stopped_place_moves_without_its_bridge(tmp_path, monkeypatch):
     assert state["phase"] == "done" and state["drain_seconds"] == 0 and state["round"] == 1
     assert steps == ["move-out plan", "move-out stop"] and checked == [4242]
     assert _Channel.asked == ["info", "prepare", "finish"]
-    assert _Channel.copied == [(".hermes", False), (".hermes", True), ("stage", True)]
+    assert _Channel.copied == [(".hermes", False), (".hermes", True), ("move-stage", True)]
     assert json.loads((home / pm.MOVED_AWAY).read_text())["move"] == "m-0123456"
 
 

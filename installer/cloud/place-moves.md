@@ -188,8 +188,15 @@ The seat agent does not put these in the beat yet, because asking would wake sle
 ## Choices
 
 - **rsync over a one-time SSH channel, not restic to a target repository.** rsync sends only the changed parts of the
-  changed files. Each pre-copy round lands directly where the target place will run, so the switch only copies the
-  last minute's changes. There is no restore step during the downtime and no repository to clean up afterwards.
+  changed files. Each pre-copy round lands on the target place's own disk, so the switch only copies the last
+  minute's changes. There is no restore step during the downtime and no repository to clean up afterwards.
+- **Root never follows the place's word or its links** (security review of 26/11, E1). The plan comes from the
+  place's own account: each root must be a folder or file of its real home (pwd's), by its path there, with no link
+  on its way, and the rules are exclusions only. The source reads the home through a read-only `nosymfollow` bind of
+  it in a mount namespace of the copy's own, so a link swapped in fails the copy. The target receives into
+  `~/.bipagents-move-in`, a folder of root's alone (0700): `prepare` moves the fresh place's own folders there first,
+  each rsync writes from a descriptor of the folder checked (never a path through the home), and `finish` moves
+  them back into the home, by name, in folders opened without following a link.
   restic would add a repository's encryption and an extraction during the downtime. The SSH channel already
   encrypts and authenticates both ends with keys derived from the guichet's one-time key, with no fingerprint to
   relay.

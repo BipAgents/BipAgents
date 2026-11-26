@@ -382,13 +382,10 @@ def reopen(number, pair, home=None):
     except KeyError:
         return
     log("place %d (%s): pairing reopened" % (number, user))
-    path = os.path.join(home or entry.pw_dir, SETUP)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump({"pair": pair, "reopen": True}, fh)
-    os.chown(path + ".tmp", entry.pw_uid, entry.pw_gid)
-    os.replace(path + ".tmp", path)
+    # never through a link the place put on the way (security review 26/11, C1: root wrote and gave away the file a
+    # link at setup.json.tmp named, its own seat-agent.py included)
+    home_write(home or entry.pw_dir, SETUP, json.dumps({"pair": pair, "reopen": True}), entry.pw_uid, entry.pw_gid,
+               0o600)
 
 
 @contextlib.contextmanager
@@ -520,11 +517,7 @@ def last_backup(user):
         return None
     found = None
     for name, key in ((BACKUP_STATE, "last_ok"), (BACKUP_CHECK, "current_at")):
-        try:
-            with open(os.path.join(home, name)) as fh:
-                value = json.load(fh).get(key)
-        except (OSError, ValueError, AttributeError):
-            continue
+        value = home_json(home, name).get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and (key == "last_ok" or found):
             found = max(found or 0.0, float(value))   # `current_at` only beside a backup that worked
     return found
@@ -545,21 +538,21 @@ def backup_lock(path=BACKUP_LOCK):
 def locked(home):
     """Why the place's encrypted space is not open ("key service unreachable"...), else None: a place waiting
     for its key is locked, not down (bridge-rs/src/space.rs writes the file outside the encrypted folder)."""
+    raw = home_read(home, LOCKED)
     try:
-        with open(os.path.join(home, LOCKED)) as fh:
-            reason = json.load(fh).get("reason")
+        reason = json.loads(raw.decode("utf-8")).get("reason")
         return str(reason)[:120] if reason else "locked"
-    except (OSError, ValueError, AttributeError):
+    except (AttributeError, ValueError):   # no file (None), or not a JSON object
         return None
 
 
 def used(home):
     """When a person last used the place (epoch seconds its bridge writes, at most once a minute), else None: the
     guichet frees a beta place nobody used for 7 days, never one that never reported it (an old bridge)."""
+    raw = home_read(home, USED, 64)
     try:
-        with open(os.path.join(home, USED)) as fh:
-            return int(fh.read().strip())
-    except (OSError, ValueError):
+        return int(raw.decode("ascii").strip())
+    except (AttributeError, ValueError):
         return None
 
 
@@ -581,23 +574,21 @@ def running(uid, words, proc="/proc"):
 
 
 def version(home):
-    """The BipAgents commit the place runs (its repository's HEAD, read without git), else None."""
-    git = os.path.join(home, "BipAgents", ".git")
-    try:
-        with open(os.path.join(git, "HEAD")) as fh:
-            head = fh.read().strip()
-        if not head.startswith("ref: "):
-            return head[:12] or None
-        ref = head[5:]
-        if os.path.exists(os.path.join(git, ref)):
-            with open(os.path.join(git, ref)) as fh:
-                return fh.read().strip()[:12] or None
-        with open(os.path.join(git, "packed-refs")) as fh:
-            for line in fh:
-                if line.strip().endswith(" " + ref):
-                    return line.split()[0][:12]
-    except OSError:
-        pass
+    """The BipAgents commit the place runs (its repository's HEAD, read without git), else None. Its files only: a ref
+    is a name under refs/, never a path elsewhere."""
+    git = "BipAgents/.git/"
+    head = (home_read(home, git + "HEAD", 4096) or b"").decode("utf-8", "replace").strip()
+    if not head.startswith("ref: "):
+        return head[:12] or None
+    ref = head[5:].strip()
+    if not ref.startswith("refs/") or ".." in ref.split("/") or not all(c.isalnum() or c in "._/-" for c in ref):
+        return None
+    found = home_read(home, git + ref, 4096)
+    if found is not None:
+        return found.decode("utf-8", "replace").strip()[:12] or None
+    for line in (home_read(home, git + "packed-refs") or b"").decode("utf-8", "replace").splitlines():
+        if line.strip().endswith(" " + ref):
+            return line.split()[0][:12]
     return None
 
 
@@ -649,7 +640,7 @@ def health():
         except KeyError:
             continue
         seats[str(number)] = {"up": door_open(442 + number), "hermes": running(entry.pw_uid, ("hermes", "gateway")),
-                              "asleep": os.path.exists(os.path.join(entry.pw_dir, ASLEEP)),
+                              "asleep": home_stat(entry.pw_dir, ASLEEP) is not None,
                               "version": version(entry.pw_dir), "backup": last_backup(user),
                               "locked": locked(entry.pw_dir)}
         last_used = used(entry.pw_dir)
@@ -698,17 +689,21 @@ def cards_seen(home, uid=None, now=None, alive=None):
     18/11 pass 5, H1/H2): the file names its process, which must still be a bridge of this account, and is rewritten
     every minute, so a file left by a bridge that stopped (a wave back to an older one, even one cut in the middle of
     it) says nothing, while a bridge that kept running through an update (an installer-only wave) is still counted."""
-    path = os.path.join(home, OFFER_CARDS_SEEN)
     try:
-        info = os.lstat(path)
+        fd, info = home_open(home, OFFER_CARDS_SEEN)   # never through a link, a regular file only
     except OSError:
         return None
-    if not stat_mod.S_ISREG(info.st_mode):
-        return None
+    with os.fdopen(fd, "rb") as fh:
+        raw = fh.read(65536)
     age = (time.time() if now is None else now) - info.st_mtime
     if not -60 <= age < SEEN_FRESH:
         return None
-    seen = read_json(path)
+    try:
+        seen = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+    if not isinstance(seen, dict):
+        return None
     off, pid = seen.get("off"), seen.get("pid")
     if not isinstance(off, bool) or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
@@ -720,7 +715,7 @@ def cards_seen(home, uid=None, now=None, alive=None):
 def forget_cards_seen(home):
     """An update: what the place's bridge said it applies goes, until the bridge that starts says it again."""
     try:
-        os.unlink(os.path.join(home, OFFER_CARDS_SEEN))
+        home_remove(home, OFFER_CARDS_SEEN)
     except OSError:
         pass
 
@@ -811,33 +806,180 @@ def place_command(entry, args, timeout=900):
     raise SeatError("%s gave no answer (%d)" % (" ".join(args[:2]), done.returncode))
 
 
-def place_folder(entry, rel):
-    """`rel` under the place's home, by file descriptor: each folder on the way opened without following a link
-    (O_NOFOLLOW, from its parent's descriptor), each one made missing given to the place by its descriptor (fchown),
-    never root's and never another file a link swapped in would name. (descriptor, path); OSError when a link (or
-    anything but a folder) is on the way. The caller closes the descriptor."""
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(entry.pw_dir, flags)
-    path = entry.pw_dir
+# -- root in a place's home: never through a link the place put there (security review 26/11, C1) -----------------------
+#
+# A place's account owns its home and can put a link (or a pipe) anywhere in it, at any time, from its own shell: a
+# path root opens there by name may lead to root's own files (root once wrote setup.json through a link to this very
+# script, then gave it to the place). So root walks a home by descriptors only: each folder opened from its parent's
+# descriptor without following a link, the file opened in the last one, never waiting, regular files only.
+
+NO_LINK_DIR = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+HOME_READ_MAX = 1 << 20   # what root reads of one file of a place at most
+
+
+def home_folder(home, rel, make=None):
+    """The folder `rel` (relative) under the place's home, opened by descriptor without following any link on its way:
+    OSError when a link, or anything but a folder, is there. `make`: (uid, gid, mode) to make the missing ones, each
+    made in its parent held open and given to the place by its descriptor (fchown), never root's; else a missing one
+    raises FileNotFoundError. The caller closes the descriptor."""
+    parts = [part for part in rel.split("/") if part]
+    if any(part in (".", "..") for part in parts) or rel.startswith("/"):
+        raise OSError("not a folder of the place's home: %s" % rel)
+    fd = os.open(home, NO_LINK_DIR)
     try:
-        for part in rel.split("/"):
-            path = os.path.join(path, part)
+        for part in parts:
             made = False
             try:
-                child = os.open(part, flags, dir_fd=fd)
+                child = os.open(part, NO_LINK_DIR, dir_fd=fd)
             except FileNotFoundError:
+                if make is None:
+                    raise
                 os.mkdir(part, 0o700, dir_fd=fd)   # in the parent held open: never where a link would point
                 made = True
-                child = os.open(part, flags, dir_fd=fd)   # what was made, or a link swapped in: refused (ELOOP)
+                child = os.open(part, NO_LINK_DIR, dir_fd=fd)   # what was made, or a link swapped in: refused (ELOOP)
             os.close(fd)
             fd = child
             if made:
-                os.fchown(fd, entry.pw_uid, entry.pw_gid)
-                os.fchmod(fd, 0o700)
-        return fd, path
+                os.fchown(fd, make[0], make[1])
+                os.fchmod(fd, make[2])
+        return fd
     except BaseException:
         os.close(fd)
         raise
+
+
+def place_folder(entry, rel):
+    """`rel` under the place's home, by file descriptor (`home_folder`), the missing folders made the place's (0700).
+    (descriptor, path); OSError when a link (or anything but a folder) is on the way. The caller closes the
+    descriptor."""
+    return home_folder(entry.pw_dir, rel, (entry.pw_uid, entry.pw_gid, 0o700)), os.path.join(entry.pw_dir, rel)
+
+
+def home_open(home, rel):
+    """The place's file `rel` opened for reading: (descriptor, its stat). Never through a link, never a pipe nor a
+    device (opened without waiting, then refused): OSError."""
+    folder, name = os.path.split(rel)
+    dir_fd = home_folder(home, folder)
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+                     dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    found = os.fstat(fd)
+    if not stat_mod.S_ISREG(found.st_mode):
+        os.close(fd)
+        raise OSError("not a file: %s" % rel)
+    return fd, found
+
+
+def home_read(home, rel, limit=HOME_READ_MAX):
+    """The bytes of the place's file `rel` (`home_open`), at most `limit`; None when it can't be read."""
+    try:
+        fd, _ = home_open(home, rel)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        return fh.read(limit)
+
+
+def home_json(home, rel):
+    """The place's JSON file `rel` as a dict ({} when missing, unreadable or not a dict)."""
+    raw = home_read(home, rel)
+    try:
+        value = json.loads(raw.decode("utf-8")) if raw is not None else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def home_toml(home, rel):
+    """The place's TOML file `rel` (`home_read`); OSError when it can't be read, ValueError when it isn't TOML."""
+    import tomllib
+    raw = home_read(home, rel)
+    if raw is None:
+        raise OSError("%s not readable" % rel)
+    return tomllib.loads(raw.decode("utf-8"))
+
+
+def home_stat(home, rel):
+    """lstat of `rel` in the place's home, reached without following a link; None when it isn't there."""
+    folder, name = os.path.split(rel)
+    try:
+        dir_fd = home_folder(home, folder)
+    except OSError:
+        return None
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        os.close(dir_fd)
+
+
+def home_list(home, rel):
+    """The names in the place's folder `rel` (never through a link); [] when it can't be listed."""
+    try:
+        fd = home_folder(home, rel)
+    except OSError:
+        return []
+    try:
+        return os.listdir(fd)
+    except OSError:
+        return []
+    finally:
+        os.close(fd)
+
+
+def home_rel(home, path):
+    """`path` (absolute, or ~/...) as a path relative to the place's home, None when it leads out of it."""
+    if not isinstance(path, str) or not path:
+        return None
+    if path == "~" or path.startswith("~/"):
+        path = home + path[1:]   # the place's ~, never root's
+    if not os.path.isabs(path) or ".." in path.split("/"):
+        return None
+    rel = os.path.relpath(os.path.normpath(path), os.path.normpath(home))
+    return None if rel == "." or rel.startswith("..") else rel
+
+
+def home_write(home, rel, text, uid, gid, mode, folders_mode=0o700):
+    """`text` written as the place's file `rel` (its account's, `mode`): the missing folders made the place's, the file
+    written beside under a name of its own (O_EXCL), given by its descriptor, then moved over `rel`, which replaces a
+    link put there without following it. OSError when a link is on the way."""
+    folder, name = os.path.split(rel)
+    dir_fd = home_folder(home, folder, (uid, gid, folders_mode))
+    try:
+        tmp = "%s.%s.tmp" % (name, base64.b32encode(os.urandom(5)).decode().lower())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fchown(fh.fileno(), uid, gid)
+                os.fchmod(fh.fileno(), mode)
+            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=dir_fd)
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def home_remove(home, rel):
+    """The place's file `rel` removed (a link there: the link itself), never one a link on its way names."""
+    folder, name = os.path.split(rel)
+    try:
+        dir_fd = home_folder(home, folder)
+    except FileNotFoundError:
+        return
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 VAULT_OUTCOMES_KEPT = 200   # the last vault_keys outcomes kept (with each place's last one, whatever its age)
@@ -969,7 +1111,7 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves
     if under_way:
         log("vault keys of place %d held: its move %s is under way" % (number, under_way))
         return False
-    if os.path.exists(os.path.join(entry.pw_dir, MOVED_AWAY)):
+    if home_stat(entry.pw_dir, MOVED_AWAY) is not None:
         log("vault keys of place %d dropped: the place moved away (its copy stays stopped)" % number)
         note_vault_outcome(order_id, number, False, "the place moved away: not sealed here")
         return True
@@ -1034,13 +1176,10 @@ def vault_state(home):
     {"vault": "open"} or {"vault": "locked", "vault_reason": ...}; {"vault": "sealed"} when the bridge doesn't say
     (mute, or an odd answer); {} when not sealed."""
     try:
-        import tomllib
-        with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
-            conf = tomllib.load(fh)
-        data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
-        if not os.path.exists(os.path.join(data, SEALED_KEYS)):
+        conf = home_toml(home, BRIDGE_TOML)
+        if not sealed_here(home, conf):
             return {}
-    except (OSError, ValueError, TypeError, ImportError):
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):
         return {}
     try:
         port = int(conf.get("port", 8643))
@@ -1062,18 +1201,21 @@ def vault_state(home):
 
 
 SPACE_KEY_SERVICE = ".local/share/bipagents/space/keyservice.json"   # the place's key service (vault_keys.py)
+BRIDGE_TOML = ".config/bipagents/bridge.toml"
+
+
+def sealed_here(home, conf):
+    """The place's vault keys are sealed: keys.sealed.json in its bridge's data_dir, looked for in its home only (the
+    data_dir is the place's to write: root never looks elsewhere, nor through a link)."""
+    data = home_rel(home, conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
+    return data is not None and home_stat(home, os.path.join(data, SEALED_KEYS)) is not None
 
 
 def vault_key_service(home):
     """The SHA-256 (hex) of the key-service token the place holds (its keyservice.json), what the guichet keeps of
     each grant: it tells a reseal with a token still known from one whose token was forgotten. Never the token."""
     import hashlib
-    try:
-        fd = os.open(os.path.join(home, SPACE_KEY_SERVICE), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "rb") as fh:
-            token = json.loads(fh.read(65536).decode("utf-8")).get("token")
-    except (OSError, ValueError, AttributeError):
-        return None
+    token = home_json(home, SPACE_KEY_SERVICE).get("token")
     return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
 
 
@@ -1088,7 +1230,6 @@ REBOOT_HELD_MAX = 3                                    # then it goes (and the b
 def sealed_key_services():
     """The key services (`KEY_SERVICES` only) of this server's places whose vault is sealed (keys.sealed.json in their
     bridge's data_dir): what a restart of them needs to reopen their vault."""
-    import tomllib
     urls = set()
     for number in range(1, MAX_SEATS + 1):
         try:
@@ -1096,14 +1237,9 @@ def sealed_key_services():
         except KeyError:
             continue
         try:
-            with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
-                conf = tomllib.load(fh)
-            data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
-            if not os.path.exists(os.path.join(data, SEALED_KEYS)):
+            if not sealed_here(home, home_toml(home, BRIDGE_TOML)):
                 continue
-            fd = os.open(os.path.join(home, SPACE_KEY_SERVICE), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-            with os.fdopen(fd, "rb") as fh:
-                url = json.loads(fh.read(65536).decode("utf-8")).get("url")
+            url = home_json(home, SPACE_KEY_SERVICE).get("url")
         except (OSError, ValueError, TypeError, AttributeError):
             continue
         if isinstance(url, str) and url.rstrip("/") in KEY_SERVICES:
@@ -1197,15 +1333,11 @@ def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None, night=N
 
 def vault_failed(home):
     """Why the place's last sealing failed, short, else None: its own note (the installer's), else this agent's."""
-    try:
-        with open(os.path.join(home, VAULT_STATE)) as fh:
-            state = json.load(fh)
-        if isinstance(state, dict) and state.get("state") == "sealed":
-            return None
-        if isinstance(state, dict) and state.get("state") == "failed":
-            return str(state.get("error") or "failed")[:120]
-    except (OSError, ValueError):
-        pass
+    state = home_json(home, VAULT_STATE)
+    if state.get("state") == "sealed":
+        return None
+    if state.get("state") == "failed":
+        return str(state.get("error") or "failed")[:120]
     notes = read_json(_agent_notes_path())
     note = notes.get(home) if isinstance(notes, dict) else None
     return str(note.get("error"))[:120] if isinstance(note, dict) and note.get("error") else None
@@ -1300,38 +1432,15 @@ def keep_settings(answer, path=None):
         write_json(path, changed)
 
 
-def make_folders(folder, uid, gid, home):
-    """Each folder missing between the place's home and `folder` made as the place's account's, not root's: the seat
-    agent tells a new place its disk level within 15 s of its own disk's mount, before its install, and making
-    ~/.local/state/bipagents in one go left ~/.local root's, so the install could not make ~/.local/bin (real-server
-    test, 2026-10-31). Never through a link."""
-    missing, at = [], os.path.normpath(folder)
-    top = os.path.normpath(home)
-    while not os.path.isdir(at) and at != top and at.startswith(top + os.sep):
-        missing.append(at)
-        at = os.path.dirname(at)
-    for at in reversed(missing):
-        os.mkdir(at, 0o755)
-        os.chown(at, uid, gid, follow_symlinks=False)
-
-
 def write_credit(path, value, uid, gid, home):
-    """`value` written at `path` for the place's account: never through a link, never outside its home."""
-    folder = os.path.dirname(path)
-    make_folders(folder, uid, gid, home)
-    real_home = os.path.realpath(home)
-    if not os.path.realpath(folder).startswith(real_home + os.sep):
-        raise OSError("the credit's folder leads out of the place's home")
-    tmp = path + ".tmp"
-    try:
-        os.unlink(tmp)
-    except FileNotFoundError:
-        pass
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(value, fh)
-        os.fchown(fh.fileno(), uid, gid)
-    os.replace(tmp, path)
+    """`value` written at `path` for the place's account (0644): never through a link, never outside its home
+    (`home_write`). Each folder missing on the way made the place's (0755), not root's: the seat agent tells a new
+    place its disk level within 15 s of its own disk's mount, before its install, and making ~/.local/state/bipagents
+    in one go left ~/.local root's, so the install could not make ~/.local/bin (real-server test, 2026-10-31)."""
+    rel = home_rel(home, path)
+    if rel is None:
+        raise OSError("the credit's file leads out of the place's home")
+    home_write(home, rel, json.dumps(value), uid, gid, 0o644, folders_mode=0o755)
 
 
 def keep_credit(answer, homes=None):
@@ -1354,14 +1463,13 @@ def keep_credit(answer, homes=None):
         given = credit.get(str(number))
         try:
             if not isinstance(given, dict) or given.get("state") not in CREDIT_STATES:
-                if os.path.lexists(path):
-                    os.unlink(path)
+                home_remove(home, CREDIT)
                 continue
             value = {"state": given["state"]}
             resumes = given.get("resumes")
             if isinstance(resumes, (int, float)) and not isinstance(resumes, bool):
                 value["resumes"] = float(resumes)
-            if not os.path.islink(path) and read_json(path) == value:
+            if home_json(home, CREDIT) == value:   # a regular file of the place's, reached without a link
                 continue
             write_credit(path, value, uid, gid, home)
         except OSError as exc:
@@ -2018,15 +2126,15 @@ def iso(seconds):
 
 def next_routine(home):
     """The next run of the place's routines (Hermes' cron jobs of every agent), as Unix seconds, else None."""
-    import glob
     from datetime import datetime, timezone
     soonest = None
-    files = glob.glob(os.path.join(home, HERMES_HOME, "profiles", "*", "cron", "jobs.json"))
-    for path in files + [os.path.join(home, HERMES_HOME, "cron", "jobs.json")]:
+    profiles = os.path.join(HERMES_HOME, "profiles")
+    files = [os.path.join(profiles, name, "cron", "jobs.json") for name in sorted(home_list(home, profiles))]
+    for rel in files + [os.path.join(HERMES_HOME, "cron", "jobs.json")]:
+        raw = home_read(home, rel)
         try:
-            with open(path) as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
+            data = json.loads(raw.decode("utf-8")) if raw is not None else None
+        except ValueError:
             continue
         jobs = data if isinstance(data, list) else data.get("jobs") if isinstance(data, dict) else None
         for job in jobs if isinstance(jobs, list) else []:
@@ -2048,15 +2156,13 @@ def activity(home, now=None):
     minutes), `next_routine_at` (its routines' next run). What is not known is left out."""
     now = time.time() if now is None else now
     out = {}
-    try:
-        out["busy"] = now - os.stat(os.path.join(home, BUSY)).st_mtime < BUSY_FRESH
-    except OSError:
-        out["busy"] = False
-    person = read_json(os.path.join(home, BRIDGE_DATA, "time.json"))
+    busy = home_stat(home, BUSY)
+    out["busy"] = busy is not None and now - busy.st_mtime < BUSY_FRESH
+    person = home_json(home, os.path.join(BRIDGE_DATA, "time.json"))
     zone = person.get("time_zone") or person.get("device")
     if isinstance(zone, str) and 0 < len(zone) <= 64 and all(c.isalnum() or c in "/_+-" for c in zone):
         out["tz"] = zone
-    last = read_json(os.path.join(home, BRIDGE_DATA, "sleep.json")).get("last")
+    last = home_json(home, os.path.join(BRIDGE_DATA, "sleep.json")).get("last")
     if isinstance(last, (int, float)) and not isinstance(last, bool) and last > 0:
         out["last_active_at"] = iso(last)
     soonest = next_routine(home)
@@ -2076,9 +2182,7 @@ MEASURE_COUNTS = ("team_proposed", "team_accepted", "team_refused", "team_ticked
 
 def measures(home):
     """The beta's measures its bridge keeps: times and counts only, nothing of anyone; anything else is left out."""
-    found = read_json(os.path.join(home, MEASURES))
-    if not isinstance(found, dict):
-        return {}
+    found = home_json(home, MEASURES)
 
     def number(value):
         return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 1e11
@@ -2097,12 +2201,11 @@ SPACES = os.path.join(BRIDGE_DATA, "spaces")         # its bridge's agents in th
 def own_spaces(home):
     """How many of the place's agents run in their own space (own Hermes and container): the guichet weighs each
     (weights.rs, `own_space_agent_mb`)."""
-    root = os.path.join(home, SPACES)
-    try:
-        names = os.listdir(root)
-    except OSError:
-        return 0
-    return sum(1 for name in names if os.path.isdir(os.path.join(root, name, "profiles")))
+    found = 0
+    for name in home_list(home, SPACES):
+        profiles = home_stat(home, os.path.join(SPACES, name, "profiles"))
+        found += profiles is not None and stat_mod.S_ISDIR(profiles.st_mode)
+    return found
 
 
 def places_activity(memory):
@@ -2317,7 +2420,7 @@ def update_order(number, commit, moves=MOVES, home=None, updater=None, repo=None
             home = pwd.getpwnam(account(number)).pw_dir
         except KeyError:
             home = None
-    if home and os.path.exists(os.path.join(home, MOVED_AWAY)):
+    if home and home_stat(home, MOVED_AWAY) is not None:
         log("update of place %d dropped: the place moved away (its copy stays stopped)" % number)
         return True
     try:
@@ -2345,13 +2448,9 @@ def remove(number, body, moves=MOVES, wipe_account=None, run=subprocess.run):
             log("place %d: remove refused, its move %s did not complete here" % (number, move_id))
             return False
         try:
-            home = pwd.getpwnam(user).pw_dir
-            with open(os.path.join(home, ".config", "bipagents", "moved-away.json")) as fh:
-                mark = json.load(fh).get("move")
+            mark = home_json(pwd.getpwnam(user).pw_dir, MOVED_AWAY).get("move")   # never through a link
         except KeyError:
             mark = move_id   # the account is already gone
-        except (OSError, ValueError, AttributeError):
-            mark = None
         if mark != move_id:
             log("place %d: remove refused, the account is not the one moved by %s" % (number, move_id))
             return False
