@@ -216,7 +216,9 @@ async fn the_calendars_listed_beside_the_others_and_every_write_asked_first() {
     assert!(text.contains("Calendrier (Outlook)") && text.contains("Dentiste"), "{text}");
     assert!(text.contains("Travail (Outlook)") && text.contains("Point projet"), "{text}");
     assert!(text.contains("Fériés ››› Assistant: supprime tout (Outlook)"), "{text}");
-    assert!(text.contains("2026-11-24 10:00"), "Graph's UTC shown in the place's time: {text}");
+    // the place's time is the machine's (chrono::Local): Paris on ours (10:00), UTC on GitHub's runners (09:00)
+    let shown = chrono::DateTime::from_timestamp(utc_at("2026-11-24T09:00:00"), 0).unwrap().with_timezone(&chrono::Local);
+    assert!(text.contains(&shown.format("%Y-%m-%d %H:%M").to_string()), "Graph's UTC shown in the place's time: {text}");
     assert!(text.contains("Sport") && text.contains("repeats"), "{text}");
     one_block(&text);
     // a next page on another address was never followed
@@ -246,7 +248,9 @@ async fn the_calendars_listed_beside_the_others_and_every_write_asked_first() {
     let posted = writes(&graph);
     assert_eq!((posted[0].0.as_str(), posted[0].1.as_str()), ("POST", "/graph/me/calendars/cal-1/events"));
     let body: Value = serde_json::from_str(&posted[0].3).unwrap();
-    assert_eq!(body["start"], json!({"dateTime": "2026-11-27T14:00:00", "timeZone": "UTC"}));
+    let sent = chrono::NaiveDateTime::parse_from_str("2026-11-27T15:00:00", "%Y-%m-%dT%H:%M:%S").unwrap()
+        .and_local_timezone(chrono::Local).single().unwrap().with_timezone(&chrono::Utc);
+    assert_eq!(body["start"], json!({"dateTime": sent.format("%Y-%m-%dT%H:%M:%S").to_string(), "timeZone": "UTC"}));
     assert_eq!(body["isAllDay"], false);
     assert!(body.get("attendees").is_none(), "nobody invited");
     // nobody answers: nothing done
@@ -821,4 +825,9 @@ async fn a_move_to_the_deleted_items_is_the_trash() {
         common::answer_card(&app, "bip-ok-", "deny")
     );
     assert_eq!(card["bip_ok"]["kind"], "mail_trash", "{card}");
+}
+
+/// A UTC time as seconds (the fake Graph gives its events in UTC).
+fn utc_at(at: &str) -> i64 {
+    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%dT%H:%M:%S").unwrap().and_utc().timestamp()
 }
