@@ -404,7 +404,10 @@ store alone (StoreKit products and storefront, Play Billing products and country
   added one). When another approved device exists, it sends the new one the sealed keys; otherwise the guichet has the
   servers paired again with the new device (new keys). So the guichet can give access to whoever controls the email
   address (and the authenticator app): that is by design; every new device is reported to the others and by email
-  with a link that removes it (which changes the keys again), and logged. The authenticator's secret is kept encrypted
+  with a link that removes it (which changes the keys again), and logged. Removing a device, or a recovery, also
+  changes the subscription's purchase token and the claim token of each server paired again, and removes the SSH keys
+  on those servers: what the removed device kept opens nothing; the devices left use their own account token, and add
+  their SSH keys again (security review of 2026-11-26). The authenticator's secret is kept encrypted
   by the guichet. Recovery with no code at all (after 24 hours) stays for when email can't be received. The guichet
   never reads conversations.
 - On a server of the offer, the software is installed for Kerfy Studio and runs at a hosting provider. The app's
