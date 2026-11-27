@@ -250,17 +250,18 @@ async fn busy_hermes(State(fake): State<Busy>, request: Request) -> Response {
 /// target's turn goes on: the asker is told it is still on it (`Waiting`), the answer is kept in the pair's thread.
 #[tokio::test]
 async fn a_busy_target_is_never_cut_nor_said_unreachable() {
+    // its own pair (agents of its own): the pairs' turn locks are the process's, shared by the tests running alongside
     let fake = Busy { busy_polls: 3, ..Busy::default() };
     let url = spawn_fake(Router::new().fallback(busy_hermes).with_state(fake.clone())).await;
     let dir = tempfile::tempdir().unwrap();
     let mut d = config_dict(dir.path(), &Urls::default());
     d["agents"] = json!({
-        "Quotidien": {"hermes_url": format!("{url}/p/quotidien"), "hermes_key": "q".repeat(32)},
-        "Coach": {"hermes_url": format!("{url}/p/coach"), "hermes_key": "c".repeat(32)},
+        "Guide": {"hermes_url": format!("{url}/p/guide"), "hermes_key": "g".repeat(32)},
+        "Veille": {"hermes_url": format!("{url}/p/veille"), "hermes_key": "v".repeat(32)},
     });
     let config = parse_config(&d, None).unwrap();
-    let asker = config.agent(Some("quotidien")).unwrap().clone();
-    let target = config.agent(Some("coach")).unwrap().clone();
+    let asker = config.agent(Some("guide")).unwrap().clone();
+    let target = config.agent(Some("veille")).unwrap().clone();
     let http = reqwest::Client::new();
 
     // its turn ends after ~3 s, past the call's 1 s: its answer, never « couldn't answer »
@@ -268,9 +269,9 @@ async fn a_busy_target_is_never_cut_nor_said_unreachable() {
     assert_eq!(answer, Answer::Text("Trois offres sous 900 €.".into()));
     let calls = fake.calls.lock().unwrap().clone();
     assert!(!calls.iter().any(|(m, p, _)| m == "POST" && p.ends_with("/stop")), "the busy turn was stopped");
-    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("quotidien", "coach")).unwrap();
+    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("guide", "veille")).unwrap();
     let kinds: Vec<_> = pair.messages.iter().map(|m| (m.from.as_str(), m.kind.as_str(), m.text.as_str())).collect();
-    assert_eq!(kinds, [("quotidien", "ask", "Tu as trouvé quoi ?"), ("coach", "answer", "Trois offres sous 900 €.")]);
+    assert_eq!(kinds, [("guide", "ask", "Tu as trouvé quoi ?"), ("veille", "answer", "Trois offres sous 900 €.")]);
 }
 
 /// A fake Hermes where every turn in the target's first conversation of the pair fails at once (a conversation Hermes
