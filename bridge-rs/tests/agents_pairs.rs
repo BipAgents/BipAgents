@@ -272,3 +272,77 @@ async fn a_busy_target_is_never_cut_nor_said_unreachable() {
     let kinds: Vec<_> = pair.messages.iter().map(|m| (m.from.as_str(), m.kind.as_str(), m.text.as_str())).collect();
     assert_eq!(kinds, [("quotidien", "ask", "Tu as trouvé quoi ?"), ("coach", "answer", "Trois offres sous 900 €.")]);
 }
+
+/// A fake Hermes where every turn in the target's first conversation of the pair fails at once (a conversation Hermes
+/// or the model no longer takes: a turn left there, a history refused), its other conversations as usual.
+#[derive(Clone, Default)]
+struct Broken {
+    calls: Calls,
+    /// run id -> its session
+    runs: Arc<Mutex<std::collections::HashMap<String, String>>>,
+}
+
+async fn broken_hermes(State(fake): State<Broken>, request: Request) -> Response {
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let n = {
+        let mut calls = fake.calls.lock().unwrap();
+        calls.push((method.clone(), path.clone(), body.clone()));
+        calls.len()
+    };
+    match (method.as_str(), path.as_str()) {
+        ("POST", p) if p.ends_with("/api/sessions") => {
+            (axum::http::StatusCode::CREATED, axum::Json(json!({"session": {"id": format!("s{n}")}}))).into_response()
+        }
+        ("PATCH", _) => axum::Json(json!({})).into_response(),
+        ("POST", p) if p.ends_with("/v1/runs") => {
+            let run = format!("r{n}");
+            fake.runs.lock().unwrap().insert(run.clone(), body["session_id"].as_str().unwrap_or("").to_string());
+            (axum::http::StatusCode::ACCEPTED, axum::Json(json!({"run_id": run}))).into_response()
+        }
+        ("GET", p) if p.contains("/v1/runs/") => {
+            let run = p.rsplit('/').next().unwrap_or("").to_string();
+            let session = fake.runs.lock().unwrap().get(&run).cloned().unwrap_or_default();
+            if session == "s1" {
+                axum::Json(json!({"status": "failed", "error": "invalid_request_error: tool_call_ids did not have response \
+messages", "output": ""})).into_response()
+            } else {
+                axum::Json(json!({"status": "completed", "output": "Trois offres sous 900 €."})).into_response()
+            }
+        }
+        _ => (axum::http::StatusCode::NOT_FOUND, "no").into_response(),
+    }
+}
+
+/// 27/11, Alex's place: once the target's conversation of the pair failed every turn at once, every message after it
+/// came back « couldn't answer », for good (the conversation kept in the pair's book). Now the turn is tried once
+/// more in a new hidden conversation, and that one is kept.
+#[tokio::test]
+async fn a_conversation_that_fails_every_turn_is_replaced_once() {
+    let fake = Broken::default();
+    let url = spawn_fake(Router::new().fallback(broken_hermes).with_state(fake.clone())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = config_dict(dir.path(), &Urls::default());
+    d["agents"] = json!({
+        "Bip": {"hermes_url": format!("{url}/p/bip"), "hermes_key": "b".repeat(32)},
+        "Chasseur": {"hermes_url": format!("{url}/p/agent_a8c8e457"), "hermes_key": "c".repeat(32),
+                     "display_name": "Chasseur Mac"},
+    });
+    let config = parse_config(&d, None).unwrap();
+    let bip = config.agent(Some("bip")).unwrap().clone();
+    let target = config.agent(Some("chasseur")).unwrap().clone();
+    let http = reqwest::Client::new();
+
+    let answer = agent_pairs::ask(&http, None, &config, &bip, &target, "Tu as trouvé quoi ?", 30.0).await;
+    assert_eq!(answer, Answer::Text("Trois offres sous 900 €.".into()));
+    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("bip", "chasseur")).unwrap();
+    let kept = pair.sessions.get("chasseur").cloned().unwrap();
+    assert_ne!(kept, "s1", "the failing conversation is replaced");
+    // and the next message goes to the new one at once
+    let answer = agent_pairs::ask(&http, None, &config, &bip, &target, "Et le budget ?", 30.0).await;
+    assert_eq!(answer, Answer::Text("Trois offres sous 900 €.".into()));
+    let created = fake.calls.lock().unwrap().iter().filter(|(m, p, _)| m == "POST" && p.ends_with("/api/sessions")).count();
+    assert_eq!(created, 2, "one new conversation, kept");
+}
