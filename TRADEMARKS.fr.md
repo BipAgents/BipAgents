@@ -8,8 +8,9 @@ que ce sont les marques du projet : son nom et son icône.
 ## Les marques
 
 - Le nom **BipAgents** (écrit aussi **Bip Agents**).
-- L'icône de l'app : `App/Assets.xcassets/AppIcon.appiconset/`, `android/app/src/main/res/mipmap-*/`,
-  `android/app/src/main/res/values/ic_launcher_background.xml`, et ce que dessine `scripts/pixel/icon.py`.
+- L'icône de l'app, le Bip vert en pixels qui entre par le coin en haut à gauche d'un carré presque noir :
+  `scripts/pixel/app-icon.svg` et les images que `scripts/pixel/icon.py` en tire. L'icône précédente (le Bip rose en
+  blocs de pixels) reste aussi une marque.
 
 ## Ce que tu peux faire
 

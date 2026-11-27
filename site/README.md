@@ -72,8 +72,8 @@ from `scripts/pixel/pixel.json` (the build writes it next to the engine as `asse
 colours per kind of agent, states (rest with a blink, think, talk, work…), tap reactions and costumes as the apps. During
 an event (Halloween, Christmas, Easter…) the Bips one can tap wear its costumes; `?costumes=noel` (or `none`) previews
 another. `prefers-reduced-motion` shows each state's still moment. The brand mark, the favicon (`favicon.svg`,
-`icon-192.png`), the apple-touch-icon and the link previews use the app's icon « Relief classique, rose » (the SVG drawn by the
-same engine as `scripts/pixel/icon.py`, the PNGs from its iOS 1024). `/play/` (`src/bipagents/play.html`) lets one play
+`icon-192.png`), the apple-touch-icon and the link previews use the app's icon « 5d-4, Marqué » (the SVG of
+`scripts/pixel/app-icon.svg`, copied into the engine by `scripts/pixel/icon.py`, the PNGs from its iOS 1024). `/play/` (`src/bipagents/play.html`) lets one play
 with the eight Bips. Both sites use the engine. Tablée's colours are its « Table dressée » palette; its icon is redrawn
 in SVG.
 
