@@ -204,3 +204,71 @@ async fn a_reply_back_never_waits_on_the_pair_and_a_cycle_is_told_at_once() {
     let answer = agent_pairs::ask_in(&http, None, &config, &quotidien, &coach, "Et hier ?", 30.0, Some(&chain)).await;
     assert_eq!(answer, Answer::Text("Sept heures.".into()));
 }
+
+/// A fake Hermes whose Coach is busy: its turn is still running for `busy_polls` polls of its status (a long piece of
+/// work, or a turn Hermes runs after another one of Coach's), then ends with its answer.
+#[derive(Clone, Default)]
+struct Busy {
+    calls: Calls,
+    polls: Arc<std::sync::atomic::AtomicUsize>,
+    busy_polls: usize,
+}
+
+async fn busy_hermes(State(fake): State<Busy>, request: Request) -> Response {
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let n = {
+        let mut calls = fake.calls.lock().unwrap();
+        calls.push((method.clone(), path.clone(), body));
+        calls.len()
+    };
+    match (method.as_str(), path.as_str()) {
+        ("POST", p) if p.ends_with("/api/sessions") => {
+            (axum::http::StatusCode::CREATED, axum::Json(json!({"session": {"id": format!("s{n}")}}))).into_response()
+        }
+        ("PATCH", _) => axum::Json(json!({})).into_response(),
+        ("POST", p) if p.ends_with("/stop") => axum::Json(json!({"status": "stopping"})).into_response(),
+        ("POST", p) if p.ends_with("/v1/runs") => {
+            (axum::http::StatusCode::ACCEPTED, axum::Json(json!({"run_id": format!("r{n}")}))).into_response()
+        }
+        ("GET", p) if p.contains("/v1/runs/") => {
+            if fake.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < fake.busy_polls {
+                axum::Json(json!({"status": "running"})).into_response()
+            } else {
+                axum::Json(json!({"status": "completed", "output": "Trois offres sous 900 €."})).into_response()
+            }
+        }
+        _ => (axum::http::StatusCode::NOT_FOUND, "no").into_response(),
+    }
+}
+
+/// 27/11, Alex's place (1.1 final): Bip wrote to Chasseur Mac while Chasseur Mac was busy, its turn longer than the
+/// call's wait. The bridge stopped Chasseur Mac's turn and noted « couldn't answer » (`Answer::Unreachable`; Bip:
+/// « didn't answer, its server is busy or down »), its work and answer lost, every message after it the same. A busy
+/// target's turn goes on: the asker is told it is still on it (`Waiting`), the answer is kept in the pair's thread.
+#[tokio::test]
+async fn a_busy_target_is_never_cut_nor_said_unreachable() {
+    let fake = Busy { busy_polls: 3, ..Busy::default() };
+    let url = spawn_fake(Router::new().fallback(busy_hermes).with_state(fake.clone())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = config_dict(dir.path(), &Urls::default());
+    d["agents"] = json!({
+        "Quotidien": {"hermes_url": format!("{url}/p/quotidien"), "hermes_key": "q".repeat(32)},
+        "Coach": {"hermes_url": format!("{url}/p/coach"), "hermes_key": "c".repeat(32)},
+    });
+    let config = parse_config(&d, None).unwrap();
+    let asker = config.agent(Some("quotidien")).unwrap().clone();
+    let target = config.agent(Some("coach")).unwrap().clone();
+    let http = reqwest::Client::new();
+
+    // its turn ends after ~3 s, past the call's 1 s: its answer, never « couldn't answer »
+    let answer = agent_pairs::ask(&http, None, &config, &asker, &target, "Tu as trouvé quoi ?", 1.0).await;
+    assert_eq!(answer, Answer::Text("Trois offres sous 900 €.".into()));
+    let calls = fake.calls.lock().unwrap().clone();
+    assert!(!calls.iter().any(|(m, p, _)| m == "POST" && p.ends_with("/stop")), "the busy turn was stopped");
+    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("quotidien", "coach")).unwrap();
+    let kinds: Vec<_> = pair.messages.iter().map(|m| (m.from.as_str(), m.kind.as_str(), m.text.as_str())).collect();
+    assert_eq!(kinds, [("quotidien", "ask", "Tu as trouvé quoi ?"), ("coach", "answer", "Trois offres sous 900 €.")]);
+}
