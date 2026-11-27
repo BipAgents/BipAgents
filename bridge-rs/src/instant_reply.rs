@@ -38,6 +38,14 @@
 //! router's prompt cache stays on one provider; `[model] instant_line` can name another for a self-install) for 1 to
 //! 3 short sentences: what the agent starts on with the person's specifics, or a short direct answer from general
 //! knowledge; « - » when nothing is needed yet. No canned line here.
+//!
+//! **Never about the agent itself** (fix-instant-capabilities, Alex 27/11: « Je n'ai aucun outil pour contacter un
+//! autre agent », false): the line's model has no tools and reads only the person's lines, so it knows nothing of the
+//! agent's tools, access, accounts, other agents or earlier turns. Both lines' instructions say so (`NOT_ABOUT_ITSELF`):
+//! a message about the agent, or questioning what it did or said, gets « - »; and words about the agent itself (what it
+//! can't do, its tools, access, limits) are dropped in code whatever the model said (`about_itself`, fr/en/de/es/nl).
+//! Words added during a turn then get no line at all (`no_line`), not a sentence of the table; the turn's note, joined
+//! before the line is asked, says such words get none and that the turn answers them (`NO_LINE_THEN`).
 //! Parallel (Alex's choice, `FirstMode::Parallel`): the turn starts at once with a constant hidden note (`standing_note`:
 //! a line may be shown, go straight to work); the line is shown only if it comes while the turn has shown no words
 //! yet, and its words are then steered into the turn's next step (`first_note`, a new message after the tool results:
@@ -127,16 +135,21 @@ pub fn canned(lang: &str, mode: Mode) -> &'static str {
     list[TURN.fetch_add(1, Ordering::Relaxed) % list.len()]
 }
 
+/// The note's exception: words about the agent or questioning it get no line (`no_line`), the turn answers them. Said
+/// in the note itself: it is joined before the line's model has answered.
+const NO_LINE_THEN: &str = "no line if it asks about you or questions what you did or said: answer that yourself";
+
 /// The note joined to the words the agent gets: it was answered already.
 pub fn note(mode: Mode) -> String {
     match mode {
         Mode::Steered => format!(
             "{MARK} The app already answered this message at once, in your name, with one short line saying you take \
-it into account. Don't acknowledge, thank for or restate it again: just use it in your work and your answer.-->"
+it into account ({NO_LINE_THEN}). Don't acknowledge, thank for or restate it again: just use it in your work and your \
+answer.-->"
         ),
         Mode::Queued => format!(
             "{MARK} The app already answered this message at once, in your name, with one short line saying you deal \
-with it right after. Don't acknowledge or restate it again: start on it directly.-->"
+with it right after ({NO_LINE_THEN}). Don't acknowledge or restate it again: start on it directly.-->"
         ),
     }
 }
@@ -308,13 +321,30 @@ pub fn watch_first_words(state: &AppState, agent: &str, thread: &str, run: &str)
     });
 }
 
+/// Both lines' rule (fix-instant-capabilities, Alex 27/11 15:53: « Tes sûr que tu contactes le bon ? » got at once « Je
+/// n'ai aucun outil pour contacter un autre agent », false). The line's model has no tools and reads only the person's
+/// lines: it knows nothing of the agent's tools, access, accounts, other agents or earlier turns, so it never speaks of
+/// them, and never contests or corrects anything.
+const NOT_ABOUT_ITSELF: &str = "Never speak about yourself: what you can or cannot do, your tools, access, limits or \
+settings, other agents, the app; never say what you did or said before; never correct or contest anything.";
+/// A message the line leaves to the turn (« - »): about the agent itself, or questioning it.
+const ABOUT_YOU: &str = "about you (what you can or cannot do, your tools, access or settings, other agents, the app)";
+const CHALLENGES: &str = "questions or challenges something you did or said (« tu es sûr ? », « pourquoi tu… »)";
+/// What is never such a message (review: the « - » must not take the lines asked for work).
+const STILL_WORK: &str = "A request (even « tu peux… ? »), a go-ahead (« vas-y »), a new detail or a change of what to do \
+(« plutôt l'hôtel près de la gare ») is no message about you";
+
 /// The first message's instructions: what the agent says at once, in its language.
 pub fn first_system(agent_name: &str, role: &str, language: &str, now: &str) -> String {
     let role = if role.trim().is_empty() { String::new() } else { format!(" ({})", role.trim()) };
     format!(
         "You are {agent_name}{role}, a personal assistant working for your person through a chat app. They just sent \
 the message below. Your full answer (with your tools, your memory, their accounts and the web) starts right after; \
-first write what you say at once, in {language} (or in the language of their message if it is another).\n\
+first write what you say at once, in {language} (or in the language of their message if it is another). Here you know \
+nothing of your own tools, access, accounts, memory or settings, of other agents, nor of what you did or said before: \
+only your full answer does.\n\
+- If the message is {ABOUT_YOU}, asks how your work is going or what you did before (« où en es-tu ? », « tu l'as \
+envoyé ? »), or {CHALLENGES}: reply with a single -. {STILL_WORK}: see below.\n\
 - If the message asks for work (searching, comparing, booking, browsing, writing or sending something, their mail, \
 calendar, files or memory): 1 or 2 short sentences saying what you are starting on, with their specifics (places, \
 dates, people, criteria). Example: « Je compare les trains Lyon–Paris de samedi matin, en évitant les correspondances. » \
@@ -324,9 +354,9 @@ Say only what you start on now (searching, comparing, reading), never what you w
 a definition, a quick calculation, a simple tip): answer it directly. Money, health and legal questions are never \
 quick: say what you will look at.\n\
 - If it needs no words from you yet (thanks, ok, a greeting, a short reaction) or you are unsure: reply with a single -\n\
-Never invent what you cannot know here: prices, times, schedules, availability, opening hours, news, weather, search \
-results, anything from their mail, calendar, files, accounts or your memory. Never say that something is done, found, \
-sent or booked. Never promise a time. Never ask a question. No greeting, no name, no emoji, no markdown, no list. \
+{NOT_ABOUT_ITSELF} Never invent what you cannot know here: prices, times, schedules, availability, opening hours, \
+news, weather, search results, anything from their mail, calendar, files, accounts or your memory. Never say that \
+something is done, found, sent or booked. Never promise a time. Never ask a question. No greeting, no name, no emoji, no markdown, no list. \
 Reply with the text only.\n\
 It is now {now}."
     )
@@ -336,6 +366,9 @@ static SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[.!…](?:\s|$)
 
 /// The model's answer to a first message as the line shown, or None (« - », empty, a question, too long, too short).
 pub fn clean_first(answer: &str) -> Option<String> {
+    if dash(answer) {
+        return None;
+    }
     let text = THINK.replace_all(answer, "");
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let flat = flat.replace(['*', '`', '#'], "");
@@ -354,7 +387,9 @@ pub fn clean_first(answer: &str) -> Option<String> {
     // its first three sentences
     let cut = SENTENCE.find_iter(line).nth(2).map_or(line.len(), |m| m.start() + m.as_str().trim_end().len());
     let line = line[..cut].trim();
-    if line.chars().count() > FIRST_MAX || line.split_whitespace().count() < 3 || unsafe_line(line) {
+    // (about the agent itself anywhere in the answer, a sentence past the third too: the model took the message as one
+    // about the agent, its other sentences with it)
+    if line.chars().count() > FIRST_MAX || line.split_whitespace().count() < 3 || UNSAFE.is_match(line) || about_itself(&flat) {
         return None;
     }
     let mut out = line.to_string();
@@ -402,9 +437,99 @@ static UNSAFE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// A line never shown, whatever the prompt said (Relecture 1, B3): a link, a domain, an e-mail address, a phone
-/// number (a quoted page could have put them there), something « done », or advice on money, health or law.
+/// number (a quoted page could have put them there), something « done », advice on money, health or law, or words
+/// about the agent itself (`about_itself`).
 pub fn unsafe_line(line: &str) -> bool {
-    UNSAFE.is_match(line)
+    UNSAFE.is_match(line) || about_itself(line)
+}
+
+static ABOUT_ITSELF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)(?:",
+        // fr: « je ne peux pas », « je n'ai aucun outil », « je n'arrive pas », « je ne suis pas capable », « j'ai pas
+        // accès »…: the first person with a verb of ability, or having a tool or access (« je ne regarde que les vols
+        // directs », a verb of work, and « je n'ai plus besoin de Porto » stay)
+        r"\bje (?:ne |n['’])(?:y |en |le |la |les |lui |leur |te |t['’]|vous |me |m['’])?(?:peux|pourrai\w*|sais|saurai\w*|",
+        r"arrive|parviens|dispose|connais|accède|souviens|rappelle)\b|",
+        r"\bje (?:ne |n['’])(?:y |en |le |la |les |lui |leur |te |t['’])?(?:vois|trouve|retrouve) (?:pas|aucune?|rien|personne)\b|",
+        r"\bje ne suis (?:pas|plus) (?:capable|en mesure|autorisée?|habilitée?|connectée?|reliée?|sûre?|certaine?)\b|",
+        r"\bje ne suis qu['’]|",
+        r"\bje n['’](?:y |en |lui |leur |te |t['’]|vous )?ai (?:\w+ ){0,2}?(?:[dl]['’]|de |des |du |un |une )?(?:outils?|accès|",
+        r"moyens?|possibilités?|capacités?|droits?|autorisations?|connexions?|fonctions?|fonctionnalités?)\b|",
+        r"\bje n['’](?:y |en |lui |leur |te |t['’]|vous )?ai (?:pas|jamais|rien) (?:encore )?(?:dit|écrit|fait|contacté|envoyé|",
+        r"reçu|vu|joint)\b|",
+        r"\bje ne (?:\w+ )?(?:communique|dialogue|parle|échange|travaille) qu['’]|\bje (?:ne |n['’])[^.!…]{0,40}\bautres? agents?\b|",
+        r"\bje (?:peux|pourrai\w*|sais|saurai\w*|suis|connais|dispose) pas\b|\bj['’](?:arrive|y arrive|accède) pas\b|",
+        r"\bj['’]ai (?:(?:pas|aucune?|jamais|plus|bien|aussi|un|une|des|les|ni) )?(?:[dl]['’]|de |des |du |un |une )?(?:outils?|",
+        r"accès|moyens?|possibilités?|capacités?|droits?|autorisations?|connexions?|fonctions?|fonctionnalités?)\b|",
+        r"\bje dispose d['’](?:un |une |aucun )?(?:accès|outils?)\b|",
+        r"\b(?:mes|mon|ma) (?:outils?|accès|capacités|fonctions|fonctionnalités|limites|limitations|droits|autorisations|",
+        r"réglages|paramètres|configuration)\b|",
+        r"impossible pour moi|\bm['’]est (?:impossible|interdit|pas possible)|pas possible pour moi|",
+        r"hors de (?:ma portée|mes capacités|mes compétences)|",
+        r"\bje suis (?:incapable|dans l['’]impossibilité|limitée?|seulement|uniquement)\b|\bje (?:peux|pourrai\w*) (?:seulement|uniquement)\b|",
+        // (« en tant qu'IA, … »: never « en tant qu'agent de sécurité », a job)
+        r"\ben tant qu['’](?:ia|intelligence artificielle|modèle de langage)(?:[,.;:!—–]|$)|",
+        r"\bje suis (?:une? )?(?:ia|intelligence artificielle|modèle de langage|programme|bot|robot)\b|",
+        // (« je peux contacter / joindre / écrire à … »: what it can do, guessed as well)
+        r"\bje (?:peux|pourrai\w*|sais)(?: [\w'’]+){0,2}? (?:[tlms]['’])?(?:contacter|joindre|accéder|écrire|envoyer|parler|",
+        r"dialoguer|échanger|communiquer)\b|",
+        // en (« you can't divide by zero » stays: not the first person)
+        r"\bI (?:can['’]?t|cannot|can not|couldn['’]t|could not|won['’]t be able|am (?:unable|not able|not allowed|",
+        r"not authori[sz]ed|only able|limited|not set up|not equipped))\b|",
+        r"\bI['’]m (?:unable|not able|not allowed|not authori[sz]ed|only able|limited|not set up|not equipped)\b|",
+        r"\bI can only\b|\bI lack\b|not something I can|",
+        r"\bI (?:have no|haven['’]t got|have not got|don['’]t have|do not have|didn['’]t have|['’]ve no|['’]ve not got|have|",
+        r"['’]ve got|do have) (?:\w+ ){0,2}?(?:access|tools?|way to|means|ability|permission|connection)\b|",
+        r"\bI (?:haven['’]t|have not|didn['’]t|did not|never) (?:\w+ )?(?:contacted|sent|written|said|messaged|reached|told)\b|",
+        r"\bI (?:don['’]t|do not) (?:\w+ )?(?:know|see|get|reach|contact|access|remember|find)\b|",
+        r"\bmy (?:tools?|access|abilities|capabilities|limits|limitations|permissions|settings|configuration)\b|",
+        r"impossible for me|not possible for me|beyond my (?:abilities|capabilities|reach)|",
+        r"\bas an? (?:ai|language model)(?:[,.;:!—–]|$)|\bI(?:['’]m| am) (?:an? )?(?:ai|language model|bot|program)\b|",
+        r"\bI (?:can|could|am able to)(?: \w+){0,2}? (?:contact|reach|message|access|email|text|call|write to|talk to|speak to)\b|",
+        r"\bI\b[^.!…]{0,30}\b(?:can['’]?t|cannot|don['’]t|do not)\b[^.!…]{0,30}\bother agents?\b|",
+        // de (« man kann nicht durch null teilen » stays)
+        r"\bich (?:kann|könnte|darf|vermag)(?: \w+){0,2} (?:nicht|kein\w*|nur)\b|",
+        r"\b(?:kann|könnte|darf) ich(?: \w+){0,2} (?:nicht|kein\w*|nur)\b|",
+        r"\b(?:ich (?:habe|hab|besitze)|(?:habe|hab) ich)(?: \w+){0,2} (?:keine?n?|nicht) (?:\w+ )?(?:zugriff|zugang|werkzeug\w*|",
+        r"tools?|möglichkeit\w*|berechtigung\w*|verbindung|ahnung)\b|",
+        r"\bich (?:habe|hab) (?:auch |leider |hier |dafür )?(?:zugriff|zugang|werkzeuge?|tools?)\b|\bmir fehl(?:t|en)\b|",
+        r"\bich bin (?:\w+ )?(?:nicht|kein\w*) (?:in der lage|fähig|berechtigt|befugt|imstande|eingerichtet)\b|",
+        r"\bich bin (?:nur|lediglich)\b|\bich wei(?:ß|ss) (?:\w+ )?nicht\b|",
+        r"\b(?:meine|mein) (?:werkzeuge?|tools?|zugriffe?|zugänge|zugang|fähigkeiten|möglichkeiten|grenzen|einstellungen|rechte)\b|",
+        r"\b(?:es ist mir|mir ist es|ist mir) (?:\w+ )?(?:nicht möglich|unmöglich)\b|unmöglich für mich|",
+        r"\bals (?:eine? )?(?:ki|sprachmodell)(?:[,.;:!—–]|$)|\bich bin (?:eine? )?(?:ki|sprachmodell|bot|programm)\b|",
+        r"\bich kann(?: \w+){0,3} (?:kontaktieren|erreichen|zugreifen|anschreiben|schreiben|anrufen)\b|",
+        // es (« no se puede dividir entre cero », « ya no tengo en cuenta Porto » stay)
+        r"\bno (?:puedo|podré|podría|sé|consigo|logro|dispongo|conozco|encuentro|recuerdo|soy capaz|",
+        r"estoy (?:autorizad[oa]|en condiciones|segur[oa]|habilitad[oa]))\b|",
+        r"\bno tengo (?:\w+ )?(?:acceso|herramientas?|forma|manera|modo|posibilidad|capacidad|permiso|ni idea)\b|\bcarezco\b|",
+        r"\b(?:solo|sólo|solamente|únicamente) puedo\b|\btengo (?:acceso|herramientas?|una herramienta|la herramienta)\b|",
+        r"\bmis (?:herramientas|accesos|capacidades|funciones|límites|limitaciones|permisos|ajustes)\b|",
+        r"\bmi (?:acceso|herramienta|configuración)\b|",
+        r"\b(?:me es|me resulta) imposible\b|imposible para mí|\bno me es posible\b|",
+        r"\bcomo (?:una? )?(?:ia|modelo de lenguaje)(?:[,.;:!—–]|$)|\bsoy (?:una? )?(?:ia|modelo de lenguaje|bot|programa)\b|",
+        r"\bpuedo(?: \w+){0,3} (?:contactar|escribir|acceder|llamar|hablar)\w*|",
+        // nl (« delen door nul kan niet », « ik heb geen haast » stay)
+        r"\bik (?:kan|kon|mag)(?: \w+){0,2} (?:niet|geen|alleen|enkel|slechts)\b|\b(?:kan|kon|mag) ik(?: \w+){0,2} (?:niet|geen)\b|",
+        r"\bik (?:heb|had)(?: \w+){0,2} (?:geen|niet) (?:\w+ )?(?:toegang|tools?|hulpmiddel\w*|mogelijkheid|manier|idee|verbinding)\b|",
+        r"\bik heb (?:ook |wel |hier )?(?:toegang|tools?|hulpmiddel\w*)\b|\blukt (?:het )?me\b[^.!…]{0,20}\bniet\b|",
+        r"\bik ben (?:\w+ )?(?:niet|nooit) (?:in staat|bevoegd|gemachtigd)\b|\bik ben (?:alleen|slechts|maar)\b|",
+        r"\bik weet (?:\w+ )?niet\b|",
+        r"\bmijn (?:tools?|hulpmiddelen|toegang|mogelijkheden|grenzen|beperkingen|instellingen|rechten)\b|",
+        r"\bhet is (?:mij|me) (?:\w+ )?(?:niet mogelijk|onmogelijk)\b|onmogelijk voor mij|",
+        r"\bals (?:een )?(?:ai|taalmodel)(?:[,.;:!—–]|$)|\bik ben (?:een )?(?:ai|taalmodel|bot|programma)\b|",
+        r"\bik kan(?: \w+){0,3} (?:contacteren|bereiken|benaderen|schrijven|bellen|mailen|sturen)\b",
+        r")",
+    ))
+    .expect("valid regex")
+});
+
+/// Words about the agent itself, never said by the line (fix-instant-capabilities, Alex 27/11): what it can or can't do,
+/// its tools or access, its limits, that it is an AI; in the first person (je, I, ich, yo, ik) or with « my », in fr, en,
+/// de, es and nl. « Impossible », « on ne peut pas », « contacter » in the general sense are no such words.
+pub fn about_itself(text: &str) -> bool {
+    ABOUT_ITSELF.is_match(&text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// The first message's request body: 1 to 3 sentences, no thinking (GLM through EUrouter: its floor, with room).
@@ -647,10 +772,11 @@ pub fn system(agent_name: &str, language: &str, mode: Mode) -> String {
     format!(
         "You are {agent_name}, a personal assistant, busy working on a task for your person. They just sent a new \
 message while you work. Write the ONE short sentence you say back at once, in {language} (or in the language of their \
-new message if it is another), that restates in a few words what they just added and {what}.\n\
-Rules: one sentence, at most 15 words, warm and plain like a chat message. Never promise a result, a time or that \
-something is done. Never ask a question. No greeting, no name, no emoji, no quotes, no markdown. You use no tool. \
-Reply with the sentence only."
+new message if it is another), that restates in a few words what they just added and {what}. If their new message is \
+{ABOUT_YOU} or {CHALLENGES}, reply with a single - instead: your work answers it. {STILL_WORK}: restate it.\n\
+Rules: one sentence, at most 15 words, warm and plain like a chat message. {NOT_ABOUT_ITSELF} Never promise a result, \
+a time or that something is done. Never ask a question. No greeting, no name, no emoji, no quotes, no markdown. Call \
+no tool. Reply with the sentence (or the -) only."
     )
 }
 
@@ -680,9 +806,13 @@ fn cut(text: &str, max: usize) -> String {
 static THINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<think>.*?(?:</think>|$)").expect("valid regex"));
 static SENTENCE_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[.!…](?:\s|$)").expect("valid regex"));
 
-/// The model's answer as the sentence said, or None (empty, a question, too long, not words).
+/// The model's answer as the sentence said, or None (empty, a question, too long, not words, about the agent itself:
+/// `no_line` tells that last one apart, which gets no line at all).
 pub fn clean(answer: &str) -> Option<String> {
     let text = THINK.replace_all(answer, "");
+    if about_itself(&text) {
+        return None;
+    }
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     let line = line.trim_matches(|c: char| matches!(c, '"' | '«' | '»' | '“' | '”' | '*' | '`') || c.is_whitespace());
     // its first sentence
@@ -724,10 +854,30 @@ pub fn body(call: &Call, system: &str, user: &str, provider_order: &[String]) ->
     body
 }
 
-/// One call: the sentence (cleaned) and the tokens, or None.
-pub async fn ask(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(String, i64, i64)> {
+/// The model's answer to words sent while the agent works asks for no line at all (fix-instant-capabilities): its « - »
+/// (a message about the agent itself, or questioning something it did or said: the turn answers it), or words about
+/// the agent itself whatever was asked (`about_itself`). Neither its words nor a sentence of the table are said then.
+pub fn no_line(answer: &str) -> bool {
+    dash(answer) || about_itself(&THINK.replace_all(answer, ""))
+}
+
+/// The model's « - »: its first line, without quotes, markdown or a period, is a dash (what follows it is never said).
+fn dash(answer: &str) -> bool {
+    let text = THINK.replace_all(answer, "");
+    let first = text
+        .lines()
+        .map(|l| l.trim_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '«' | '»' | '“' | '”' | '*' | '`' | '.')))
+        .find(|l| !l.is_empty());
+    first.is_some_and(|l| matches!(l, "-" | "–" | "—"))
+}
+
+/// One call: the sentence (cleaned; None for `no_line`: none at all) and the tokens, or None (no usable answer).
+pub async fn ask(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(Option<String>, i64, i64)> {
     let (raw, input, output, _) = ask_raw(http, call, body).await?;
-    Some((clean(&raw)?, input, output))
+    if no_line(&raw) {
+        return Some((None, input, output));
+    }
+    Some((Some(clean(&raw)?), input, output))
 }
 
 /// One call: the model's words as they came, the tokens, and whether its token cap cut them; None (refused,
@@ -798,10 +948,16 @@ pub fn answer(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id:
             ask(&state.http, &call, &body).await
         };
         let (said, by_model) = match tokio::time::timeout(TIMEOUT, asked).await.ok().flatten() {
-            Some((said, input, output)) => {
+            Some((Some(said), input, output)) => {
                 // the place's AI usage counts it with its key (the router meters it): its tokens said here
                 tracing::info!(agent = %agent.name, tokens_in = input, tokens_out = output, "instant reply: the agent's model asked");
                 (said, true)
+            }
+            Some((None, input, output)) => {
+                // « - » or words about the agent itself: no line, the turn answers (fix-instant-capabilities)
+                tracing::info!(agent = %agent.name, thread = %thread.id, tokens_in = input, tokens_out = output,
+                               "instant reply: none (a message about the agent itself)");
+                return;
             }
             None => (canned(&lang, mode).to_string(), false),
         };
@@ -1135,5 +1291,153 @@ Their new message: plutôt le samedi");
         assert!(left.starts_with("plutôt samedi") && !left.contains("already showed") && left.contains("already answered"));
         // the kept characters: letters, digits, simple punctuation; quotes of any kind become spaces
         assert!(first_note("Ok 《 x 》「y」 ❝z❞").contains("« Ok   x   y   z  »"));
+    }
+
+    /// Alex's line of 27/11 15:53 (« Tes sûr que tu contactes le bon ? Son nom c'est Chasseur Mac mais son identifiant
+    /// est agent_a8c8e457 »), answered at once by the line's model, which knows none of the agent's tools.
+    const ALEX_LINE: &str = "Je n'ai aucun outil pour contacter un autre agent, quel que soit son identifiant — je ne peux \
+dialoguer qu'avec toi, ici. Si tu veux me faire passer un message à Chasseur Mac, il faudra le copier-coller toi-même de \
+son côté.";
+
+    /// fix-instant-capabilities (Alex 27/11): « les prémessages donnent des informations fausses sur les outils ». A line
+    /// that says what the agent can't do, or speaks of its tools or access, is never shown, whatever the model said: the
+    /// first message's line, and the line said to words added during a turn.
+    #[test]
+    fn a_line_about_the_agents_own_tools_or_limits_is_never_shown() {
+        let answers = [
+            ALEX_LINE,
+            // fr
+            "Je n'ai pas accès aux autres agents depuis cette conversation.",
+            "Je ne peux pas joindre Chasseur Mac, je ne dialogue qu'avec toi.",
+            "Je ne sais pas contacter un agent par son identifiant.",
+            "Je n'arrive pas à contacter cet agent pour l'instant.",
+            "Impossible pour moi de contacter un autre agent d'ici.",
+            "Je ne suis pas capable d'écrire à un autre agent.",
+            "J'ai pas d'outil pour ça, il faudra le faire toi-même.",
+            "Je peux pas écrire à Chasseur Mac, copie-lui le message toi-même.",
+            "Mes outils ne me permettent pas de joindre un autre agent.",
+            "Je n’ai aucun accès à ses messages, il faudra les lui transmettre.",
+            // en
+            "I don't have any tool to contact another agent, whatever its id.",
+            "I don't have access to other agents from here.",
+            "I can't reach Chasseur Mac, I can only talk with you here.",
+            "I'm unable to contact another agent by its identifier.",
+            "Sorry, I cannot message other agents directly.",
+            // de
+            "Ich kann keine anderen Agenten kontaktieren, nur mit dir sprechen.",
+            "Ich habe keinen Zugriff auf andere Agenten.",
+            "Das kann ich leider nicht, kopiere die Nachricht selbst.",
+            // es
+            "No puedo contactar con otro agente, sea cual sea su identificador.",
+            "No tengo acceso a otros agentes desde aquí.",
+            "No tengo ninguna herramienta para escribir a otro agente.",
+            // nl
+            "Ik kan geen andere agent bereiken, alleen met jou praten.",
+            "Ik heb geen toegang tot andere agenten.",
+            "Ik kan niet met Chasseur Mac praten, kopieer het bericht zelf.",
+            // said otherwise (relecture)
+            "Je ne communique qu'avec toi, ici.",
+            "Je ne gère pas les autres agents depuis cette conversation.",
+            "Je n'ai pas contacté Chasseur Mac.",
+            "Je ne suis qu'une IA, je ne vois que cette conversation.",
+            "J'ai accès à tes mails mais pas aux autres agents.",
+            "That's not something I can do from here.",
+            "I'm not set up to message other agents.",
+            "As an AI, I have no way to reach other agents.",
+            "Mir fehlt der Zugriff auf andere Agenten.",
+            "Carezco de herramientas para eso.",
+            "Dat lukt me helaas niet vanaf hier.",
+        ];
+        let kept: Vec<&str> = answers.into_iter().filter(|a| clean_first(a).is_some()).collect();
+        assert!(kept.is_empty(), "first message, kept: {kept:#?}");
+        // the line said to words added during a turn
+        let kept: Vec<&str> = answers.into_iter().filter(|a| clean(a).is_some() || !no_line(a)).collect();
+        assert!(kept.is_empty(), "words added, kept: {kept:#?}");
+    }
+
+    /// The other side: a quick answer or a line of work that says « impossible », « ne peut pas », « contacter » or
+    /// « joindre » in the general sense is still shown.
+    #[test]
+    fn a_quick_answer_saying_impossible_in_general_is_still_shown() {
+        for answer in [
+            "Il est impossible de diviser un nombre par zéro : le résultat n'est pas défini.",
+            "Un triangle de Penrose est une figure impossible : il ne peut pas exister en trois dimensions.",
+            "On ne peut pas recongeler une viande décongelée crue.",
+            "Je cherche comment contacter le service client de la SNCF pour ton remboursement.",
+            "Je regarde comment joindre la mairie de Lyon samedi matin.",
+            "Je ne regarde que les vols directs de samedi matin.",
+            "Je compare les trains Lyon–Paris de samedi matin, en évitant les correspondances.",
+            "You can't divide by zero: the result is undefined.",
+            "I'm comparing the Lyon–Paris trains on Saturday morning, without changes.",
+            "Man kann nicht durch null teilen, das Ergebnis ist undefiniert.",
+            "Ich vergleiche die Züge nach Berlin, die nicht umsteigen.",
+            "No se puede dividir entre cero, el resultado no está definido.",
+            "Busco pisos en Madrid que no tengan más de dos habitaciones.",
+            "Delen door nul kan niet, de uitkomst is niet gedefinieerd.",
+            "Ik zoek tandartsen in Utrecht die zaterdag open zijn.",
+            // (relecture) a job, a definition, the person's own memory of a place
+            "Je cherche des offres en tant qu'agent de sécurité à Lille.",
+            "Je cherche des postes en tant qu'assistante de direction à Lyon.",
+            "I'm looking for roles as an AI engineer in Berlin.",
+            "Ich suche Stellen als Assistentin in München.",
+            "Busco ofertas como asistente en Madrid.",
+            "Ik zoek vacatures als assistent in Utrecht.",
+            "Un modèle de langage est un programme qui prédit le mot suivant.",
+            "A language model predicts the next word from the previous ones.",
+            "Je regarde dans ma mémoire le resto de Lyon que tu avais aimé.",
+        ] {
+            assert_eq!(clean_first(answer).as_deref(), Some(answer), "{answer}");
+        }
+        // words added during a turn, restated with « have … access », « no tengo en cuenta », « ik heb geen haast »
+        for said in [
+            "Noté, plutôt les vols directs, j'en tiens compte.",
+            "Noté, j'ai bien compris : accès PMR indispensable.",
+            "Noté, je n'ai plus besoin de regarder Porto.",
+            "Got it, I have no preference between the two hotels.",
+            "Notiert, ich habe den barrierefreien Zugang im Blick.",
+            "Anotado, tengo en cuenta el acceso directo a la playa.",
+            "Anotado, ya no tengo en cuenta Porto.",
+            "Genoteerd, ik heb geen haast met Porto.",
+        ] {
+            assert!(!no_line(said), "{said}");
+            assert_eq!(clean(said).as_deref(), Some(said), "{said}");
+        }
+    }
+
+    /// Words added during a turn: the model's « - » or a sentence about the agent itself gives no line at all, never a
+    /// sentence of the table in its place (that one stays for a model that failed: empty, too long, a question).
+    #[test]
+    fn words_about_the_agent_itself_get_no_line_rather_than_the_tables() {
+        for answer in ["-", " – ", "—", "«-»", "-.", "<think>hm</think>\n-", "Je n'ai aucun outil pour contacter un autre agent.",
+                       "Noté.\nI can't reach other agents from here.", "-\nC'est le bon agent, je vérifie son identifiant."] {
+            assert!(no_line(answer), "{answer:?}");
+        }
+        // a « - » first, then words: never shown for a first message either
+        assert!(clean_first("-\nC'est bien le bon agent, son identifiant est le bon.").is_none());
+        assert!(clean_first("- Je compare les trains de samedi matin.").is_some(), "a bullet, not « - »");
+        let long = "très long ".repeat(30);
+        for answer in ["", "Tu veux que je regarde aussi Porto ?", long.as_str(),
+                       "Compris, plus de langue ni de dents, je l'intègre.", "- plutôt samedi, noté"] {
+            assert!(!no_line(answer), "{answer:?}");
+        }
+    }
+
+    /// Both lines' instructions: never about the agent itself (its tools, access, limits, other agents, the app, what it
+    /// did or said before), never a correction; a message about the agent or questioning an answer gets « - ».
+    #[test]
+    fn the_lines_never_speak_of_the_agent_itself() {
+        for s in [first_system("Bip", "", "French", "x"), system("Bip", "French", Mode::Steered), system("Bip", "French", Mode::Queued)] {
+            assert!(s.contains("Never speak about yourself: what you can or cannot do, your tools, access, limits or \
+settings, other agents, the app"), "{s}");
+            assert!(s.contains("never say what you did or said before") && s.contains("never correct or contest anything"), "{s}");
+            assert!(s.contains("questions or challenges something you did or said") && s.contains("single -"), "{s}");
+            // (relecture) a request, a go-ahead, a correction of what to do stay work: they get their line
+            assert!(s.contains("A request (even « tu peux… ? »), a go-ahead (« vas-y »), a new detail or a change of what \
+to do"), "{s}");
+        }
+        // the turn's note holds when no line was shown (it is joined before the line's model answers)
+        for mode in [Mode::Steered, Mode::Queued] {
+            assert!(note(mode).contains("no line if it asks about you or questions what you did or said: answer that yourself"));
+        }
     }
 }

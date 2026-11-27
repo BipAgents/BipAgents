@@ -172,3 +172,43 @@ def test_a_turn_restarted_with_the_words_answers_by_itself(bridges, fakes):
     time.sleep(2)
     assert instant(bridge, thread, "C1D00000-0000-4000-8000-0000000001E2") is None
     assert not any("while you work" in c["body"]["messages"][0]["content"] for c in fakes.model.chats)
+
+
+def test_a_question_about_the_agent_during_its_turn_gets_no_line(bridges, fakes):
+    # fix-instant-capabilities (Alex 27/11): the line's model knows none of the agent's tools; a sentence about the
+    # agent's own tools, access or limits is never shown, and no sentence of the table in its place either
+    bridge, thread = setup(bridges, fakes)
+    gate = threading.Event()
+    busy_turn(fakes, gate)
+    fakes.model.instant_answer = "Je n'ai aucun outil pour contacter un autre agent."
+    send(bridge, thread, "C1D00000-0000-4000-8000-0000000001F1", "Écris à Chasseur Mac pour lui demander son planning")
+    assert run_has(bridge, "r1", "tool.started", agent="coach")
+    cid = "C1D00000-0000-4000-8000-0000000001F2"
+    steered = send(bridge, thread, cid, "Tes sûr que tu contactes le bon ? Son identifiant est agent_a8c8e457")
+    assert steered["state"] == "steered"
+    asked = lambda: [c for c in fakes.model.chats if "while you work" in c["body"]["messages"][0]["content"]]
+    assert wait_until(asked, timeout=3)
+    time.sleep(1.0)
+    assert instant(bridge, thread, cid) is None, instant(bridge, thread, cid)
+    system = asked()[-1]["body"]["messages"][0]["content"]
+    assert "Never speak about yourself" in system and "single -" in system
+    # the turn's note, joined before the line was asked, says such words get no line: the turn answers them
+    steer = next(s for s in fakes.hermes.steers if "agent_a8c8e457" in str(s["body"].get("input")))["body"]["input"]
+    assert MARK in steer and "no line if it asks about you or questions what you did or said: answer that yourself" in steer
+    gate.set()
+
+
+def test_words_the_model_gives_no_sentence_to_get_none_rather_than_the_tables(bridges, fakes):
+    # its « - » (a message about the agent, or questioning what it did): no line at all, never « Noté, j'en tiens compte »
+    bridge, thread = setup(bridges, fakes)
+    gate = threading.Event()
+    busy_turn(fakes, gate)
+    fakes.model.instant_answer = "-"
+    send(bridge, thread, "C1D00000-0000-4000-8000-0000000001F3", "Réserve l'hôtel près de la gare")
+    assert run_has(bridge, "r1", "tool.started", agent="coach")
+    cid = "C1D00000-0000-4000-8000-0000000001F4"
+    assert send(bridge, thread, cid, "Pourquoi tu as choisi celui-là ?")["state"] == "steered"
+    assert wait_until(lambda: any("while you work" in c["body"]["messages"][0]["content"] for c in fakes.model.chats), timeout=3)
+    time.sleep(1.0)
+    assert instant(bridge, thread, cid) is None, instant(bridge, thread, cid)
+    gate.set()

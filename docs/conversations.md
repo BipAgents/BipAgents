@@ -694,7 +694,11 @@ work »). The line is asked of the agent's own model (same key and pinned provid
 another on a self-install): 1 to 3 short sentences, or « - ». It is shown (`i_<client_id>`, `instant: true`, `first:
 true`, right under the message) only if it comes while the turn has shown no words yet; its words then go to the turn at
 its next step (a steered note, a new message: append-only, the prompt cache stays whole). Never a link, an address, a
-phone number, « done », or money/health/law advice (dropped in code). An agent whose lines keep coming too late gets
+phone number, « done », or money/health/law advice (dropped in code). Never about the agent itself (27/11: the line's
+model knows none of its tools, access, other agents or earlier turns): a message about the agent or questioning what it
+did or said gets « - », and a line on what the agent can't do, its tools or access is dropped in code (fr/en/de/es/nl);
+for words added during a turn, no line at all then (not a sentence of the table; the turn's note says such words get
+none and that it answers them). An agent whose lines keep coming too late gets
 none for 30 min (`Adapt`). The layout gives a turn with a `first` line no app first word (`ack`); a queued message's
 line keeps the layout it had. None in a family agent's common conversation or for a read-only share's turn
 (`instructions`); Live, routines and tasks never go through this send.
