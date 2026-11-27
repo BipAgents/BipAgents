@@ -335,6 +335,40 @@ def _goal_gates(folder: Path, out: List[str]) -> None:
         db.close()
 
 
+LOCK_FILE = ".bipagents-profile.lock"   # the bridge's profile lock (bridge-rs/src/profile_files.rs LOCK_FILE)
+
+
+class _ProfileLock:
+    """The bridge's lock of a profile while its files are written (flock, as profile_files.rs: its writes and these
+    never cross); waits up to 30 s, then writes anyway (a restore's bridge is stopped)."""
+
+    def __init__(self, folder: Path):
+        self.folder, self.fh = folder, None
+
+    def __enter__(self):
+        import fcntl
+        import time
+        try:
+            fd = os.open(self.folder / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            return self
+        self.fh = os.fdopen(fd, "r+")
+        deadline = time.time() + 30
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() > deadline:
+                    return self
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        if self.fh is not None:
+            self.fh.close()
+        return False
+
+
 def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home: Optional[Path] = None,
                hub_backend: Optional[str] = None) -> List[str]:
     """The code of a Hermes home (a profile, or a hub's root) taken out: `paths` (an empty folder is left, unsaid),
@@ -352,13 +386,14 @@ def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home:
                 _remove(path)
     config = folder / "config.yaml"
     if config.is_file():
-        data = _read_yaml(config)
-        before = json.dumps(data, sort_keys=True, default=str)
-        _code_settings(data, out, own, home)
-        if own:
-            _own_terminal(data, out, hub_backend)
-        if json.dumps(data, sort_keys=True, default=str) != before:
-            _write_yaml(config, data)
+        with _ProfileLock(folder):   # read and written under the bridge's lock (a connector it adds is never lost)
+            data = _read_yaml(config)
+            before = json.dumps(data, sort_keys=True, default=str)
+            _code_settings(data, out, own, home)
+            if own:
+                _own_terminal(data, out, hub_backend)
+            if json.dumps(data, sort_keys=True, default=str) != before:
+                _write_yaml(config, data)
     _cron(folder, out)
     _goal_gates(folder, out)
     return out
@@ -429,6 +464,11 @@ def own_sandbox_value(name: str, value: str) -> bool:
 
 
 def _env(folder: Path, out: List[str], own: bool) -> None:
+    with _ProfileLock(folder):
+        _env_locked(folder, out, own)
+
+
+def _env_locked(folder: Path, out: List[str], own: bool) -> None:
     path = folder / ".env"
     lines = _env_lines(path)
     if not lines:
@@ -612,13 +652,28 @@ def clean_main(argv: List[str]) -> int:
         print(json.dumps({"error": type(exc).__name__}))
         return 1
     labels = sorted({label for out in found.values() for label in out})
-    if found:
-        state = base / STATE
-        state.parent.mkdir(parents=True, exist_ok=True)
-        state.write_text(json.dumps({"at": time.time(), "left_out": labels}), encoding="utf-8")
+    state = base / STATE
+    try:
+        kept = json.loads(state.read_text(encoding="utf-8")) if state.is_file() else {}
+    except (OSError, ValueError):
+        kept = {}
+    restart = bool(found) or kept.get("restart_pending") is True   # a restart that failed before: tried again
+    failed = []
+    if restart:
         runner = hermes.Runner()
         for how, name in update.gateway_units():
-            if how == "systemd":
-                runner.run(["systemctl", "--user", "try-restart", name], check=False)
+            if how != "systemd":
+                continue
+            try:
+                runner.run(["systemctl", "--user", "try-restart", name])
+            except RuntimeError:
+                failed.append(name)
+    if found or restart:
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"at": time.time(), "left_out": sorted(set(labels) | set(kept.get("left_out") or [])),
+                                     "restart_pending": bool(failed)}), encoding="utf-8")
+    if failed:   # what its gateway loaded is still in it: not done (the seat agent tries again at its next check)
+        print(json.dumps({"error": "gateway not restarted", "profiles": len(found)}))
+        return 1
     print(json.dumps({"profiles": len(found), "labels": len(labels)}))
     return 0

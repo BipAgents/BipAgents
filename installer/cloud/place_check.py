@@ -24,11 +24,12 @@ LOGIN_FILES = (".bash_profile", ".bash_login", ".profile", ".bashrc", ".bash_log
 UNIT = re.compile(r"(bipagents-[A-Za-z0-9@._-]+|hermes-gateway[A-Za-z0-9@._-]*)\.(service|timer|path|socket)$")
 WANTS = re.compile(r"[A-Za-z0-9@._-]+\.(wants|requires)$")
 # What a unit of ours starts (the program's name, never its arguments).
-EXEC_OK = {"python3", "python", "python3.12", "python3.13", "python3.14", "bipbridge", "hermes", "podman", "bash",
+EXEC_OK = {"python3", "python", "python3.12", "python3.13", "python3.14", "bipbridge", "hermes", "podman", "bash", "kill",
            "sh", "env", "uv", "systemctl", "true", "rm", "mkdir", "sleep", "restic", "bip-browser-mcp", "nice",
            "ionice", "flock", "timeout"}
 # Processes of a place's account outside its containers (the host side): what a place runs.
 PROC_OK = {"systemd", "(sd-pam)", "sd-pam", "bipbridge", "bip-browser-mcp", "hermes", "python3", "python",
+           "gocryptfs", "fusermount3", "fusermount",   # an encrypted place's space (bridge-rs/src/space.rs)
            "python3.12", "python3.13", "python3.14", "podman", "conmon", "catatonit", "pasta", "pasta.avx2",
            "slirp4netns", "rootlessport", "rootlessport-ch", "dbus-daemon", "dbus-broker", "dbus-broker-lau",
            "restic", "systemctl", "journalctl", "uv", "git", "aardvark-dns", "netavark", "crun", "runc",
@@ -186,18 +187,43 @@ def accounts(wanted):
 
 # The line uv's installer (install.sh) adds to the login files of every place.
 UV_LINES = (b'. "$HOME/.local/bin/env"\n', b'\n. "$HOME/.local/bin/env"\n')
+# What the installers append to a login file of a place: uv's line (install.sh), Hermes' (its scripts/install.sh
+# append_shell_path: « # Hermes Agent command » and SHELL_PATH_LINE, Hermes v0.23.1). A login file is expected when,
+# these blocks taken out, it is the skeleton's.
+HERMES_PATH_LINE = (b'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac')
+KNOWN_APPENDS = (b"\n# Hermes Agent command\n" + HERMES_PATH_LINE + b"\n",) + UV_LINES
+# uv's ~/.local/bin/env (its installer's), line by line: whatever its version, only these.
+UV_ENV_LINES = re.compile(r'(\s*(#.*)?|case ":\$\{PATH\}:" in|\s*\*:"(\$HOME|/home/[a-z0-9]+)/\.local/bin":\*\)|\s*;;|\s*\*\)'
+                          r'|\s*export PATH="(\$HOME|/home/[a-z0-9]+)/\.local/bin:\$PATH"|esac)')
+
+
+# Hermes' older installers (before v0.23): `echo ""; echo "# Hermes Agent ..."; echo 'export PATH=...'`.
+OLD_HERMES_APPEND = re.compile(rb'\n?# Hermes Agent[^\n]*\n(export PATH="(\$HOME/\.local/bin|/usr/local/bin):\$PATH"|'
+                               + re.escape(HERMES_PATH_LINE) + rb')\n')
+
+
+def expected_login(data, skeleton):
+    """A login file as the installers leave it: the skeleton's, plus their blocks only."""
+    rest = data
+    for block in KNOWN_APPENDS:
+        rest = rest.replace(block, b"")
+    rest = OLD_HERMES_APPEND.sub(b"", rest)
+    return skeleton is not None and rest.rstrip(b"\n") == skeleton.rstrip(b"\n")
+
+
+def uv_env(data):
+    return all(UV_ENV_LINES.fullmatch(line) for line in data.decode("utf-8", "replace").splitlines())
 
 
 def skel():
-    """Each login file's fingerprints a place may have: the skeleton's, alone or with uv's line."""
+    """Each login file of the skeleton, by name (its bytes)."""
     out = {}
     for name in LOGIN_FILES:
         try:
             with open(p("/etc/skel/" + name), "rb") as fh:
-                data = fh.read(MAX)
+                out[name] = fh.read(MAX)
         except OSError:
             continue
-        out[name] = {short(data)} | {short(data + line) for line in UV_LINES}
     return out
 
 
@@ -532,30 +558,76 @@ def hermes_findings(home_fd, rel, home, out):
             out.append(f"{where}: .env {','.join(sorted(set(odd)))}")
 
 
-def processes(uid):
-    """The account's processes outside its containers: (comm, unit, exe folder) for those not expected."""
-    odd = []
+# Programs a transient scope of a place may hold (the bridge's registries' proxy: `systemd-run --user --scope` without a
+# name, sandbox.rs in_own_scope: podman, then its conmon), from the system's folders only.
+SYSTEMD_OWN = {"systemd-tmpfiles-clean.service", "systemd-tmpfiles-setup.service", "systemd-exit.service",
+               "systemd-tmpfiles-setup-dev.service"}   # the user manager's own, passing
+SCOPE_OK = {"podman", "conmon", "catatonit", "pasta", "pasta.avx2", "slirp4netns", "rootlessport", "rootlessport-ch",
+            "aardvark-dns", "netavark"}
+SYSTEM_BIN = ("/usr/bin/", "/usr/libexec/", "/usr/lib/", "/bin/", "/usr/sbin/", "/sbin/")
+RUN_SCOPE = re.compile(r"run-[A-Za-z0-9]+\.scope")
+# What a passing process or unit needs to last to be told: two looks this far apart (seconds; PLACES_SETTLE for tests).
+SETTLE = float(os.environ.get("PLACES_SETTLE", "5"))
+_LOOKS = {}
+
+
+def _proc_look():
+    """{pid: (uid, start, comm, unit, exe)} of every process outside a container."""
+    seen = {}
     proc = p("/proc")
     for pid in os.listdir(proc) if os.path.isdir(proc) else []:
         if not pid.isdigit():
             continue
         base = f"{proc}/{pid}"
         try:
-            if os.stat(base).st_uid != uid:
-                continue
+            uid = os.stat(base).st_uid
             comm = open(f"{base}/comm", encoding="utf-8", errors="replace").read().strip()
             cgroup = open(f"{base}/cgroup", encoding="utf-8", errors="replace").read().strip().splitlines()[-1]
         except (OSError, IndexError):
             continue
         if "/libpod-" in cgroup and "libpod-conmon-" not in cgroup:
             continue   # in one of its containers (the sandbox, a browser, a connector)
-        unit = cgroup.rsplit("/", 1)[-1]
+        try:
+            start = open(f"{base}/stat", encoding="utf-8", errors="replace").read().rsplit(")", 1)[1].split()[19]
+        except (OSError, IndexError):
+            start = ""
         try:
             exe = os.readlink(f"{base}/exe")
         except OSError:
             exe = ""
+        seen[pid] = (uid, start, comm, cgroup.rsplit("/", 1)[-1], exe)
+    return seen
+
+
+def lasting():
+    """The processes seen in two looks SETTLE apart (the same pid and start): what passes (a unit's ExecStartPre, a
+    helper) is left out. Looked once for all the places of the server."""
+    if "procs" not in _LOOKS:
+        first = _proc_look()
+        if SETTLE > 0:
+            time.sleep(SETTLE)
+        second = _proc_look()
+        _LOOKS["procs"] = {pid: info for pid, info in second.items() if first.get(pid) == info}
+    return _LOOKS["procs"]
+
+
+def scope_of_ours(unit, uid):
+    """A transient run-*.scope whose processes are all system programs a scope of ours holds."""
+    found = [i for i in lasting().values() if i[0] == uid and i[3] == unit]
+    return all(comm in SCOPE_OK and exe.startswith(SYSTEM_BIN) and not exe.endswith(" (deleted)")
+               for _, _, comm, _, exe in found)
+
+
+def processes(uid):
+    """The account's lasting processes outside its containers: (comm, unit, exe folder) for those not expected."""
+    odd = []
+    for uid_, _, comm, unit, exe in lasting().values():
+        if uid_ != uid:
+            continue
         exe_dir = os.path.dirname(exe.replace(" (deleted)", ""))
         bad_dir = exe.endswith(" (deleted)") or re.match(r"/(tmp|var/tmp|dev/shm|run/user)/", exe or "")
+        if RUN_SCOPE.fullmatch(unit) and scope_of_ours(unit, uid):
+            continue
         if comm not in PROC_OK or not PROC_UNIT.search(unit) or bad_dir:
             odd.append(f"{comm} [{unit}] {exe_dir or '?'}{' (supprimé)' if exe.endswith(' (deleted)') else ''}")
     return sorted(set(odd))
@@ -576,10 +648,15 @@ def place(user, uid, home, skel_prints, prints_seen):
             if k != "file":
                 out.append(f"{name} ({k})")
                 continue
-            got = short(read(home_fd, name) or b"")
-            prints_seen.setdefault((name, got), []).append(user)
-            if got in skel_prints.get(name, ()):
+            data = read(home_fd, name) or b""
+            if name == ".local/bin/env":
+                if not uv_env(data):
+                    out.append(f"{name} (pas celui d'uv)")
                 continue
+            if expected_login(data, skel_prints.get(name)):
+                continue
+            got = short(data)
+            prints_seen.setdefault((name, got), []).append(user)
             info.append((name, got))
         for name in (".pam_environment", ".ssh/rc", ".ssh/environment", ".config/environment.d"):
             k = kind(home_fd, name)
@@ -634,11 +711,20 @@ def place(user, uid, home, skel_prints, prints_seen):
         for group in ("app.slice", ""):
             folder = os.path.join(slice_, group) if group else slice_
             for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
-                if re.search(r"\.(service|scope)$", name) and not PROC_UNIT.search(name) and not name.startswith("libpod-"):
+                if re.search(r"\.(service|scope)$", name) and not PROC_UNIT.search(name) and not name.startswith("libpod-") \
+                        and name not in SYSTEMD_OWN and not (RUN_SCOPE.fullmatch(name) and scope_of_ours(name, uid)):
                     out.append(f"unité en marche {name}")
         # autostart
         for name in listdir(home_fd, ".config/autostart"):
             out.append(f"autostart {name}")
+        # an import's leftovers taken out while its gateway could not restart (profile_guard.py clean_main): still loaded
+        guard = read(home_fd, ".local/state/bipagents/profile-guard.json")
+        if guard is not None:
+            try:
+                if json.loads(guard.decode("utf-8", "replace")).get("restart_pending") is True:
+                    out.append("profil (gateway à redémarrer)")
+            except (ValueError, AttributeError):
+                pass
         # its Hermes homes: what an import before 27/11 kept
         if kind(home_fd, ".hermes") == "dir":
             hermes_findings(home_fd, ".hermes", home, out)
@@ -697,6 +783,7 @@ def shown(text):
 CATEGORIES = ("systemd_user", "crontab", "login_file", "ssh_key", "session", "hermes_import", "bridge_config",
               "podman", "quadlet", "process", "link", "error")
 LOGIN_NAMES = LOGIN_FILES + (".local/bin/env",)
+MAX_COUNT = 10000   # a number past it is told as it (the guichet takes 0..10 000)
 
 
 def category(finding):
@@ -716,25 +803,57 @@ def category(finding):
     return "error"
 
 
+PLACE_SECONDS = float(os.environ.get("PLACES_PLACE_SECONDS", "120"))   # one place's look at most
+
+
+class PlaceTooLong(BaseException):
+    """A place's look past PLACE_SECONDS: that place only is said « erreur », the others are looked at."""
+
+
+def _budget(seconds):
+    import signal
+    import threading
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGALRM"):
+        return None
+
+    def stop(*_):
+        raise PlaceTooLong()
+    old = signal.signal(signal.SIGALRM, stop)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    return old
+
+
+def _unbudget(old):
+    import signal
+    if old is not None:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def collect(argv):
     """Every place of `argv` (all when empty): (accounts, {user: findings}, the login files' shared prints, the
     skeleton's). A place whose look fails gets an « erreur » finding; the others go on."""
+    _LOOKS.clear()
     found = accounts(set(argv))
     skel_prints = skel()
     prints_seen, rows = {}, {}
     for user, (uid, home) in sorted(found.items(), key=lambda x: int(x[0][3:] or 1)):
+        lasting()   # the processes' two looks first, out of any place's budget
+        old = _budget(PLACE_SECONDS)
         try:
             rows[user] = place(user, uid, home, skel_prints, prints_seen)
+        except PlaceTooLong:
+            rows[user] = (["erreur TooLong"], [])
         except Exception as exc:   # never the others' loss
             rows[user] = ([f"erreur {type(exc).__name__}"], [])
+        finally:
+            _unbudget(old)
     for user, (out, info) in rows.items():
         # a login file unlike the skeleton is said when no other place has the same (BipAgents' own line, uv's
         # `. "$HOME/.local/bin/env"`, is the same everywhere)
         for name, got in info:
             if name == "linger":
                 continue
-            if len(found) == 1 and name == ".local/bin/env":
-                continue   # uv's own file: only told when it differs from the other places'
             if len(found) == 1 or len(prints_seen.get((name, got), [])) < 2:
                 out.append(f"{name} unique (empreinte {got})")
     return found, rows, prints_seen, skel_prints
@@ -742,7 +861,7 @@ def collect(argv):
 
 def counts(rows):
     """{user: {category: number}} for the guichet: every category, zero included."""
-    return {user: {cat: sum(1 for o in out if category(o) == cat) for cat in CATEGORIES}
+    return {user: {cat: min(MAX_COUNT, sum(1 for o in out if category(o) == cat)) for cat in CATEGORIES}
             for user, (out, _info) in rows.items()}
 
 
@@ -766,8 +885,7 @@ def main(argv):
     for user, (out, info) in rows.items():
         anything = anything or bool(out)
         print(f"{user.ljust(width)}  {'; '.join(shown(o) for o in out) if out else 'rien'}")
-    common = sorted({(n, g, len(us)) for (n, g), us in prints_seen.items()
-                     if len(us) > 1 and g not in skel_prints.get(n, ()) and n != ".local/bin/env"})
+    common = sorted({(n, g, len(us)) for (n, g), us in prints_seen.items() if len(us) > 1})
     if common:
         print("\nfichiers de connexion différents du squelette mais pareils sur plusieurs places (à regarder si inattendu) :")
         for name, got, count in common:
