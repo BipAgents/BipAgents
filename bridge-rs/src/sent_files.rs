@@ -66,6 +66,20 @@ fn copy_path(config: &Config, agent: &str, path: &str) -> Option<PathBuf> {
     Some(root(config).join(agent).join(key).join(name))
 }
 
+/// Why a hidden or secret-looking file is not handed out (`secret_looking`): give_file.rs tells it apart from a file
+/// that is missing (its refusal is final, 27/11).
+pub(crate) const NEVER_SENT: &str = "a hidden or secret-looking file (never sent)";
+
+/// Why a path is not one of the agent's places on this machine (`open_own`): its sandbox may still have it.
+pub(crate) const NOT_IN_PLACES: &str = "not under one of the agent's places (/envoi, /workspace, /root, its profile, \
+its mounted folders, its received files)";
+
+/// Whether `path`, outside the agent's places, is one its sandbox never gives either (`from_sandbox`: a hidden or
+/// secret-looking file, by its path in the sandbox).
+pub(crate) fn never_from_sandbox(path: &str) -> bool {
+    !path.split('/').any(|p| p == "..") && plain_relative(path).is_some_and(|relative| secret_looking(&relative))
+}
+
 /// A hidden or secret-looking file (or one under a hidden folder, or a vault): never handed out.
 pub(crate) fn secret_looking(relative: &Path) -> bool {
     let parts: Vec<String> = relative.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
@@ -274,15 +288,12 @@ enum NotHere {
 
 /// The agent's file behind `path`, opened (the newest when several sandboxes have one; the longest place first).
 fn open_source(config: &Config, agent: &AgentConfig, path: &str) -> Result<std::fs::File, NotHere> {
-    let mut why = NotHere::Missing(
-        "not under one of the agent's places (/envoi, /workspace, /root, its profile, its mounted folders, its \
-         received files)",
-    );
+    let mut why = NotHere::Missing(NOT_IN_PLACES);
     for (prefix, folders) in places(config, agent) {
         let Some(rest) = under(path, &prefix) else { continue };
         let Some(relative) = plain_relative(rest) else { return Err(NotHere::Refused("not a plain path")) };
         if secret_looking(&relative) {
-            return Err(NotHere::Refused("a hidden or secret-looking file (never sent)"));
+            return Err(NotHere::Refused(NEVER_SENT));
         }
         let newest = folders.iter().filter_map(|folder| open_beneath(folder, &relative).ok()).max_by_key(modified);
         match newest {
@@ -350,7 +361,7 @@ pub(crate) fn open_working(
             let Some(rest) = under(&candidate, &prefix) else { continue };
             let Some(relative) = plain_relative(rest) else { return Err("not a plain path") };
             if secret_looking(&relative) {
-                return Err("a hidden or secret-looking file (never sent)");
+                return Err(NEVER_SENT);
             }
             let newest = folders.iter().filter_map(|folder| open_beneath(folder, &relative).ok()).max_by_key(modified);
             match newest {
@@ -590,7 +601,7 @@ fn from_sandbox(config: &Config, agent: &AgentConfig, path: &str, target: &Path)
     }
     let relative = plain_relative(path).ok_or("not a plain path")?;
     if secret_looking(&relative) {
-        return Err("a hidden or secret-looking file (never sent)".into());
+        return Err(NEVER_SENT.into());
     }
     let podman = crate::browsers::pyx::which("podman").ok_or("no podman")?;
     let containers = sandbox_containers(config, agent, &podman)?;

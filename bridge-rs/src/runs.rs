@@ -219,6 +219,8 @@ pub struct BridgeCall {
     /// The MCP request paired with it.
     claim: Option<u64>,
     refused: bool,
+    /// Refused as asked again after a final refusal (tool_answers.rs `uncounted`): no new failure for the brake.
+    uncounted: bool,
     /// A request that came before its run's `tool.started`.
     early: bool,
     /// When it was opened (a request whose call never started is forgotten after a minute).
@@ -240,6 +242,9 @@ struct Waiting {
     agent: String,
     claim: u64,
     refused: bool,
+    uncounted: bool,
+    /// What the bridge answered when it refused it (`refuse_saying`).
+    said: Option<String>,
     at: f64,
 }
 
@@ -2245,7 +2250,11 @@ impl RunHub {
         let limits = Self::turn_limits(st, &settings, browser_tool(&tool));
         // a network error is no broken tool (27/11: a Wi-Fi cut of a few seconds stopped a turn): counted apart
         // (never for the tools whose failure is work output, nor the browser: a slow page is no Internet cut)
-        let over = if failed && crate::loop_brake::failure_counted(&tool) && crate::loop_brake::transient_failure(&event.data) {
+        let over = if failed
+            && crate::loop_brake::failure_counted(&tool)
+            && !st.turn.is_uncounted(&tool)
+            && crate::loop_brake::transient_failure(&event.data)
+        {
             st.turn.failed_transiently(&tool, &limits, crate::py::time_time())
         } else {
             let over = st.turn.completed(&tool, failed, &limits);
@@ -2711,13 +2720,23 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             lock(&sub.state).session_id.get_or_insert_with(|| s.clone());
         }
         if let Some(session) = session.as_ref().filter(|_| !behind) {
-            let mut input = crate::loop_brake::rescue_input_with(&over, &lang, added);
             // the stopped tool's answer when it worked (a file given, a page made: 27/11, `give_file` 3 times): the
             // rescue turn, which may not call it again, still has what the person needs
-            if let crate::loop_brake::Over::SameCall(tool) = &over {
-                if let Some(answer) = crate::loop_brake::TURNS.answer_of(&agent.name, &sub.run_id, tool) {
-                    input = format!("{input}\n\n{}", crate::loop_brake::rescue_answer_note(tool, &answer));
+            let answer = match &over {
+                crate::loop_brake::Over::SameCall(tool) => crate::loop_brake::TURNS.answer_of(&agent.name, &sub.run_id, tool),
+                _ => None,
+            };
+            // else, stopped for a tool that kept failing or the same refused call: what the bridge said when it last
+            // refused it, the reason it knows of (27/11: a hidden file to give, and a rescue that made up a cause)
+            let refusal = match (&over, &answer) {
+                (crate::loop_brake::Over::SameCall(tool) | crate::loop_brake::Over::Failing(tool), None) => {
+                    lock(&sub.state).turn.refusal_of(tool)
                 }
+                _ => None,
+            };
+            let mut input = crate::loop_brake::rescue_input_said(&over, &lang, added, refusal.as_deref());
+            if let (crate::loop_brake::Over::SameCall(tool), Some(answer)) = (&over, &answer) {
+                input = format!("{input}\n\n{}", crate::loop_brake::rescue_answer_note(tool, answer));
             }
             if let Some(config) = &self.config {
                 input = crate::dates::now::stamped(&config.get(), &agent, &input);
@@ -3462,7 +3481,10 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             let mut waiting = lock(&self.waiting);
             let now = crate::py::time_time();
             waiting.retain(|_, w| now - w.at <= EARLY_SECONDS);
-            waiting.insert(wanted.to_string(), Waiting { agent: agent.to_string(), claim: id, refused: false, at: now });
+            waiting.insert(
+                wanted.to_string(),
+                Waiting { agent: agent.to_string(), claim: id, refused: false, uncounted: false, said: None, at: now },
+            );
             return Some(CallClaim { agent: agent.to_string(), run_id: None, id });
         }
         let sub = self.sub_of(agent, tool)?;
@@ -3479,6 +3501,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             seq,
             claim: Some(id),
             refused: false,
+            uncounted: false,
             early: true,
             at,
         });
@@ -3492,17 +3515,33 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     /// failed (`with_refused`): the apps' step not done, never ✓; the safety net's hand-over refused; the brake's retry
     /// (review 1, 14/11).
     pub fn refuse(&self, claim: &CallClaim) {
+        self.refuse_saying(claim, "", true);
+    }
+
+    /// [`refuse`](Self::refuse), with what the bridge answered (`said`: kept for the rescue turn of a turn stopped
+    /// for that tool, runs.rs `loop_rescue`); `counted`: false for a call asked again after a final refusal
+    /// (tool_answers.rs `uncounted`): its step not done all the same, but no new failure of the tool for the brake.
+    pub fn refuse_saying(&self, claim: &CallClaim, said: &str, counted: bool) {
+        let said = Some(said.trim()).filter(|s| !s.is_empty() && counted).map(str::to_string);
         let Some(run_id) = claim.run_id.clone() else {
             if let Some(w) = lock(&self.waiting).values_mut().find(|w| w.claim == claim.id) {
                 w.refused = true;
+                w.uncounted = !counted;
+                w.said = said;
             }
             return;
         };
         let Some(sub) = lock(&self.inner).subs.get(&(claim.agent.clone(), run_id.clone())).cloned() else { return };
-        let mut st = lock(&sub.state);
+        let mut guard = lock(&sub.state);
+        let st = &mut *guard;
         if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.claim == Some(claim.id)) {
-            tracing::info!(agent = %claim.agent, tool = %call.tool, run_id = %run_id, "a refused call: its step relayed failed");
+            tracing::info!(agent = %claim.agent, tool = %call.tool, run_id = %run_id, counted = counted,
+                "a refused call: its step relayed failed");
             call.refused = true;
+            call.uncounted = !counted;
+            if let Some(said) = &said {
+                st.turn.refused_saying(&call.tool, said);
+            }
         }
     }
 
@@ -3531,7 +3570,19 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
                 if ours { waiting.remove(id) } else { None }
             });
             if let Some(w) = waited {
-                st.bridge_calls.push(BridgeCall { tool, call_id, seq, claim: Some(w.claim), refused: w.refused, early: false, at: w.at });
+                if let Some(said) = w.said.as_deref().filter(|_| w.refused) {
+                    st.turn.refused_saying(&tool, said);
+                }
+                st.bridge_calls.push(BridgeCall {
+                    tool,
+                    call_id,
+                    seq,
+                    claim: Some(w.claim),
+                    refused: w.refused,
+                    uncounted: w.uncounted,
+                    early: false,
+                    at: w.at,
+                });
                 return event;
             }
             // else the earliest request of that tool with no id
@@ -3549,7 +3600,16 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
                     early.tool = tool;
                     early.early = false;
                 }
-                None => st.bridge_calls.push(BridgeCall { tool, call_id, seq, claim: None, refused: false, early: false, at: crate::py::time_time() }),
+                None => st.bridge_calls.push(BridgeCall {
+                    tool,
+                    call_id,
+                    seq,
+                    claim: None,
+                    refused: false,
+                    uncounted: false,
+                    early: false,
+                    at: crate::py::time_time(),
+                }),
             }
             keep_calls(&mut st.bridge_calls);
             return event;
@@ -3565,6 +3625,10 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             .and_then(|seq| st.bridge_calls.iter().position(|c| c.seq == seq)));
         let Some(at) = at else { return event };
         let call = st.bridge_calls.remove(at);
+        if call.refused && call.uncounted && event.r#type == "tool.completed" {
+            // « already refused »: not done, but no new failure of the tool (loop_brake.rs `completed`)
+            st.turn.uncounted_failure(&tool);
+        }
         if !call.refused || event.r#type != "tool.completed" || event.data.get("error").and_then(Value::as_bool) == Some(true) {
             return event;
         }
@@ -4808,6 +4872,37 @@ mod tests {
     fn last_completed(sub: &Arc<RunSubscription>) -> Value {
         let st = lock(&sub.state);
         st.backlog.iter().rev().find(|e| e.r#type == "tool.completed").map(|e| e.data["error"].clone()).unwrap_or(Value::Null)
+    }
+
+    /// 27/11 16:22, Alex's aibox: give_file refused a hidden file, the model asked again, and three refusals stopped
+    /// the turn as « the same tool failing ». The very same call asked again after a final refusal (« already
+    /// refused »): its step still relayed not done, but no new failure of the tool; each real refusal's text kept on
+    /// the run for its rescue turn.
+    #[tokio::test]
+    async fn a_call_asked_again_after_a_final_refusal_is_no_new_failure_and_its_text_is_kept() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let sub = Arc::new(RunSubscription::new(agent, "run_hidden"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        let tool = "mcp_bipagents_give_file";
+        let call = |id: &str, said: &str, counted: bool| {
+            hub.dispatch(&sub, review2_event("tool.started", json!({"tool": tool, "tool_call_id": id})));
+            let claim = hub.claim_call("vie", "give_file").expect("its call");
+            hub.refuse_saying(&claim, said, counted);
+            hub.dispatch(&sub, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": id, "error": false})));
+            last_completed(&sub)
+        };
+        let first = "Not done, and it never will be: /root/.hermes/a.md is a hidden or secret-looking file.";
+        let again = "Not done, already refused: this exact give_file call was refused earlier in this turn.";
+        assert_eq!(call("a", first, true), json!(true));
+        assert_eq!(call("b", again, false), json!(true), "still a step not done for the apps");
+        assert_eq!(call("c", again, false), json!(true));
+        let other = "Not done, and it never will be: /envoi/.x/b.md is a hidden or secret-looking file.";
+        assert_eq!(call("d", other, true), json!(true));
+        assert!(!lock(&sub.state).braked, "two failures of the tool, not four");
+        assert_eq!(lock(&sub.state).turn.refusal_of("give_file").as_deref(), Some(other), "the last real refusal");
+        assert_eq!(call("e", other, true), json!(true));
+        assert!(lock(&sub.state).braked, "a third real refusal: the same tool failing");
     }
 
     /// Review 2 (14/11): `refused_call` marked a run by tool name (`sub_of`: the agent's run whose last call was that tool, the latest). Two

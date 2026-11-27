@@ -677,6 +677,14 @@ pub fn current(config: &Config, agent: &AgentConfig) -> Option<Diet> {
             }
         }
     }
+    // its routines' tool while it has one (routines.rs `in_view`): behind the search, a model whose tool names are held
+    // to the request's changed a routine through give_file (27/11). ≈ 520 tokens (measured), in the cache
+    if tools.iter().any(|t| t == crate::routines::TOOL_NAME) && crate::routines::in_view(config, &agent.name) {
+        let entry = format!("!{BRIDGE_PREFIX}{}", crate::routines::TOOL_NAME);
+        if !out.defer.contains(&entry) {
+            out.defer.push(entry);
+        }
+    }
     // the connectors the person approved are called like any tool (connectors.rs)
     for entry in crate::connectors::direct_entries(config, agent) {
         if !out.defer.contains(&entry) {
@@ -1127,6 +1135,68 @@ mod tests {
         assert_eq!(meant(&mail, "map_image", &id("p-3")), "map_image");
         assert_eq!(meant(&mail, "map_image", &id("fff95795|INBOX|x")), "map_image");
         assert_eq!(meant(&cards, "notebook_read", &args(&["kind", "name", "role"])), "notebook_read");
+    }
+
+    /// 27/11, Alex's aibox: Vie's calls « routed to give_file » (its own words). The bridge never runs a call of
+    /// routine_schedule as give_file for a routine's arguments (what it runs is the tool the arguments fit), and the
+    /// hub pairs a refusal with its call by that call's own name (runs.rs `same_tool`): a give_file step is a call the
+    /// model named give_file. The real tools' schemas.
+    #[test]
+    fn a_routines_call_is_never_run_as_give_file() {
+        let tools = vec![crate::give_file::tool(), crate::routines::tool(), crate::triggers::tool()];
+        let args = |v: Value| -> crate::Dict { serde_json::from_value(v).unwrap() };
+        let change = args(serde_json::json!({"action": "update", "name": "Scan des mails", "prompt": "Trie mes mails."}));
+        assert_eq!(meant(&tools, "routine_schedule", &change), "routine_schedule");
+        let listed = args(serde_json::json!({"action": "list"}));
+        assert_eq!(meant(&tools, "routine_schedule", &listed), "routine_schedule");
+        // a give_file call with a path stays give_file (its own arguments): refused there, never run as a routine
+        let path = args(serde_json::json!({"path": "/root/.hermes/routines/scan.md", "title": "Consigne"}));
+        assert_eq!(meant(&tools, "give_file", &path), "give_file");
+        assert_eq!(meant(&tools, "routine_schedule", &path), "give_file", "only give_file's own arguments, path given");
+    }
+
+    /// 27/11, Alex's aibox: routine_schedule behind the search, Vie on the Spark (tool names held to the request's)
+    /// changed its nightly routine through give_file. An agent with a routine of its own keeps it in view, and its
+    /// profile follows as soon as it gets one or loses its last (or « Routines » is switched off). Its cost measured.
+    #[test]
+    fn an_agent_with_a_routine_keeps_routine_schedule_in_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.outbox.db_path = dir.path().join("data/outbox.db").to_string_lossy().into_owned();
+        config.hermes.bin = "/opt/hermes".into();
+        config.hermes.hub_url = "http://127.0.0.1:8642".into();
+        config.hermes.home = dir.path().join(".hermes").to_string_lossy().into_owned();
+        let agent = AgentConfig { name: "vie".into(), hermes_url: "http://127.0.0.1:8642/p/vie".into(), ..AgentConfig::default() };
+        config.agents.insert(agent.name.clone(), agent.clone());
+        let profile = dir.path().join(".hermes/profiles/vie");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("config.yaml"), "model:\n  default: x\n").unwrap();
+        let entry = format!("!{BRIDGE_PREFIX}{}", crate::routines::TOOL_NAME);
+        let in_view = |c: &Config| current(c, &agent).expect("its diet").defer.contains(&entry);
+        let written = || std::fs::read_to_string(profile.join("config.yaml")).unwrap();
+        assert!(!in_view(&config), "no routine: behind the search");
+        let maker = crate::routines::Maker::Person { muted: false };
+        let routine = crate::routines::create(&config, "vie", "Scan des mails", "every day at 3:00", "Trie mes mails.", None, maker)
+            .expect("made");
+        assert!(in_view(&config));
+        assert!(written().contains(&entry[1..]), "the profile follows at once: {}", written());
+        // « Routines » off: not offered, so not in view either
+        crate::routines::set_enabled(&config, "vie", false);
+        assert!(!in_view(&config));
+        assert!(!written().contains("routine_schedule"), "{}", written());
+        crate::routines::set_enabled(&config, "vie", true);
+        assert!(in_view(&config) && written().contains(&entry[1..]));
+        // its last routine deleted: behind the search again
+        assert!(crate::routines::delete(&config, &routine.id));
+        assert!(!in_view(&config) && !written().contains("routine_schedule"), "{}", written());
+        // its cost, as Hermes hands it to the model (an OpenAI function), counted as the token lab does
+        let tool = crate::routines::tool();
+        let function = serde_json::json!({"type": "function", "function": {"name": "mcp_bipagents_routine_schedule",
+            "description": tool["description"], "parameters": tool["inputSchema"]}});
+        let chars = serde_json::to_string(&function).unwrap().chars().count();
+        let tokens = (chars as f64 / 3.6).round() as usize;
+        println!("routine_schedule in view: {chars} characters, about {tokens} tokens (characters / 3.6)");
+        assert!(tokens < 650, "{tokens}");
     }
 
     #[test]

@@ -79,6 +79,27 @@ pub fn lifted_in_the_app(mut result: Dict) -> Dict {
     result
 }
 
+/// The mark of a final refusal (`final_refusal`), taken off before the answer goes out.
+pub const FINAL_MARK: &str = "_bipagents_final";
+
+/// A refusal that asking again never changes (a hidden or secret-looking file, give_file.rs `never_given`), marked by
+/// its tool: the very same call again in the turn is answered « already refused » at once (loop_brake.rs
+/// `Turns::check`), not passed to the tool again.
+pub fn final_refusal(mut result: Dict) -> Dict {
+    result.insert(FINAL_MARK.into(), Value::Bool(true));
+    result
+}
+
+/// The mark of a refusal that is no new failure (`uncounted`), taken off before the answer goes out.
+pub const UNCOUNTED_MARK: &str = "_bipagents_uncounted";
+
+/// A refusal the turn's brake does not count as the tool failing again (loop_brake.rs `same_failure`): the very same
+/// call asked again after a final refusal (`Turns::check`). Its step is still relayed not done (`settle_for`).
+pub fn uncounted(mut result: Dict) -> Dict {
+    result.insert(UNCOUNTED_MARK.into(), Value::Bool(true));
+    result
+}
+
 /// A failure the bridge relays as one (a connector's own `isError` answer): `isError` kept, under `STREAK`.
 pub fn mark_failure(result: &mut Dict) {
     if result.get("isError").is_some_and(crate::py::truthy) {
@@ -95,6 +116,8 @@ pub const FAILED_SILENTLY: &str = "this call failed (its answer said nothing mor
 pub fn settle(server: &str, agent: &str, result: &mut Dict) -> bool {
     let failure = result.remove(FAILURE_MARK).is_some_and(|v| v == Value::Bool(true));
     result.remove(LIFTED_MARK);
+    result.remove(FINAL_MARK);
+    result.remove(UNCOUNTED_MARK);
     let error = result.get("isError").is_some_and(crate::py::truthy);
     let key = (server.to_string(), agent.to_string());
     let mut streaks = STREAKS.lock().unwrap_or_else(|e| e.into_inner());
@@ -138,9 +161,11 @@ pub fn settle(server: &str, agent: &str, result: &mut Dict) -> bool {
 /// `RunHub::claim_call` when the request came): it relays that call's `tool.completed` as failed (the apps' step,
 /// the safety net, the brake).
 pub fn settle_for(hub: &crate::runs::RunHub, claim: Option<&crate::runs::CallClaim>, server: &str, agent: &str, result: &mut Dict) {
+    let counted = !result.contains_key(UNCOUNTED_MARK);
     if settle(server, agent, result) {
         if let Some(claim) = claim {
-            hub.refuse(claim);
+            // what it said goes with it: the rescue turn of a turn stopped for it gets it (runs.rs `loop_rescue`)
+            hub.refuse_saying(claim, first_text(result).unwrap_or(""), counted);
         }
     }
 }
