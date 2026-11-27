@@ -584,6 +584,8 @@ pub fn segment_items(
     let mut continued_at = 0;
     // where a turn opened without the person's words starts (the item it says first gets `OPENS`)
     let mut opened = Vec::new();
+    // in the brake's rescue turn (after its row, until the person's next words): the bridge stopped the turn before
+    let mut rescuing = false;
     for (place, shown) in in_place_compaction(rows) {
         let (row, place) = (&rows[shown], &rows[place]);
         let id = message_id(agent, session, row);
@@ -617,12 +619,15 @@ pub fn segment_items(
                 }
                 let (words, steered) = match person_words(&raw) {
                     Err(line) => {
-                        // Hermes' failed-turn row just before is replaced by this notice
+                        // Hermes' failed-turn row just before is replaced by this notice, and its own line closing the
+                        // turn the brake stopped (« Operation interrupted: … », 27/11) leaves: the bridge stopped it
                         if items.last().is_some_and(|i: &Item| {
                             i.body.get("notice").and_then(|n| n.get("code")) == Some(&json!("failed_turn"))
+                                || hermes_lines_only(i)
                         }) {
                             items.pop();
                         }
+                        rescuing = true;
                         if !line.is_empty() {
                             items.push(item(
                                 id,
@@ -650,6 +655,7 @@ pub fn segment_items(
                 if text.is_empty() && attachments.is_empty() {
                     continue;
                 }
+                rescuing = false;
                 if crate::turn_restart::restarted(&raw) {
                     // the turn before was stopped for these words and started again with them (turn_restart.rs): its
                     // cut answer and Hermes' « not processed » line leave the conversation, one answer comes for both
@@ -687,6 +693,8 @@ pub fn segment_items(
                 }
                 let (text, attachments) = visible(&raw, &id, images);
                 let text = if rehearsal { crate::urgent_pay::without_verdict(&text).unwrap_or(text) } else { text };
+                // a rescue turn the brake stopped too: Hermes' line closing it is not the agent's
+                let text = if rescuing && calls.is_empty() { crate::background_turn::without_hermes_lines(&text) } else { text };
                 let renamed = renamed_in(&raw);
                 if !text.is_empty() || !attachments.is_empty() || !renamed.is_empty() {
                     let mut body =
@@ -755,6 +763,16 @@ pub fn segment_items(
         }
     }
     items
+}
+
+/// An agent's message made only of Hermes' own lines closing a turn it stopped (`background_turn::hermes_line`).
+fn hermes_lines_only(item: &Item) -> bool {
+    let b = &item.body;
+    b.get("kind") == Some(&json!("message"))
+        && b.get("role") == Some(&json!("agent"))
+        && b.get("attachments").and_then(Value::as_array).is_none_or(|a| a.is_empty())
+        && !item.text().trim().is_empty()
+        && crate::background_turn::without_hermes_lines(item.text()).is_empty()
 }
 
 /// The background turns' code word in the agent's messages (background_turn.rs `is_silent`, `told`), in every
@@ -1525,6 +1543,36 @@ mod tests {
         let nothing = items(&[row(1, "user", json!("Range")), row(2, "assistant", json!(format!(" {FAILED_NOT_PROCESSED}\n")))]);
         assert_eq!(nothing[1].body["notice"]["stopped"], "not_processed");
         assert_eq!(stopped_kind(&format!("Hermes dit : {FAILED_PARTIAL}")), None, "a reply quoting it stays a reply");
+    }
+
+    /// 27/11, Alex's aibox (Famille): the brake stopped a turn, and the conversation showed Hermes' English line
+    /// « Operation interrupted: waiting for model response (0.0s elapsed). » above the brake's own. A turn the bridge
+    /// stopped (its rescue row follows) never shows Hermes' line, nor its rescue turn when that one is stopped too; a
+    /// person's own Stop, without a rescue, keeps it (the apps tell it).
+    #[test]
+    fn hermes_line_never_shows_when_the_bridge_stopped_the_turn() {
+        let interrupted = "Operation interrupted: waiting for model response (0.0s elapsed).";
+        let mut rows = vec![
+            row(1, "user", json!("Trouve un cadeau pour Mamino")),
+            row(2, "assistant", json!("Je cherche.")),
+            row(3, "tool", json!("{\"success\": false}")),
+            row(4, "assistant", json!(interrupted)),
+            row(5, "user", json!(format!("{RESCUE_MARK} Je n'arrive pas à joindre Internet pour l'instant.\n\nnote"))),
+            row(6, "assistant", Value::Null),
+            row(7, "tool", json!("refused")),
+            row(8, "assistant", json!("Operation interrupted: handling API error (timeout).")),
+        ];
+        rows[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "web_search", "arguments": "{}"}}]));
+        rows[2].tool_call_id = Some("a".into());
+        rows[5].tool_calls = Some(json!([{"id": "b", "function": {"name": "web_search", "arguments": "{}"}}]));
+        rows[6].tool_call_id = Some("b".into());
+        let got = items(&rows);
+        let texts: Vec<&str> = got.iter().map(|i| i.text()).collect();
+        assert!(texts.iter().all(|t| !t.contains("Operation interrupted")), "{texts:?}");
+        assert!(got.iter().any(|i| i.body.get("notice").is_some_and(|n| n["code"] == "loop_rescue")));
+        // the person's own Stop: as it was
+        let own = items(&[row(1, "user", json!("Cherche")), row(2, "assistant", json!(interrupted))]);
+        assert_eq!(own[1].text(), interrupted);
     }
 
     /// turn_restart.rs: a turn stopped for new words and started again with them shows the two messages and the one

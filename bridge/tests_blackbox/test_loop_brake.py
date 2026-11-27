@@ -562,6 +562,36 @@ def test_a_task_the_brake_stops_is_paused_and_its_line_told(bridges, fakes):
     [pushed] = [p for p in fakes.apns.payloads() if p.get("j") == job["id"] or job["id"] in json.dumps(p)]
     said = bridge.get(f"/v1/notifications/{pushed['n']}", headers=AUTH).json()["preview"]
     assert "Écoles du quartier" in str(said) and "I stopped" in str(said), said
+
+
+INTERRUPTED = "Operation interrupted: waiting for model response (0.0s elapsed)."
+
+
+def test_hermes_english_line_never_reaches_the_conversation_when_the_brake_stopped_the_turn(bridges, fakes):
+    """27/11, Alex's aibox (Famille): after the brake's stop, Hermes' own line « Operation interrupted: waiting for
+    model response (0.0s elapsed). » came in the stream, then stayed in the conversation. Never when the bridge stopped
+    the turn: its rescue turn's reply follows, or the brake's line alone."""
+    bridge = bridges.new()
+    bridge.config["brake"] = {"rescue": False}
+    bridge.start()
+    fakes.hermes.runs["run_vie"] = (diagnosis("run_vie", 5)[:-1]
+                                    + [sse("message.delta", run_id="run_vie", delta=f"\n\n{INTERRUPTED}"),
+                                       sse("run.cancelled", run_id="run_vie", output=INTERRUPTED)])
+    events = follow(bridge, "run_vie")
+    assert [n["code"] for n in notices(events)] == ["loop_stopped"]
+    assert "Operation interrupted" not in json.dumps(events), events
+    # with its rescue turn: the same
+    bridge = bridges.new().start()
+    fakes.hermes.runs["run_fam"] = (diagnosis("run_fam", 5)[:-1]
+                                    + [sse("message.delta", run_id="run_fam", delta=INTERRUPTED),
+                                       sse("run.cancelled", run_id="run_fam", output=INTERRUPTED)])
+    reply = "Je n'ai pas trouvé. Veux-tu que je regarde les journaux ?"
+    fakes.hermes.runs["r1"] = [sse("message.delta", run_id="r1", delta=reply), sse("run.completed", run_id="r1", output=reply)]
+    events = follow(bridge, "run_fam")
+    assert events[-1][1].get("output") == reply
+    assert "Operation interrupted" not in json.dumps(events), events
+
+
 TAVILY_DNS = ("{\n  \"success\": false,\n  \"error\": \"Tavily search failed: HTTPSConnectionPool(host='api.tavily.com', "
               "port=443): Max retries exceeded with url: /search (Caused by NameResolutionError(\\\"Failed to resolve "
               "'api.tavily.com' ([Errno -3] Temporary failure in name resolution)\\\")) (keyless rescue also failed: "

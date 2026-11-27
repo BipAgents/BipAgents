@@ -142,6 +142,34 @@ const CHAIN_MAX: usize = 6;
 /// A run whose end on a promise may be continued (runs.rs `go_on`): a person's conversation turn an app started and
 /// follows, not a background task's, a routine's or any unattended turn, a group discussion's, the brake's rescue
 /// turn or a continuation itself, nor a turn the brake stopped, that handed work over or hit its token limit.
+/// An event of a run after the brake stopped it (`stop_looping`): the model's words are over, so a delta is left out
+/// (what Hermes streams then is its own interruption line), and Hermes' lines leave a final text (`hermes_line`:
+/// « Operation interrupted: … », « [interrupt: …] »); None when nothing of it is left. The rescue turn's events, which
+/// go on in this stream, are forwarded around this (`forward`).
+fn after_the_brake(event: SSEEvent) -> Option<SSEEvent> {
+    if is_delta(&event.r#type) {
+        return None;
+    }
+    let mut data = event.data.clone();
+    let mut changed = false;
+    for key in ["output", "content", "final_output", "text"] {
+        let Some(said) = data.get(key).and_then(Value::as_str).map(str::to_string) else { continue };
+        let words = crate::background_turn::without_hermes_lines(&said);
+        if words != said.trim() {
+            if words.is_empty() && event.r#type == "assistant.completed" {
+                return None;
+            }
+            data.insert(key.into(), json!(words));
+            changed = true;
+        }
+    }
+    if !changed {
+        return Some(event);
+    }
+    let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
+    Some(SSEEvent::new(event.r#type, data, raw))
+}
+
 fn go_on_fits(st: &SubscriptionState) -> bool {
     !st.background
         && !st.unattended
@@ -1907,6 +1935,9 @@ impl RunHub {
     fn dispatch(&self, sub: &Arc<RunSubscription>, event: SSEEvent) {
         let mut inner = lock(&self.inner);
         let mut st = lock(&sub.state);
+        // the brake stopped it: Hermes' words after the stop (« Operation interrupted: waiting for model response
+        // (0.0s elapsed). ») never reach the conversation, its stream nor its end (27/11, Alex's aibox)
+        let Some(event) = (if st.braked { after_the_brake(event) } else { Some(event) }) else { return };
         let event = if event.r#type == "approval.request" {
             self.with_always(sub, self.in_plain_words(sub, &st, event))
         } else {
