@@ -168,3 +168,32 @@ def test_a_second_message_during_the_wait_never_starts_a_turn_of_its_own(bridges
     # and the first message's turn is the one that started first
     first_run = fakes.hermes.started[min(fakes.hermes.started)]["input"]
     assert "Trouve-moi un train Lyon Paris" in str(first_run), first_run
+
+
+# Alex, 27/11 15:53 (Android): a question about the agent itself, and the line its small model guessed (« no tool to
+# contact another agent »: false, the agent has one)
+ABOUT_ITSELF = "Tes sûr que tu contactes le bon ? Son nom c'est Chasseur Mac mais son identifiant est agent_a8c8e457"
+GUESSED = ("Je n'ai aucun outil pour contacter un autre agent, quel que soit son identifiant — je ne peux dialoguer "
+           "qu'avec toi, ici. Si tu veux me faire passer un message à Chasseur Mac, il faudra le copier-coller toi-même "
+           "de son côté.")
+
+
+def test_a_question_about_the_agent_itself_gets_no_line(bridges, fakes):
+    # fix-instant-capabilities: the line's model knows none of the agent's tools, accounts or other agents. Its
+    # instructions say « - » for a message about the agent or questioning it, and a line about the agent's own tools,
+    # access or limits is never shown, whatever the model says: nothing shown, nothing steered into the turn
+    bridge, thread = setup(bridges, fakes)
+    gate = threading.Event()
+    slow_turn(fakes, gate, output="Oui : je lui écris avec son identifiant agent_a8c8e457.")
+    fakes.model.first_answer = GUESSED
+    cid = "F1D00000-0000-4000-8000-0000000002A1"
+    send(bridge, thread, cid, ABOUT_ITSELF, instant_first=True)
+    assert wait_until(lambda: len(first_chats(fakes)) == 1, timeout=3)
+    time.sleep(1.0)
+    assert instant(bridge, thread, cid) is None, instant(bridge, thread, cid)
+    assert not any(MARK in str(s["body"].get("input")) for s in fakes.hermes.steers)
+    system = first_chats(fakes)[-1]["body"]["messages"][0]["content"]
+    assert "Never speak about yourself" in system and "questions or challenges something you did or said" in system
+    gate.set()
+    assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None, timeout=15)
+    assert instant(bridge, thread, cid) is None
