@@ -28,6 +28,7 @@
 //!
 //! No Python counterpart.
 
+pub mod bips;
 pub mod follow;
 mod instant;
 pub mod layout;
@@ -711,8 +712,11 @@ impl Threads {
         let mut items = Vec::new();
         let mut turn = String::new();
         let mut previous: Option<Arc<Vec<source::Row>>> = None;
+        // the helpers' reports that came back (bips.rs): their small Bips are done
+        let mut reports = HashSet::new();
         for (i, segment) in segments.iter().enumerate() {
             let rows = source.rows(&segment.session_id, i + 1 == segments.len()).await?;
+            reports.extend(bips::reports(&rows));
             let skip = match (&previous, segment.linked.as_str()) {
                 (Some(parent), "compression") => timeline::copied_tail(&agent.name, &segment.session_id, &rows, parent),
                 _ => HashSet::new(),
@@ -740,7 +744,8 @@ impl Threads {
         timeline::quiet(&mut items, thread.kind == "main");
         let mut extra = self.boite(agent, thread, segments).await?;
         extra.extend(self.kept(agent, segments).await?);
-        let mut items = timeline::merge(items, extra);
+        extra.extend(self.small_bips(agent, segments, &items, &reports));
+        let mut items = bips::coalesce(timeline::merge(items, extra));
         // a family agent's common conversation shows the messages waiting there among its items too (each with who
         // wrote it), besides the queue (family_thread.rs)
         let common = crate::family_thread::is_common(&self.config.get(), &agent.name);
@@ -755,6 +760,28 @@ impl Threads {
         without_missing_pages(self.config.get(), &mut items).await;
         with_document_sizes(agent, &mut items).await;
         Ok(items)
+    }
+
+    /// The thread's small Bips (bips.rs): its tasks (jobs.rs, started from one of its sessions) and its turns' helpers,
+    /// one line each, merged by time where they were launched.
+    fn small_bips(&self, agent: &AgentConfig, segments: &[Segment], items: &[timeline::Item],
+                  reports: &HashSet<String>) -> Vec<timeline::Item> {
+        let sessions: HashSet<&str> = segments.iter().map(|s| s.session_id.as_str()).collect();
+        let config = self.config.get();
+        let mut out: Vec<timeline::Item> = crate::jobs::tasks(&config)
+            .iter()
+            .filter_map(|job| bips::task_line(job, &agent.name, &sessions))
+            .map(|(started, line)| {
+                let at = bips::task_at(items, started);
+                let id = format!("b_{}", line["id"].as_str().unwrap_or_default());
+                bips::item(id, at, String::new(), String::new(), line)
+            })
+            .collect();
+        out.extend(bips::helper_lines(items, reports).into_iter().map(|(at, segment, turn, line)| {
+            let id = format!("b_{}", line["id"].as_str().unwrap_or_default());
+            bips::item(id, at, segment, turn, line)
+        }));
+        out
     }
 
     /// Where a long turn's time went (turn_status.rs `took`, kept by the run hub): on its last reply, for the apps'
