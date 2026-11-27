@@ -2616,6 +2616,36 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     /// `rescue_seconds` or says nothing: a `loop_rescue_failed` notice with what the person can do, and this run's
     /// own end.
     async fn loop_rescue(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent) -> SSEEvent {
+        if lock(&sub.state).loop_rescue.is_none() {
+            return terminal;
+        }
+        // words the person added meanwhile (27/11, Alex's aibox: « Trouve-moi des gants… » lost with the stop): those
+        // the turn never took come back at its end by Hermes' `pending_steer` (msg_queue.rs `run_ended`), carried on
+        // the rescue turn's end; those it took are the next message (`carry`), the rescue turn told of both
+        let pending = as_str(terminal.data.get("pending_steer")).filter(|p| !p.trim().is_empty());
+        let queues = self.queues.get().and_then(std::sync::Weak::upgrade);
+        let mut added = queues.as_ref().map(|q| q.steered_words(&sub.agent.name, &sub.run_id)).unwrap_or_default();
+        if let Some(words) = pending.as_deref().and_then(crate::threads::timeline::person_text) {
+            if !added.iter().any(|a| words.contains(a.as_str())) {
+                added.push(words);
+            }
+        }
+        let mut end = self.loop_rescue_turn(sub, terminal, &added).await;
+        if let Some(queues) = queues {
+            let session = lock(&sub.state).session_id.clone().filter(|s| !s.is_empty());
+            if let Some(session) = session {
+                queues.carry(&sub.agent, &session, &sub.run_id, pending.as_deref());
+            }
+        }
+        if let Some(pending) = pending.filter(|_| end.data.get("pending_steer").is_none()) {
+            end.data.insert("pending_steer".into(), json!(pending));
+            end.raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(end.data.clone()));
+        }
+        end
+    }
+
+    /// `loop_rescue`'s turn itself; `added`: the person's words added during the stopped turn, told to it.
+    async fn loop_rescue_turn(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent, added: &[String]) -> SSEEvent {
         let (plan, session) = {
             let mut st = lock(&sub.state);
             (st.loop_rescue.take(), st.session_id.clone())
@@ -2633,8 +2663,11 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             None => false,
         };
         let mut started = None;
+        if let Some(s) = session.as_ref() {
+            lock(&sub.state).session_id.get_or_insert_with(|| s.clone());
+        }
         if let Some(session) = session.as_ref().filter(|_| !behind) {
-            let mut input = crate::loop_brake::rescue_input(&over, &lang);
+            let mut input = crate::loop_brake::rescue_input_with(&over, &lang, added);
             if let Some(config) = &self.config {
                 input = crate::dates::now::stamped(&config.get(), &agent, &input);
             }

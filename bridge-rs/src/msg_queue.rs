@@ -68,6 +68,13 @@ pub const WAIT_MARK: &str = "[bipagents:files_waiting]";
 /// How long a turn told to wrap up for a pushed message may still go on before the bridge stops it (a tool call
 /// that runs for minutes: the steer waits for it). `BIPAGENTS_PUSH_STOP_SECONDS` in the tests.
 pub const PUSH_STOP_SECONDS: f64 = 90.0;
+/// The note before words a turn took but never got to, the brake having stopped it (runs.rs `loop_rescue`): they start
+/// again as the person's next message, first in line (`carry`), and the conversation shows them there once
+/// (threads/timeline.rs: their row « Ajouté pendant la réponse » leaves, its check would say they were dealt with).
+pub const CARRIED_OPEN: &str = "<!--bip:carried";
+pub const CARRIED_NOTE: &str = "<!--bip:carried\nNot a new subject: your person wrote this while you were working on \
+your answer just before, which was stopped before you could do it. Do it now.\n-->";
+
 /// Items an agent's queue holds at most.
 pub const ITEMS_MAX: usize = 30;
 /// One item's words at most (a message, not a document).
@@ -590,6 +597,49 @@ impl Queues {
     /// locks, no file read).
     pub fn waits_in(&self, agent: &str, session_id: &str) -> bool {
         lock(&self.state).get(agent).is_some_and(|q| q.waits_in(session_id))
+    }
+
+    /// The person's words steered into that run (`steer`), theirs only (the bridge's notes out), in order.
+    pub fn steered_words(&self, agent: &str, run_id: &str) -> Vec<String> {
+        lock(&self.state)
+            .get(agent)
+            .map(|q| {
+                q.steers
+                    .iter()
+                    .filter(|s| s.run_id == run_id)
+                    .filter_map(|s| crate::threads::timeline::person_text(&s.text))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The brake stopped `run_id` (runs.rs `loop_rescue`): the person's words steered into it that it took (not in
+    /// `pending`, Hermes' words it never took: those come back by `run_ended`, as before) but never got to are its
+    /// conversation's next message, first in line and started the moment it ends, told why (`CARRIED_NOTE`). Whether
+    /// some were.
+    pub fn carry(&self, agent: &AgentConfig, session_id: &str, run_id: &str, pending: Option<&str>) -> bool {
+        let pending = pending.unwrap_or("");
+        let (_, carried) = self.update(&agent.name, |q| {
+            let taken: Vec<Steer> =
+                q.steers.iter().filter(|s| s.run_id == run_id && !pending.contains(s.text.trim())).cloned().collect();
+            let words: Vec<String> = taken.iter().filter_map(|s| crate::threads::timeline::person_text(&s.text)).collect();
+            if words.is_empty() || q.items.len() >= ITEMS_MAX {
+                return (false, false);
+            }
+            q.steers.retain(|s| !(s.run_id == run_id && !pending.contains(s.text.trim())));
+            let said = words.join("\n\n");
+            let input = Some(Value::String(format!("{CARRIED_NOTE}\n{said}")));
+            let mut item = new_item(session_id, &said, true, Sent { input, ..Sent::default() });
+            item.pushed = true;
+            q.items.insert(0, item);
+            q.changed();
+            (true, true)
+        });
+        if carried {
+            tracing::info!(agent = %agent.name, run_id = %run_id, "queue: words of a turn the brake stopped carried to the next");
+            self.kick(&agent.name);
+        }
+        carried
     }
 
     /// Words of the person went into that run while it went on (`steer`; read like `waits_in`).

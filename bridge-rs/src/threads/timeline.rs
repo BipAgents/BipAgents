@@ -656,6 +656,16 @@ pub fn segment_items(
                     continue;
                 }
                 rescuing = false;
+                if raw.contains(crate::msg_queue::CARRIED_OPEN) {
+                    // words the turn the brake stopped took and never got to, started again (msg_queue.rs `carry`):
+                    // shown here once, their row « Ajouté pendant la réponse » (its check « Pris en compte ») out
+                    let added = |i: &Item| {
+                        i.body.get("added_during_run") == Some(&json!(true)) && !i.text().is_empty() && text.contains(i.text())
+                    };
+                    while let Some(at) = items.iter().rposition(added) {
+                        items.remove(at);
+                    }
+                }
                 if crate::turn_restart::restarted(&raw) {
                     // the turn before was stopped for these words and started again with them (turn_restart.rs): its
                     // cut answer and Hermes' « not processed » line leave the conversation, one answer comes for both
@@ -1573,6 +1583,31 @@ mod tests {
         // the person's own Stop: as it was
         let own = items(&[row(1, "user", json!("Cherche")), row(2, "assistant", json!(interrupted))]);
         assert_eq!(own[1].text(), interrupted);
+    }
+
+    /// 27/11 (Famille): words added during a turn the brake stopped are started again as the next message
+    /// (msg_queue.rs `carry`): shown once, there, never as « Ajouté pendant la réponse » with a check that lies.
+    #[test]
+    fn words_carried_after_the_brake_show_once_as_the_next_message() {
+        let gloves = "Trouve-moi des gants en laine Merino pour Mamino";
+        let steer = format!("[OUT-OF-BAND USER MESSAGE from the user]\n{gloves}\n[/OUT-OF-BAND USER MESSAGE]");
+        let rows = vec![
+            row(1, "user", json!("Écris à Léa")),
+            row(2, "user", json!(steer)),
+            row(3, "assistant", json!("Operation interrupted: waiting for model response (0.0s elapsed).")),
+            row(4, "user", json!(format!("{RESCUE_MARK} Je me suis arrêté.\n\nnote"))),
+            row(5, "assistant", json!("Je n'ai pas pu lire ton agenda. Je m'occupe des gants juste après.")),
+            row(6, "user", json!(format!("<!--bip:now 9 h-->\n{}\n{gloves}", crate::msg_queue::CARRIED_NOTE))),
+            row(7, "assistant", json!("Voici trois paires.")),
+        ];
+        let got = items(&rows);
+        let people: Vec<(&str, bool)> = got
+            .iter()
+            .filter(|i| i.body.get("role") == Some(&json!("person")))
+            .map(|i| (i.text(), i.body.get("added_during_run").is_some()))
+            .collect();
+        assert_eq!(people, [("Écris à Léa", false), (gloves, false)]);
+        assert!(got.iter().all(|i| !i.text().contains("bip:") && !i.text().contains("Not a new subject")));
     }
 
     /// turn_restart.rs: a turn stopped for new words and started again with them shows the two messages and the one

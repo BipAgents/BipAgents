@@ -1214,6 +1214,26 @@ pub fn stopped_tool(over: &Over) -> Option<String> {
 /// The rescue turn's input (runs.rs `loop_rescue`): the mark, the person's line (in their language: what the apps
 /// show of this row), then the agent's instruction, in English, out of the person's sight.
 pub fn rescue_input(over: &Over, lang: &str) -> String {
+    rescue_input_with(over, lang, &[])
+}
+
+/// `rescue_input`, with the words the person added while the stopped turn went on (`added`): taken up right after it
+/// as their next message (msg_queue.rs `carry`), so the rescue turn neither answers them nor forgets them.
+pub fn rescue_input_with(over: &Over, lang: &str, added: &[String]) -> String {
+    let base = rescue_input_alone(over, lang);
+    let added: Vec<String> =
+        added.iter().map(|w| w.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|w| !w.is_empty()).collect();
+    if added.is_empty() {
+        return base;
+    }
+    let quoted = added.iter().map(|w| format!("« {} »", crate::tools_knowledge::head(w, 400))).collect::<Vec<_>>().join(", ");
+    format!(
+        "{base}\n\nWhile you were working, your person also wrote: {quoted}. It is taken up right after this answer, as \
+their next message: don't answer it here, just say in a few words that you'll see to it right after."
+    )
+}
+
+fn rescue_input_alone(over: &Over, lang: &str) -> String {
     let what = match over {
         Over::SameCall(tool) => match lookup_phrase(tool, "en").filter(|_| lookup_tool(tool, None)) {
             Some(phrase) => format!("repeated {phrase} ({tool}) with the same arguments again and again"),
