@@ -257,7 +257,13 @@ impl Imports {
                 return with("failed", step.get("error").cloned());
             }
             if truthy("done") {
-                return with("done", None);
+                // what of the agents stayed on the computer (installer/bipinstall/profile_guard.py labels: `mcp:<name>`,
+                // `hooks`, `plugins`, `sandbox`…), for the app to say once
+                let mut done = with("done", None);
+                if let Some(left) = step.get("left_out").filter(|v| v.is_array()) {
+                    done["left_out"] = left.clone();
+                }
+                return done;
             }
             if (self.clock)() - float_of(step.get("at")) >= STALE_SECONDS {
                 return with("failed", Some(json!("the import stopped half-way")));
@@ -501,6 +507,19 @@ mod tests {
             json!({"state": "failed", "error": "the import stopped half-way", "step": 2, "total": 4, "label": null})
         );
         assert!(!imports.importing());
+        // done: what stayed on the computer comes with it (profile_guard's labels), nothing when nothing did
+        std::fs::write(
+            dir.path().join(FOLDER).join("progress.json"),
+            r#"{"step": 4, "total": 4, "label": "Ready", "done": true, "left_out": ["mcp:temoin", "hooks"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            imports.status(&config),
+            json!({"state": "done", "step": 4, "total": 4, "label": "Ready", "left_out": ["mcp:temoin", "hooks"]})
+        );
+        std::fs::write(dir.path().join(FOLDER).join("progress.json"), r#"{"step": 4, "total": 4, "done": true}"#)
+            .unwrap();
+        assert!(imports.status(&config).get("left_out").is_none());
         assert_eq!(shown("ABCDEFGHJKMNPQRS"), "ABCD-EFGH-JKMN-PQRS");
     }
 }
