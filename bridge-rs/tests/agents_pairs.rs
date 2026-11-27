@@ -347,3 +347,60 @@ async fn a_conversation_that_fails_every_turn_is_replaced_once() {
     let created = fake.calls.lock().unwrap().iter().filter(|(m, p, _)| m == "POST" && p.ends_with("/api/sessions")).count();
     assert_eq!(created, 2, "one new conversation, kept");
 }
+
+async fn failing_hermes(State(fake): State<Fake>, request: Request) -> Response {
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let n = {
+        let mut calls = fake.calls.lock().unwrap();
+        calls.push((method.clone(), path.clone(), Value::Null));
+        calls.len()
+    };
+    match (method.as_str(), path.as_str()) {
+        ("POST", p) if p.ends_with("/api/sessions") => {
+            (axum::http::StatusCode::CREATED, axum::Json(json!({"session": {"id": format!("s{n}")}}))).into_response()
+        }
+        ("PATCH", _) => axum::Json(json!({})).into_response(),
+        ("POST", p) if p.ends_with("/v1/runs") => {
+            (axum::http::StatusCode::ACCEPTED, axum::Json(json!({"run_id": format!("r{n}")}))).into_response()
+        }
+        ("GET", p) if p.contains("/v1/runs/") => {
+            axum::Json(json!({"status": "failed", "error": "provider: 400 bad request", "output": ""})).into_response()
+        }
+        _ => (axum::http::StatusCode::NOT_FOUND, "no").into_response(),
+    }
+}
+
+/// 27/11: a « couldn't answer » says why in the pair's thread (`cause`, a code the apps word), so it shows on a place
+/// whose logs nobody reads. A turn failed in a new conversation too: « failed »; Hermes not answering: « restarting ».
+#[tokio::test]
+async fn a_couldnt_answer_notice_says_why() {
+    let fake = Fake::default();
+    let url = spawn_fake(Router::new().fallback(failing_hermes).with_state(fake.clone())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = config_dict(dir.path(), &Urls::default());
+    d["agents"] = json!({
+        "Ask": {"hermes_url": format!("{url}/p/ask"), "hermes_key": "a".repeat(32)},
+        "Failing": {"hermes_url": format!("{url}/p/failing"), "hermes_key": "f".repeat(32)},
+        "Gone": {"hermes_url": "http://127.0.0.1:9/p/gone", "hermes_key": "g".repeat(32)},
+    });
+    let config = parse_config(&d, None).unwrap();
+    let asker = config.agent(Some("ask")).unwrap().clone();
+    let http = reqwest::Client::new();
+
+    let failing = config.agent(Some("failing")).unwrap().clone();
+    assert_eq!(agent_pairs::ask(&http, None, &config, &asker, &failing, "Tu es là ?", 30.0).await, Answer::Unreachable);
+    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("ask", "failing")).unwrap();
+    let notice = pair.messages.last().unwrap();
+    assert_eq!((notice.kind.as_str(), notice.text.as_str(), notice.cause.as_deref()), ("notice", "couldn't answer", Some("failed")));
+    let shown = serde_json::to_value(notice).unwrap();
+    assert_eq!(shown["cause"], json!("failed"));
+    // an ask and an answer carry none (the field left out)
+    assert!(serde_json::to_value(&pair.messages[0]).unwrap().get("cause").is_none());
+
+    let gone = config.agent(Some("gone")).unwrap().clone();
+    assert_eq!(agent_pairs::ask(&http, None, &config, &asker, &gone, "Tu es là ?", 30.0).await, Answer::Unreachable);
+    let pair = agent_pairs::get(&config, &agent_pairs::pair_id("ask", "gone")).unwrap();
+    assert_eq!(pair.messages.last().unwrap().cause.as_deref(), Some("restarting"));
+    assert!(agent_pairs::CAUSES.contains(&"restarting") && agent_pairs::CAUSES.contains(&"failed"));
+}
