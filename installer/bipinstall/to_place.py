@@ -243,6 +243,21 @@ def upload(host: str, port: int, pem: str, code: str, challenge: str, archive: P
     return resp.json() if resp.content else {}
 
 
+def stays_here(inv: moving.Inventory) -> Optional[str]:
+    """What of the agents to send the place won't take (profile_guard: what would run outside its sandbox), said
+    before sending; nothing changes here."""
+    from . import profile_guard
+    labels: List[str] = []
+    for home in [inv.hermes_home]:   # what goes (agents in a space of their own stay here anyway)
+        profiles = home / "profiles"
+        for folder in [home] + (sorted(p for p in profiles.iterdir() if p.is_dir()) if profiles.is_dir() else []):
+            try:
+                labels += profile_guard.scan(folder)
+            except (OSError, ValueError):   # unreadable: said nothing of it (the import reads it again)
+                continue
+    return profile_guard.left_out_labels(labels, "en")
+
+
 def send_main(argv: List[str]) -> int:
     from .__main__ import ask, yes
     from .detect import detect
@@ -276,6 +291,9 @@ def send_main(argv: List[str]) -> int:
     if not lone and inv.left_out():   # type: ignore[attr-defined]
         say(ui.note(f"Agents in a space of their own stay here: {', '.join(inv.left_out())} (a place has none yet)."))  # type: ignore[attr-defined]
     say(ui.note("They replace your place's agents. The place keeps the offer's model (your AI credit) for all of them."))
+    staying = stays_here(inv)
+    if staying:
+        say(ui.note(staying))
     if not args.yes and not yes(ask("Send them? (y/n)", "y")):
         return 1
     machine = detect()
@@ -313,12 +331,15 @@ def send_main(argv: List[str]) -> int:
 
 # -- the place: putting an export in ------------------------------------------------------------------------------------
 
-def progress(base: Path, step: int, done: bool = False, error: Optional[str] = None) -> None:
-    """What the app shows (the bridge reads it: GET /v1/import)."""
+def progress(base: Path, step: int, done: bool = False, error: Optional[str] = None,
+             left_out: Optional[List[str]] = None) -> None:
+    """What the app shows (the bridge reads it: GET /v1/import). `left_out`: what of the agents stayed out
+    (profile_guard labels: `mcp:<name>`, `hooks`, `plugins`, `sandbox`…), said by the app once done."""
     from .backup import write_private
     label = error or (STEPS[step - 1] if 1 <= step <= len(STEPS) else "Ready")
     write_private(base / FOLDER / "progress.json", {"step": step, "total": len(STEPS), "label": label, "done": done,
-                                                    "error": error, "at": time.time()})
+                                                    "error": error, "at": time.time(),
+                                                    **({"left_out": left_out} if left_out else {})})
 
 
 def _remove(path: Path) -> None:
@@ -384,13 +405,18 @@ def _move_children(source: Path, target: Path, skip: Tuple[str, ...] = ()) -> No
         entry.rename(dest)
 
 
+# A table's header, as TOML allows it: `[a.b]`, `[[a]]`, spaces and a comment after it (`[agents.coach] # x`).
+HEADER = re.compile(r"^\s*(\[\[?)\s*([^\[\]#]*?)\s*\]\]?\s*(#.*)?$")
+
+
 def _sections(text: str) -> List[Tuple[str, List[str]]]:
-    """A TOML file as (table, lines): what comes before any table under "", then each table with its lines."""
+    """A TOML file as (table, lines): what comes before any table under "", then each table with its lines. Only for
+    the place's own config: an export's is read with tomllib and written again (merged_config), never by lines."""
     pieces: List[Tuple[str, List[str]]] = [("", [])]
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            pieces.append((stripped.strip("[]").strip(), [line]))
+        found = HEADER.match(line)
+        if found:
+            pieces.append((found.group(2).strip(), [line]))
         else:
             pieces[-1][1].append(line)
     return pieces
@@ -400,55 +426,108 @@ def _join(pieces: List[Tuple[str, List[str]]]) -> str:
     return "\n".join(line for _, lines in pieces for line in lines).rstrip("\n") + "\n"
 
 
-def _set_line(lines: List[str], key: str, value: Optional[str]) -> List[str]:
-    """`key = value` in a table's lines (replaced, added after its header, or removed with None)."""
-    pattern = re.compile(rf"\s*{re.escape(key)}\s*=")
-    kept = [line for line in lines if not pattern.match(line)]
-    if value is not None:
-        kept.insert(1, f"{key} = {json.dumps(value, ensure_ascii=False)}")
-    return kept
-
-
 def _person(table: str) -> bool:
     """The person's own tables of a bridge config (the rest describes the machine: the place's stay)."""
     return table.split(".", 1)[0] in ("agents", "pronunciations")
 
 
+# What an agent of the export keeps of its bridge table: how it looks, sounds and answers, and its key. Never how the
+# bridge reaches or runs it (`python`, `shares_apply` and the like are programs the bridge starts; `space`,
+# `hermes_home`, `host_home` and the desktop's are paths and addresses of the computer): the place's own, as its
+# agents have them (stack.py `bridge_toml`). bridge-rs/src/config.rs reads these keys.
+AGENT_KEYS = ("display_name", "hermes_key", "voice", "server_voice", "category", "color", "outfit", "costumes",
+              "answer_style", "answer_style_custom")
+
+
+def _toml_string(text: str) -> str:
+    """A TOML basic string: JSON's, with U+007F escaped too (TOML refuses it raw)."""
+    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_string(key)
+
+
+def _toml_value(value: Any) -> Optional[str]:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return _toml_string(value)
+    return None
+
+
+def _agent_lines(table: str, values: Dict[str, Any], hermes_url: str, uploads: str) -> List[str]:
+    lines = [f"[{table}]"]
+    for key in AGENT_KEYS:
+        shown = _toml_value(values.get(key))
+        if shown is not None:
+            lines.append(f"{key} = {shown}")
+    lines += [f"hermes_url = {_toml_string(hermes_url)}", f"upload_dir_host = {_toml_string(uploads)}",
+              f"upload_dir_container = {_toml_string(uploads)}"]
+    return lines
+
+
+def _pronunciation_pieces(data: Any) -> List[Tuple[str, List[str]]]:
+    """An export's pronunciations written again: words and how to say them (strings), per language or not."""
+    if not isinstance(data, dict):
+        return []
+    flat = [f"{_toml_key(k)} = {_toml_string(v)}" for k, v in data.items() if isinstance(k, str) and isinstance(v, str)]
+    pieces = [("pronunciations", ["", "[pronunciations]"] + flat)] if flat else []
+    for lang, words in data.items():
+        if isinstance(lang, str) and isinstance(words, dict):
+            lines = [f"{_toml_key(k)} = {_toml_string(v)}" for k, v in words.items()
+                     if isinstance(k, str) and isinstance(v, str)]
+            if lines:
+                table = f"pronunciations.{_toml_key(lang)}"
+                pieces.append((table, ["", f"[{table}]"] + lines))
+    return pieces
+
+
 def merged_config(place_text: str, imported_text: str, keep: List[str], main: Optional[str], root: Optional[str],
-                  hub_local: str, root_uploads: Optional[Path], media: Dict[str, str]) -> str:
+                  hub_local: str, root_uploads: Optional[Path], media: Dict[str, str],
+                  profiles: Optional[Path] = None) -> str:
     """The place's bridge config with the export's agents (those in `keep`) and pronunciations instead of its own,
-    and `media`'s roots added. The agent `main` (served at its hub's root) becomes the profile `root`; no agent keeps
-    a tailnet address."""
+    and `media`'s roots added. The agent `main` (served at its hub's root) becomes the profile `root`. Each agent is
+    served by the place's hub under /p/<profile>/ with its uploads in its profile (`profiles`), and keeps only
+    AGENT_KEYS of its table; no agent keeps a tailnet address."""
+    import tomllib
     pieces = [piece for piece in _sections(place_text) if not _person(piece[0])]
-    for table, lines in _sections(imported_text)[1:] if imported_text else []:
-        if not _person(table):
+    hub = hub_local.rstrip("/")
+    # the export's config read for real and written again: no line of it is copied (a header TOML allows but a
+    # line splitter misses, `[agents.coach] # x`, would carry the programs the bridge starts)
+    imported = tomllib.loads(imported_text) if imported_text else {}
+    agents = imported.get("agents") if isinstance(imported.get("agents"), dict) else {}
+    for name in keep:
+        values = agents.get(name)
+        if not isinstance(values, dict):
             continue
-        parts = table.split(".")
-        if parts[0] == "agents":
-            name = parts[1] if len(parts) > 1 else ""
-            if name not in keep:
-                continue
-            lines = _set_line(lines, "public_url", None)
-            if name == main and root:
-                table = ".".join(["agents", root] + parts[2:])
-                lines = [f"[{table}]"] + lines[1:]
-                if len(parts) == 2:
-                    lines = _set_line(lines, "hermes_url", f"{hub_local.rstrip('/')}/p/{root}")
-                    if root_uploads is not None:
-                        lines = _set_line(lines, "upload_dir_host", str(root_uploads))
-                        lines = _set_line(lines, "upload_dir_container", str(root_uploads))
-        pieces.append((table, [""] + lines))
+        if name == main and root:
+            profile = root
+        else:
+            url = str(values.get("hermes_url") or "").rstrip("/")
+            profile = url[len(hub) + 3:].split("/", 1)[0] if url.startswith(hub + "/p/") else name
+            profile = profile if profile_ok(profile) else name
+        if not profile_ok(profile):
+            continue
+        uploads = (root_uploads if name == main and root and root_uploads is not None
+                   else (profiles / profile / "uploads" if profiles is not None else None))
+        table = f"agents.{profile if name == main and root else _toml_key(name)}"
+        pieces.append((table, [""] + _agent_lines(table, values, f"{hub}/p/{profile}",
+                                                  str(uploads) if uploads is not None
+                                                  else str(values.get("upload_dir_host") or ""))))
+    pieces += _pronunciation_pieces(imported.get("pronunciations"))
     roots_at = next((i for i, (table, _) in enumerate(pieces) if table == "media.roots"), None)
     if roots_at is None and media:
         pieces.append(("media.roots", ["", "[media.roots]"]))
         roots_at = len(pieces) - 1
     if roots_at is not None:
         lines = pieces[roots_at][1]
-        header = next(i for i, line in enumerate(lines) if line.strip() == "[media.roots]")
+        header = next(i for i, line in enumerate(lines)
+                      if (found := HEADER.match(line)) and found.group(2).strip() == "media.roots")
         for prefix, folder in media.items():
-            key = json.dumps(prefix, ensure_ascii=False)
+            key = _toml_string(prefix)
             if not any(line.strip().startswith(f"{key} =") for line in lines):
-                lines.insert(header + 1, f"{key} = {json.dumps(folder, ensure_ascii=False)}")
+                lines.insert(header + 1, f"{key} = {_toml_string(folder)}")
     return _join(pieces)
 
 
@@ -461,15 +540,22 @@ def _write_env(path: Path, values: Dict[str, Optional[str]]) -> None:
     os.chmod(path, 0o600)
 
 
-def place_profile(folder: Path, hub: Dict[str, Any], hub_env: Dict[str, str]) -> None:
-    """One profile brought in, set as the place's agents are: the offer's model (and nothing else answering for it),
-    the place's sandbox, risky commands asked."""
+def place_profile(folder: Path, hub: Dict[str, Any], hub_env: Dict[str, str]) -> List[str]:
+    """One profile brought in, set as the place's agents are: nothing of it that would run outside the sandbox
+    (profile_guard.foreign: its programs, hooks, plugins, scripts and sandbox settings stay out), the hub's settings
+    with its own ways over them, the offer's model (and nothing else answering for it), the place's sandbox, risky
+    commands asked. Returns what stayed out."""
     import yaml
+    from . import profile_guard
+    left_out = profile_guard.foreign(folder)
     path = folder / "config.yaml"
-    data = read_yaml(path)
+    # the hub's settings, as the place's own agents are cloned from it (its sandbox, model, media rule
+    # `gateway.strict`…), with the profile's own ways over them (profile_guard.KEPT)
+    data = profile_guard.over_hub({k: v for k, v in hub.items() if k not in ("mcp_servers", "bot_peers")},
+                                  read_yaml(path))
     for key in ("model", "terminal"):
-        if isinstance(hub.get(key), dict):
-            data[key] = hub[key]
+        if not isinstance(hub.get(key), dict):
+            data.pop(key, None)   # never the computer's (a terminal of its own would run on the server)
     data.setdefault("approvals", {})
     if isinstance(data["approvals"], dict):
         data["approvals"]["mode"] = "manual"
@@ -494,6 +580,7 @@ def place_profile(folder: Path, hub: Dict[str, Any], hub_env: Dict[str, str]) ->
         values["HERMES_DOCKER_BINARY"] = hub_env["HERMES_DOCKER_BINARY"]
     values.update({key: None for key in HUB_SERVER})   # served by the place's hub, under /p/<profile>/
     _write_env(folder / ".env", values)
+    return left_out
 
 
 def _free_name(profiles: Path, wanted: str) -> str:
@@ -565,8 +652,9 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         _remove(scratch)
         unpacked = {**info, "roots": {name: str(scratch / name) for name in info["roots"]}}
         target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=None)
-        summary = moving.restore(tar, unpacked, target)
+        summary = moving.restore(tar, unpacked, target, untrusted=True)   # someone else's archive: no link
         exported_keys = summary.pop(moving.VAULT_KEYS, None)   # a sealed place's export: its stores' keys
+        skipped_links = summary.pop(moving.SKIPPED, None)       # said in the journal by restore; the app's below
         imported_config = scratch / "config" / "bridge.toml"
         imported_before = imported_config.read_text(encoding="utf-8") if imported_config.is_file() else ""
         if not lone and not imported_before:
@@ -622,16 +710,32 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
             if exported_keys is not None:
                 vault_keys.back_to_today(place.data_dir, exported_keys)
             reseal = vault_keys.files_came(place.data_dir, place.data_dir, was_sealed, base)
+        left_out: Dict[str, List[str]] = {}
         for folder in sorted(profiles.iterdir()):
             if folder.is_dir() and (folder / "config.yaml").is_file():
-                place_profile(folder, hub_yaml, hub_env)
+                out = place_profile(folder, hub_yaml, hub_env)
+                if out:
+                    left_out[folder.name] = out
+            elif folder.is_dir():   # a folder Hermes would serve without a config of its own: its code out too
+                from . import profile_guard
+                out = profile_guard.strip_code(folder)
+                if out:
+                    left_out[folder.name] = out
             browser_ports = place.browsers_root / folder.name / "ports.json"
             browser_ports.unlink(missing_ok=True)   # picked again from the place's own ports
+            # and its relay's settings (the programs bip-browser-mcp starts, the unit it writes): the bridge's
+            # `browser add` writes the place's own
+            (place.browsers_root / folder.name / "mcp.json").unlink(missing_ok=True)
         imported_text = scratch_config_text(scratch)
         # the export's agents in place of the place's (any may go), under the bridge's lock (bridgeconf)
         bridgeconf.update(config, lambda now: merged_config(now, imported_text, keep, main, root, hub_local,
-                                                            (profiles / root / "uploads") if root else None, media),
+                                                            (profiles / root / "uploads") if root else None, media,
+                                                            profiles),
                           removing=bridgeconf.ANY)
+        for name, out in left_out.items():   # the journal's (the app's: progress.json `left_out`)
+            print(f"Not brought in {name}: {', '.join(out)}", flush=True)
+        info["left_out_code"] = sorted({label for out in left_out.values() for label in out}
+                                       | ({"links"} if skipped_links else set()))
 
         progress(base, 4)
         from . import migrations
@@ -692,7 +796,7 @@ def import_place_main(argv: List[str]) -> int:
     archive = Path(args.archive)
     runner = hermes.Runner()
     try:
-        bring_in(archive, passphrase, runner, base)
+        info = bring_in(archive, passphrase, runner, base)
     except (PlaceError, SealedError, OSError, ValueError, KeyError) as exc:
         message = str(exc) if isinstance(exc, (PlaceError, SealedError)) else "the export couldn't be put in"
         progress(base, 0, error=message)
@@ -703,7 +807,7 @@ def import_place_main(argv: List[str]) -> int:
         runner.run(bridge_restart(base), check=False)
         return 1
     archive.unlink(missing_ok=True)
-    progress(base, len(STEPS), done=True)
+    progress(base, len(STEPS), done=True, left_out=info.get("left_out_code") or None)
     from .family import bridge_restart
     runner.run(bridge_restart(base), check=False)   # last: it comes back with its agents
     print("Imported.", flush=True)

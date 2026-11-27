@@ -295,7 +295,7 @@ def prepare_shared(commit, repo=None):
     log("shared images for %s: %s" % (commit[:12], "ready" if done.returncode == 0 else "not all pulled"))
 
 
-TOOLS = ("seat-agent.py", "add-seat.sh", "place-move.py")
+TOOLS = ("seat-agent.py", "add-seat.sh", "place-move.py", "place_check.py")
 
 
 def refresh_tools(repo=SHARED_REPO, lib=LIB):
@@ -1492,6 +1492,8 @@ def keep_settings(answer, path=None):
         changed["memory_high_share"] = float(settings["memory_high_share"])
     if "place_disk_gib" in settings and disk_gib(settings) == settings["place_disk_gib"]:
         changed["place_disk_gib"] = settings["place_disk_gib"]
+    if isinstance(settings.get("clean_imports"), bool):   # an import's leftovers taken out (clean_imports_start)
+        changed["clean_imports"] = settings["clean_imports"]
     if changed != kept:
         write_json(path, changed)
 
@@ -2862,6 +2864,175 @@ def _account_exists(user):
         return False
 
 
+# -- what a place may have left to run outside its sandbox (27/11, security triage section 0, lot A0) ---------------------
+# place_check.py (beside this agent, taken from root's checkout with it: TOOLS) looks at every place READ ONLY, as root,
+# following no link, at most 1 MiB a file, each place within its own time (place_check.py PLACE_SECONDS: one place
+# can't blind the look at its neighbours). It runs in a unit of its own (systemd-run --unit=PLACE_CHECK_UNIT, out of
+# this oneshot round's cgroup, which systemd kills when the round ends), niced, its memory and time bounded by systemd
+# (MemoryMax, RuntimeMaxSec): nothing of it can stop or slow the round, and the unit running is its lock. Once a day,
+# and as soon as a new place_check.py comes with an update wave (an attempt that died counts: at most one a day).
+# Its numbers per category (never a name nor a content) go to the guichet with each place in the beat ("check"),
+# which keeps them and alerts Kerfy Studio when a place has any. Nothing is cleaned: Alex decides. Only an import's
+# leftovers in a place's Hermes profiles (profile_guard.py own_code, the restore's rule) may be taken out, as the
+# place, in a unit of its own too, when the guichet's setting `clean_imports` says so (off by default).
+PLACE_CHECK = os.path.join(LIB, "place_check.py")
+PLACE_CHECK_STATE = "/var/lib/bipagents/place-check.json"
+PLACE_CHECK_UNIT = "bipagents-place-check"
+CLEAN_IMPORTS_UNIT = "bipagents-clean-imports"
+PLACE_CHECK_EVERY = 24 * 3600
+PLACE_CHECK_SECONDS = 2 * 3600       # the whole look (40 places at 120 s each at most, and the processes' two looks)
+PLACE_CHECK_MEMORY = "512M"
+PLACE_CHECK_FRESH = 3 * 24 * 3600   # older numbers are not sent (a check that stopped running is not a clean place)
+
+
+def place_check_version(path=PLACE_CHECK):
+    import hashlib
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def place_check_due(state, version, now):
+    """A new place_check.py, or a day since the last attempt (a finished look or one that died)."""
+    if not version:
+        return False
+    tried, tried_version = float(state.get("tried") or state.get("at") or 0), state.get("tried_version")
+    if (tried_version or state.get("version")) != version:
+        return True
+    return now - tried >= PLACE_CHECK_EVERY
+
+
+def in_own_unit(unit, args, run=None, seconds=PLACE_CHECK_SECONDS):
+    """`args` in a transient unit of its own (out of the round's), bounded by systemd; False when that unit runs
+    already (or can't be made). The user manager when not root (the tests)."""
+    run = run or (lambda command: subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                                 stderr=subprocess.DEVNULL, timeout=60).returncode)
+    user = [] if os.geteuid() == 0 else ["--user"]
+    if run(["systemctl"] + user + ["is-active", "--quiet", unit + ".service"]) == 0:
+        return False
+    return run(["systemd-run"] + user + ["--quiet", "--collect", "--unit=" + unit,
+                                         "-p", "MemoryMax=" + PLACE_CHECK_MEMORY, "-p", "RuntimeMaxSec=%d" % seconds,
+                                         "-p", "Nice=19", "-p", "CPUWeight=20", "-p", "IOSchedulingClass=idle"]
+               + list(args)) == 0
+
+
+def place_check_start(now=None, state_path=PLACE_CHECK_STATE, check=PLACE_CHECK, run=None):
+    """The check started in its own unit when it is due; its attempt written first (one that dies is not started
+    again every round). Returns whether it was started."""
+    now = time.time() if now is None else now
+    version = place_check_version(check)
+    state = read_json(state_path)
+    if not place_check_due(state, version, now):
+        return False
+    if not in_own_unit(PLACE_CHECK_UNIT, [sys.executable, "-I", os.path.abspath(__file__), "--place-check"], run):
+        return False
+    state.update(tried=now, tried_version=version)
+    write_json(state_path, state)
+    return True
+
+
+def place_check_run(state_path=PLACE_CHECK_STATE, check=PLACE_CHECK, now=None):
+    """--place-check, in its unit: the check of every place, its numbers written for the next beats. A place whose look
+    failed or took too long is "error" alone; a failure of the whole look is written as the check's error, the
+    numbers of the last look that worked dropped (never sent as a clean place)."""
+    import importlib.util
+    started = time.time() if now is None else now
+    kept = read_json(state_path)
+    version = place_check_version(check)
+    state = {"at": started, "version": version, "tried": kept.get("tried", started), "tried_version": version}
+    try:
+        spec = importlib.util.spec_from_file_location("place_check", check)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _, rows, _, _ = module.collect([])
+        numbers = {}
+        for user, found in module.counts(rows).items():
+            number = "1" if user == "bip" else user[3:]
+            if number.isdigit() and 1 <= int(number) <= MAX_SEATS:
+                numbers[str(int(number))] = {k: int(v) for k, v in found.items()}
+        state["places"] = numbers
+        state["seconds"] = round(time.time() - started, 1) if now is None else 0
+    except BaseException as exc:   # its own process: whatever happens is written, never raised further
+        state["error"] = type(exc).__name__
+    try:
+        write_json(state_path, state)
+    except OSError as exc:
+        log("place check not kept: %s" % exc)
+    if state.get("error"):
+        log("place check failed: %s" % state["error"])
+    else:
+        flagged = sorted(n for n, found in state["places"].items() if any(found.values()))
+        log("place check: %d places, %s" % (len(state["places"]),
+                                             "findings on " + ", ".join(flagged) if flagged else "nothing found"))
+    return 0
+
+
+def place_check_beat(places_now, now=None, state_path=PLACE_CHECK_STATE):
+    """The beat's places with each one's last check (`check`: {"at", "found": {category: number}} or {"at", "error"}),
+    when it is recent."""
+    now = time.time() if now is None else now
+    state = read_json(state_path)
+    at = state.get("at")
+    if not isinstance(at, (int, float)) or now - at > PLACE_CHECK_FRESH:
+        return places_now
+    if state.get("error"):
+        for number in place_homes():
+            places_now.setdefault(number, {})["check"] = {"at": int(at), "error": str(state["error"])[:40]}
+        return places_now
+    for number, found in (state.get("places") or {}).items():
+        if isinstance(found, dict):
+            places_now.setdefault(str(number), {})["check"] = {"at": int(at), "found": found}
+    return places_now
+
+
+def clean_imports_due(settings, state):
+    """The places whose last check found an import's leftovers and that were not cleaned since (a failure: tried again
+    at the next check)."""
+    if settings.get("clean_imports") is not True or state.get("error"):
+        return []
+    cleaned = state.get("cleaned") if isinstance(state.get("cleaned"), dict) else {}
+    return [number for number, found in sorted((state.get("places") or {}).items())
+            if isinstance(found, dict) and found.get("hermes_import") and cleaned.get(number) != state.get("at")]
+
+
+def clean_imports_start(settings, state_path=PLACE_CHECK_STATE, run=None):
+    """The guichet's `clean_imports` on and a place to clean: `--clean-imports` started in a unit of its own."""
+    if not clean_imports_due(settings, read_json(state_path)):
+        return False
+    return in_own_unit(CLEAN_IMPORTS_UNIT, [sys.executable, "-I", os.path.abspath(__file__), "--clean-imports"], run)
+
+
+def clean_imports_run(settings=None, state_path=PLACE_CHECK_STATE, command=None):
+    """--clean-imports, in its unit: each due place's leftovers taken out by its own installer, as the place
+    (`bipinstall clean-imports`: profile_guard own_code under the bridge's profile lock, its gateway restarted, its
+    left_out labels kept for its person). A place is marked cleaned only when it all worked. Numbers only in the
+    journal."""
+    settings = read_json(SETTINGS) if settings is None else settings
+    state = read_json(state_path)
+    done = 0
+    for number in clean_imports_due(settings, state):
+        try:
+            entry = pwd.getpwnam(account(int(number)))
+            result = (command or place_command)(entry, ["clean-imports"], 600)
+        except (KeyError, ValueError, SeatError, OSError) as exc:
+            log("place %s: an import's leftovers not taken out: %s" % (number, str(exc)[:200]))
+            continue
+        log("place %s: an import's leftovers taken out of %s profile(s)" % (number, int(result.get("profiles") or 0)))
+        fresh = read_json(state_path)   # the check may have written since
+        if fresh.get("at") == state.get("at"):
+            cleaned = fresh.get("cleaned") if isinstance(fresh.get("cleaned"), dict) else {}
+            cleaned[number] = state.get("at")
+            fresh["cleaned"] = cleaned
+            try:
+                write_json(state_path, fresh)
+            except OSError:
+                pass
+        done += 1
+    return done
+
+
 def beat_of(server, disk, moves=True):
     """The beat's body: each place's health (and whether 443 reaches its door), the server's vitals, each place's
     memory, disk and what its bridge's files say, and (`moves`) the planned moves' phases."""
@@ -2870,6 +3041,10 @@ def beat_of(server, disk, moves=True):
         if str(number) in seats:
             seats[str(number)]["door443"] = True
     beat = {"seats": seats, "server": server, "places": with_disk(places_activity(places_memory()), disk)}
+    try:
+        place_check_beat(beat["places"])
+    except Exception as exc:   # never the beat's loss
+        log("place check not joined to the beat: %s" % exc)
     if moves:
         add_moves(beat)
     return beat
@@ -2938,6 +3113,11 @@ def main(argv=()):
             views_again()   # a place installed again: its new account's view, whatever the pull did
         except (OSError, subprocess.SubprocessError) as exc:
             log("views of the shared images not mounted: %s" % exc)
+        return 0
+    if "--place-check" in argv:   # its own unit, started by a round (place_check_start)
+        return place_check_run()
+    if "--clean-imports" in argv:   # its own unit, started by a round (clean_imports_start)
+        clean_imports_run()
         return 0
     if "--bootstrap" in argv:   # the first-boot script, before any place is installed
         return bootstrap()
@@ -3028,6 +3208,14 @@ def main(argv=()):
                 call(conf, "POST", "/v1/server/orders/%d/done" % int(order["id"]), vault_outcome(order["id"]))
             except (OSError, ValueError) as exc:
                 log("done not told yet (next round): %s" % exc)
+    try:
+        clean_imports_start(read_json(SETTINGS))
+    except Exception as exc:   # never the round's loss
+        log("import leftovers not looked at: %s" % exc)
+    try:
+        place_check_start()
+    except Exception as exc:   # never the round's loss
+        log("place check not started: %s" % exc)
     zram()   # last: installing it may take a minute, once
     return 0
 

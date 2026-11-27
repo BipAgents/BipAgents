@@ -908,6 +908,11 @@ def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Di
         home=base, repo=repo, tailnet_name=None, lan_address=address, ports=marks)),
         [(re.compile(re.escape(mark)), str(mapping[old])) for old, mark in marks.items()])
     moving.adjust_bridge(config, info, target, old_toml)
+    # Nothing that would run outside the sandbox comes back (an import made before 27/11 kept a profile's code:
+    # profile_guard.py); said in the journal.
+    from . import profile_guard
+    for folder, out in profile_guard.own_code(moving.read_inventory(config, base).hermes_home, base).items():
+        print(f"bipinstall: taken out of {folder}: {', '.join(out)}", file=sys.stderr)
 
     stuck = []
 
