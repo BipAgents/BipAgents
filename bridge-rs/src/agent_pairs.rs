@@ -562,19 +562,48 @@ async fn turn(
     // the place's files read as the turn starts (`session_search` closed for an agent the protection covers)
     let hermes = HermesClient::of_place(http.clone(), crate::config::SharedConfig::new(config.clone()));
     let input = crate::dates::now::stamped(config, target, framed);
+    let (answer, broken) = turn_in(&hermes, hub.clone(), config, id, target, &input, guest, wait, chain).await;
+    if !broken {
+        return answer;
+    }
+    // its conversation of the pair refused the turn or failed it at once (busy with nothing of ours, a history Hermes
+    // or the model won't take): once more in a new hidden conversation, never the same failure again and again
+    tracing::warn!(pair = %id, target = %target.name, "agent pair: its conversation failed the turn, once more in a new one");
+    forget_session(config, id, &target.name);
+    turn_in(&hermes, hub, config, id, target, &input, guest, wait, chain).await.0
+}
+
+/// A turn ending without its answer this soon (seconds) failed at once: its conversation, not its work.
+pub const FAILED_AT_ONCE: f64 = 30.0;
+
+/// `turn` in the pair's conversation as it is: its answer, and whether the conversation itself failed it (refused at
+/// once, busy, or the turn ended without its answer within `FAILED_AT_ONCE`).
+#[allow(clippy::too_many_arguments)]
+async fn turn_in(
+    hermes: &HermesClient,
+    hub: Option<Arc<RunHub>>,
+    config: &Config,
+    id: &str,
+    target: &AgentConfig,
+    input: &str,
+    guest: Option<&[String]>,
+    wait: f64,
+    chain: Option<&str>,
+) -> (Answer, bool) {
+    let hermes = hermes.clone();
     let mut started = None;
     let mut refused = None;
     for _ in 0..2 {
         let session = match session_for(&hermes, config, id, target).await {
             Ok(session) => session,
             Err(exc) => {
-                tracing::warn!(pair = %id, target = %target.name, error = %exc, "agent pair: no conversation");
-                return answer_to(&exc);
+                tracing::warn!(pair = %id, target = %target.name, error = %exc, body = %body_of(&exc), "agent pair: no conversation");
+                return (answer_to(&exc), false);
             }
         };
         let started_run = match guest {
-            Some(tools) => hermes.start_guest_run(target, Value::String(input.clone()), &session, None, tools).await,
-            None => hermes.start_run(target, &input, &session, None).await,
+            Some(tools) => hermes.start_guest_run(target, Value::String(input.to_string()), &session, None, tools).await,
+            None => hermes.start_run(target, input, &session, None).await,
         };
         match started_run {
             Ok(run_id) => {
@@ -590,20 +619,24 @@ async fn turn(
             }
             Err(exc) => {
                 tracing::warn!(pair = %id, target = %target.name, error = %exc, body = %body_of(&exc), "agent pair: no turn");
-                return answer_to(&exc);
+                let answer = answer_to(&exc);
+                // busy with no turn of ours (one left by a stop or a restart), or its gateway failing: a new one
+                return (answer.clone(), answer == Answer::Unreachable);
             }
         }
     }
     let Some((run_id, session)) = started else {
-        return refused.as_ref().map(answer_to).unwrap_or(Answer::Unreachable);
+        return (refused.as_ref().map(answer_to).unwrap_or(Answer::Unreachable), false);
     };
     // what the target writes to an agent in this turn counts in the asker's chain (agent_hops.rs)
     if let Some(chain) = chain {
         crate::agent_hops::follow(&run_id, chain);
     }
+    let since = py::time_time();
     let answer = follow_turn(&hermes, hub, target, &run_id, &session, wait, guest.is_some()).await;
     crate::agent_hops::forget_run(&run_id);
-    answer
+    let at_once = answer == Answer::Unreachable && py::time_time() - since < FAILED_AT_ONCE;
+    (answer, at_once)
 }
 
 /// The target's run `run_id` followed until it ends, `APPROVAL_WAIT` at most (working or waiting for the person): the
@@ -627,18 +660,27 @@ async fn follow_turn(
         }
     }
     let since = py::time_time();
+    // each kind of failed look at the run, logged once (until 27/11 none was: « couldn't answer » left no trace)
+    let mut seen_errors: Vec<String> = Vec::new();
     loop {
         tokio::time::sleep(Duration::from_secs_f64(POLL_SECONDS)).await;
         match hermes.run(target, &run_id).await {
             Ok(run) => {
                 let status = tk::str_or_empty(run.get("status"));
                 if crate::jobs::TERMINAL.contains(&status.as_str()) {
+                    let output = run.get("output").and_then(Value::as_str).unwrap_or("");
                     if status != "completed" {
+                        let error = run.get("error").map(|e| e.as_str().map_or_else(|| e.to_string(), str::to_string));
+                        let reason = run.get("turn_exit_reason").and_then(Value::as_str).unwrap_or("");
                         tracing::warn!(agent = %target.name, run_id = %run_id, status = %status,
-                            "agent pair: the target's turn ended without its answer");
+                            error = %tk::head(error.as_deref().unwrap_or(""), 300), reason = %reason, words = tk::chars(output),
+                            "agent pair: the target's turn ended without completing");
+                        // its words, when it wrote some before it ended (never Hermes' own « no reply » line)
+                        if !output.trim().is_empty() && !crate::no_reply::is_hermes_no_reply(output) {
+                            return answer_of(crate::no_reply::words_before(output).unwrap_or(output));
+                        }
                         return Answer::Unreachable;
                     }
-                    let output = run.get("output").and_then(Value::as_str).unwrap_or("");
                     return answer_of(output);
                 }
             }
@@ -648,9 +690,22 @@ async fn follow_turn(
                     Ok(messages) => crate::cronwatch::final_reply(&messages).unwrap_or_default(),
                     Err(_) => String::new(),
                 };
+                tracing::info!(agent = %target.name, run_id = %run_id, words = tk::chars(&output),
+                    "agent pair: the target's run forgotten by Hermes, its last reply read");
                 return answer_of(&output);
             }
-            Err(_) => {} // Hermes restarting: asked again next round
+            Err(exc) => {
+                // Hermes restarting, or a look refused: asked again next round, said once
+                let kind = match &exc {
+                    HermesError::Http { status, .. } => status.to_string(),
+                    other => format!("{other}"),
+                };
+                if !seen_errors.contains(&kind) {
+                    tracing::warn!(agent = %target.name, run_id = %run_id, error = %exc, body = %body_of(&exc),
+                        "agent pair: the target's run could not be looked at");
+                    seen_errors.push(kind);
+                }
+            }
         }
         // A turn still going at `wait` goes on (27/11, Alex's place: a busy target's turn, longer than the call's wait,
         // was stopped there and noted « couldn't answer », its work lost, each message after it the same): the asker
