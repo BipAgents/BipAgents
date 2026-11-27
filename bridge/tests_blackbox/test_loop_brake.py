@@ -51,10 +51,10 @@ def test_the_same_call_three_times_and_the_limits_in_the_config(bridges, fakes):
     bridge.config["jobs"] = {"handoff": False}   # no long-work steer here
     bridge.start()
     fakes.hermes.runs["run_same"] = (
-        [sse("tool.started", run_id="run_same", tool="memory", preview="add: le code du portail") for _ in range(3)]
+        [sse("tool.started", run_id="run_same", tool="send_message", preview="Léa: le code du portail") for _ in range(3)]
         + [sse("run.completed", run_id="run_same", output="ok")])
     notices = [data for name, data in follow(bridge, "run_same") if name == "bridge.notice" and data.get("code") == "loop_stopped"]
-    assert [n["reason"] for n in notices] == ["same call repeated (memory)"]
+    assert [n["reason"] for n in notices] == ["same call repeated (send_message)"]
     # 20 different calendar calls: under the configured 50
     fakes.hermes.runs["run_ok"] = looping("run_ok", 20)
     assert "bridge.notice" not in [name for name, _ in follow(bridge, "run_ok")]
@@ -322,6 +322,26 @@ def test_a_rescue_turn_that_loops_is_not_rescued_again(bridges, fakes):
     assert wait_until(lambda: fakes.hermes.seen("/v1/runs/r1/stop", "POST"))
     assert list(fakes.hermes.started) == ["r1"], "never a rescue of the rescue"
     assert bridge.logged("going round in circles: the rescue turn did not answer")
+    # 27/11: told once to answer now before it is stopped (a rescue turn stopped says nothing)
+    told = [s for s in fakes.hermes.steers if s["run_id"] == "r1" and "stop calling tools" in s["body"]["input"]]
+    assert len(told) == 1, fakes.hermes.steers
+
+
+def test_a_rescue_turn_at_its_limit_is_told_to_answer_and_answers(bridges, fakes):
+    """27/11, Alex's aibox: 4 rescue turns of 9 « did not answer » — the model called the tool it was stopped for again
+    (give_file, ask_secret), the brake stopped the rescue turn too, and the person read no word of the agent. At its
+    limit, a rescue turn is told once to answer now: its reply comes."""
+    bridge = bridges.new().start()
+    fakes.hermes.runs["run_vie"] = diagnosis("run_vie", 5)
+    reply = "Je n'ai pas retrouvé l'erreur du job de nuit. Veux-tu que je regarde les journaux du serveur ?"
+    fakes.hermes.runs["r1"] = ([sse("tool.started", run_id="r1", tool=SEARCH, preview=f"{NIGHT} {i}") for i in range(2)]
+                               + [sse("message.delta", run_id="r1", delta=reply),
+                                  sse("run.completed", run_id="r1", output=reply)])
+    events = follow(bridge, "run_vie")
+    assert [n["code"] for n in notices(events)] == ["loop_stopped", "loop_rescue_started"]
+    assert events[-1][0] == "run.completed" and events[-1][1]["output"] == reply
+    assert not fakes.hermes.seen("/v1/runs/r1/stop", "POST")
+    assert bridge.logged("going round in circles: the rescue turn answered")
 
 
 def test_the_rescue_turn_of_a_page_it_couldnt_read_gets_no_page_from_the_browser(bridges, fakes):
@@ -562,3 +582,102 @@ def test_a_task_the_brake_stops_is_paused_and_its_line_told(bridges, fakes):
     [pushed] = [p for p in fakes.apns.payloads() if p.get("j") == job["id"] or job["id"] in json.dumps(p)]
     said = bridge.get(f"/v1/notifications/{pushed['n']}", headers=AUTH).json()["preview"]
     assert "Écoles du quartier" in str(said) and "I stopped" in str(said), said
+
+
+INTERRUPTED = "Operation interrupted: waiting for model response (0.0s elapsed)."
+
+
+def test_hermes_english_line_never_reaches_the_conversation_when_the_brake_stopped_the_turn(bridges, fakes):
+    """27/11, Alex's aibox (Famille): after the brake's stop, Hermes' own line « Operation interrupted: waiting for
+    model response (0.0s elapsed). » came in the stream, then stayed in the conversation. Never when the bridge stopped
+    the turn: its rescue turn's reply follows, or the brake's line alone."""
+    bridge = bridges.new()
+    bridge.config["brake"] = {"rescue": False}
+    bridge.start()
+    fakes.hermes.runs["run_vie"] = (diagnosis("run_vie", 5)[:-1]
+                                    + [sse("message.delta", run_id="run_vie", delta=f"\n\n{INTERRUPTED}"),
+                                       sse("run.cancelled", run_id="run_vie", output=INTERRUPTED)])
+    events = follow(bridge, "run_vie")
+    assert [n["code"] for n in notices(events)] == ["loop_stopped"]
+    assert "Operation interrupted" not in json.dumps(events), events
+    # with its rescue turn: the same
+    bridge = bridges.new().start()
+    fakes.hermes.runs["run_fam"] = (diagnosis("run_fam", 5)[:-1]
+                                    + [sse("message.delta", run_id="run_fam", delta=INTERRUPTED),
+                                       sse("run.cancelled", run_id="run_fam", output=INTERRUPTED)])
+    reply = "Je n'ai pas trouvé. Veux-tu que je regarde les journaux ?"
+    fakes.hermes.runs["r1"] = [sse("message.delta", run_id="r1", delta=reply), sse("run.completed", run_id="r1", output=reply)]
+    events = follow(bridge, "run_fam")
+    assert events[-1][1].get("output") == reply
+    assert "Operation interrupted" not in json.dumps(events), events
+
+
+TAVILY_DNS = ("{\n  \"success\": false,\n  \"error\": \"Tavily search failed: HTTPSConnectionPool(host='api.tavily.com', "
+              "port=443): Max retries exceeded with url: /search (Caused by NameResolutionError(\\\"Failed to resolve "
+              "'api.tavily.com' ([Errno -3] Temporary failure in name resolution)\\\")) (keyless rescue also failed: "
+              "Keyless Parallel search failed: request failed: HTTPSConnectionPool(host='search.parallel.ai', port=443): "
+              "Max retries exceeded with url: /mcp (Caused by NameResolutionError(")
+
+
+def searching(run_id, outcomes, output):
+    """web_search calls, each answered: True a network error, False a result."""
+    events = []
+    for cut in outcomes:
+        events.append(sse("tool.started", run_id=run_id, tool="web_search", preview="gants laine merino"))
+        events.append(sse("tool.completed", run_id=run_id, tool="web_search", duration=0.04, error=cut,
+                          preview=TAVILY_DNS if cut else "{\"success\": true, \"data\": {\"web\": []}}"))
+    return events + [sse("run.completed", run_id=run_id, output=output)]
+
+
+def test_a_network_cut_of_a_few_seconds_does_not_stop_the_turn(bridges, fakes):
+    """27/11 08:52, Alex's aibox on Wi-Fi (Famille): web_search failed three times in three seconds, Tavily's name not
+    resolved; the brake took it for a broken tool and stopped the turn (« Je n'arrive pas à chercher sur le web pour
+    l'instant. »). A network error is counted apart: the turn goes on, the agent told once to wait a few seconds."""
+    bridge = bridges.new()
+    bridge.config["jobs"] = {"handoff": False}
+    bridge.config["brake"] = {"rescue": False}
+    bridge.start()
+    found = "Voici trois paires de gants en mérinos pour Mamino."
+    fakes.hermes.runs["run_net"] = searching("run_net", [True, True, True, False], found)
+    events = follow(bridge, "run_net")
+    assert notices(events) == [], notices(events)
+    assert events[-1][0] == "run.completed" and events[-1][1]["output"] == found
+    assert not fakes.hermes.seen("/v1/runs/run_net/stop", "POST")
+    told = lambda: [s["body"]["input"] for s in fakes.hermes.steers if s["body"]["input"].startswith("[bipagents:brake]")]
+    assert wait_until(lambda: told(), timeout=10)
+    assert len(told()) == 1 and "wait a few seconds" in told()[0], told()
+    # a broken tool (not the network) still stops at its third failure
+    fakes.hermes.runs["run_broken"] = (
+        [e for _ in range(3) for e in (sse("tool.started", run_id="run_broken", tool="mcp_bipagents_calendar_list", preview="x"),
+                                       sse("tool.completed", run_id="run_broken", tool="mcp_bipagents_calendar_list",
+                                           error=True, preview="Error: the calendar's file is unreadable"))]
+        + [sse("run.cancelled", run_id="run_broken")])
+    said = notices(follow(bridge, "run_broken"))
+    assert said and said[0]["reason"] == "the same tool failing again and again (calendar_list)", said
+
+
+ENTRY = "add: Podcast du matin : annoncer les rappels quelques jours avant, puis deux jours avant et la veille"
+EXISTS = "{\"success\": true, \"message\": \"Entry already exists (no duplicate added).\"}"
+
+
+def test_checking_a_note_already_kept_is_no_loop(bridges, fakes):
+    """27/11 09:2x, Alex: a preference noted, then « Je me suis arrêté : je refaisais sans cesse la même étape. », and
+    again in the next turn after « T'as réussi à noter ? » → « Je vérifie… ». Hermes' memory has no read: the model
+    checked by adding the same entry again (« Entry already exists »). No stop: told once it is done; the reply comes."""
+    bridge = bridges.new()
+    bridge.config["jobs"] = {"handoff": False}
+    bridge.start()
+    done = "C'est bien noté dans ma mémoire."
+    events = [sse("tool.started", run_id="run_note", tool="memory", preview=ENTRY),
+              sse("tool.completed", run_id="run_note", tool="memory", preview="{\"success\": true, \"message\": \"Entry added.\"}")]
+    for _ in range(3):
+        events += [sse("tool.started", run_id="run_note", tool="memory", preview=ENTRY),
+                   sse("tool.completed", run_id="run_note", tool="memory", preview=EXISTS)]
+    fakes.hermes.runs["run_note"] = events + [sse("message.delta", run_id="run_note", delta=done),
+                                              sse("run.completed", run_id="run_note", output=done)]
+    got = follow(bridge, "run_note")
+    assert notices(got) == [], notices(got)
+    assert got[-1][1].get("output") == done
+    told = lambda: [s["body"]["input"] for s in fakes.hermes.steers if s["run_id"] == "run_note"]
+    assert wait_until(lambda: told(), timeout=10)
+    assert len(told()) == 1 and "saved already" in told()[0], told()

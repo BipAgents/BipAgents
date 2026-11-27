@@ -672,8 +672,23 @@ pub fn read_reply(text: &str) -> Option<(bool, String)> {
     // NOTHING, its translations, or the background turns' own code word, alone or leading (lab 13/11: GLM answered
     // « [SILENT] » to a purchase watcher's wake-up, which went to the person as a message); never a real message in
     // brackets (« [Billets en vente !] »)
-    let silent = text.trim_start().trim_start_matches(['*', '`', '_']).starts_with(crate::background_turn::SILENT);
-    if text.is_empty() || silent || ["NOTHING", "RIEN", "NICHTS", "NADA", "SILENT", "NO_REPLY"].contains(&bare(text).as_str()) {
+    // leading: silent, whatever follows (the reason for the silence: review 27/11)
+    let lead = text.trim_start().trim_start_matches(['*', '`', '_', '«', '"', ' ']);
+    if lead.get(..crate::background_turn::SILENT.len()).is_some_and(|h| h.eq_ignore_ascii_case(crate::background_turn::SILENT)) {
+        return None;
+    }
+    // the code word anywhere else (27/11: « Rien de nouveau. [SILENT] »): nothing left but a hollow line, silent; else
+    // its words without it
+    let text = if crate::background_turn::code_word_in(text) {
+        let rest = crate::background_turn::without_code_word(text);
+        if crate::background_turn::hollow(&rest) {
+            return None;
+        }
+        rest
+    } else {
+        text.to_string()
+    };
+    if text.is_empty() || ["NOTHING", "RIEN", "NICHTS", "NADA", "SILENT", "NO_REPLY"].contains(&bare(&text).as_str()) {
         return None;
     }
     let mut lines = text.lines();

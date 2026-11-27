@@ -1200,7 +1200,7 @@ pub fn listener_events_with(mut listener: crate::runs::Listener, by: Option<Valu
         let every = Duration::from_secs_f64(SSE_KEEPALIVE_SECONDS);
         let mut due = tokio::time::Instant::now() + every;
         // each text whole, once written (runs.rs `WholeWords`)
-        let mut whole = crate::runs::WholeWords::default();
+        let mut whole = crate::runs::WholeWords::of_run(&listener.sub);
         loop {
             let (events, end) = match tokio::time::timeout_at(due, listener.queue.recv()).await {
                 Err(_) => {

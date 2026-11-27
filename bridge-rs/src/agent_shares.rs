@@ -946,7 +946,7 @@ pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, pr
         let every = Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS);
         let mut due = tokio::time::Instant::now() + every;
         // each text whole, once written (runs.rs `WholeWords`)
-        let mut whole = crate::runs::WholeWords::default();
+        let mut whole = crate::runs::WholeWords::of_run(&listener.sub);
         loop {
             let (events, end) = match tokio::time::timeout_at(due, listener.queue.recv()).await {
                 Err(_) => {

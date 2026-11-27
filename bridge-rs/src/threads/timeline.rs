@@ -584,6 +584,15 @@ pub fn segment_items(
     let mut continued_at = 0;
     // where a turn opened without the person's words starts (the item it says first gets `OPENS`)
     let mut opened = Vec::new();
+    // in the brake's rescue turn (after its row, until the person's next words): the bridge stopped the turn before
+    let mut rescuing = false;
+    // the words added during the turn going on (their items' ids), and those of the turn the brake stopped (its rescue
+    // row seen): the only ones words carried to the next message may take with them (review 27/11)
+    let mut turn_added: Vec<String> = Vec::new();
+    let mut stopped_added: Vec<String> = Vec::new();
+    // the rescue's notice not answered yet by the agent: its id, and what the person can do (`RESCUE_THEN`), said
+    // under the brake's line when the rescue turn says nothing (27/11: 4 of 9 said nothing)
+    let mut unanswered: Option<(String, String)> = None;
     for (place, shown) in in_place_compaction(rows) {
         let (row, place) = (&rows[shown], &rows[place]);
         let id = message_id(agent, session, row);
@@ -617,13 +626,24 @@ pub fn segment_items(
                 }
                 let (words, steered) = match person_words(&raw) {
                     Err(line) => {
-                        // Hermes' failed-turn row just before is replaced by this notice
+                        // Hermes' failed-turn row just before is replaced by this notice, and its own line closing the
+                        // turn the brake stopped (« Operation interrupted: … », 27/11) leaves: the bridge stopped it
                         if items.last().is_some_and(|i: &Item| {
                             i.body.get("notice").and_then(|n| n.get("code")) == Some(&json!("failed_turn"))
+                                || hermes_lines_only(i)
                         }) {
                             items.pop();
                         }
+                        rescuing = true;
+                        stopped_added = std::mem::take(&mut turn_added);
+                        if let Some((at, then)) = unanswered.take() {
+                            said_then(&mut items, &at, &then);
+                        }
                         if !line.is_empty() {
+                            let then = RESCUE_THEN_NOTE.captures(&raw).map(|c| c[1].trim().to_string()).unwrap_or_default();
+                            if !then.is_empty() {
+                                unanswered = Some((id.clone(), then));
+                            }
                             items.push(item(
                                 id,
                                 0,
@@ -650,6 +670,24 @@ pub fn segment_items(
                 if text.is_empty() && attachments.is_empty() {
                     continue;
                 }
+                rescuing = false;
+                if let Some((at, then)) = unanswered.take() {
+                    said_then(&mut items, &at, &then);
+                }
+                let mut carried_from = None;
+                if raw.contains(crate::msg_queue::CARRIED_OPEN) {
+                    // words the turn the brake stopped took and never got to, started again (msg_queue.rs `carry`):
+                    // shown here once, their row « Ajouté pendant la réponse » (its check « Pris en compte ») out
+                    // (that turn's, the same words exactly: never an earlier message the words happen to contain).
+                    // A phone holds it already: named as replaced by this one (`Page::replaced`, `REPLACES`), its
+                    // send's app id moved here (send.rs `with_sends`) — review 2, 27/11
+                    let same = |i: &Item| stopped_added.contains(&i.id) && i.text() == text;
+                    if let Some(at) = items.iter().rposition(same) {
+                        let gone = items.remove(at);
+                        stopped_added.retain(|id| *id != gone.id);
+                        carried_from = Some(gone.id);
+                    }
+                }
                 if crate::turn_restart::restarted(&raw) {
                     // the turn before was stopped for these words and started again with them (turn_restart.rs): its
                     // cut answer and Hermes' « not processed » line leave the conversation, one answer comes for both
@@ -659,12 +697,20 @@ pub fn segment_items(
                 let mut body = json!({"kind": "message", "role": "person", "text": text, "attachments": attachments});
                 if steered || row.display_kind.as_deref() == Some("steer") {
                     body["added_during_run"] = json!(true);
+                    turn_added.push(id.clone());
+                } else if !raw.contains(crate::msg_queue::CARRIED_OPEN) {
+                    // a new message: a new turn (a carried one goes on with what the stopped turn left)
+                    turn_added.clear();
+                    stopped_added.clear();
                 }
                 if let Some((from, name, words)) = peer_of(&text) {
                     body["role"] = json!("peer");
                     body["from"] = json!(from);
                     body["from_name"] = json!(name);
                     body["text"] = json!(words);
+                }
+                if let Some(old) = carried_from {
+                    body[REPLACES] = json!([old]);
                 }
                 items.push(item(id, 0, turn, body));
             }
@@ -687,8 +733,12 @@ pub fn segment_items(
                 }
                 let (text, attachments) = visible(&raw, &id, images);
                 let text = if rehearsal { crate::urgent_pay::without_verdict(&text).unwrap_or(text) } else { text };
+                // a rescue turn the brake stopped too: Hermes' line closing it is not the agent's
+                let text = if rescuing && calls.is_empty() { crate::background_turn::without_hermes_lines(&text) } else { text };
                 let renamed = renamed_in(&raw);
                 if !text.is_empty() || !attachments.is_empty() || !renamed.is_empty() {
+                    // the rescue turn answered: its words say the rest
+                    unanswered = None;
                     let mut body =
                         json!({"kind": "message", "role": "agent", "text": text, "attachments": attachments});
                     if !renamed.is_empty() {
@@ -746,6 +796,13 @@ pub fn segment_items(
             item.body.insert(OPENS.into(), json!(true));
         }
     }
+    // the rescue turn said nothing (stopped too, failed, silent), or is still to come: what the person can do. A rescue
+    // turn going on gets it too until its words are stored; then they replace it.
+    if let Some((at, then)) = unanswered.take() {
+        if rows.last().is_some_and(|r| r.role != "user") {
+            said_then(&mut items, &at, &then);
+        }
+    }
     if turn.is_empty() {
         if let Some(first) = items.first().map(|f| f.id.clone()) {
             for i in items.iter_mut().filter(|i| i.turn.is_empty()) {
@@ -755,6 +812,102 @@ pub fn segment_items(
         }
     }
     items
+}
+
+/// The second sentence of the brake's line in its rescue row (loop_brake.rs `RESCUE_THEN`).
+static RESCUE_THEN_NOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--bip:then ([^\n]*?)-->").expect("valid regex"));
+
+/// The rescue's notice `at` with the line's second sentence: its turn said nothing.
+fn said_then(items: &mut [Item], at: &str, then: &str) {
+    if let Some(notice) = items.iter_mut().find(|i| i.id == at).and_then(|i| i.body.get_mut("notice")) {
+        let head = notice.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        notice["text"] = json!(format!("{head} {then}"));
+    }
+}
+
+/// An agent's message made only of Hermes' own lines closing a turn it stopped (`background_turn::hermes_line`).
+fn hermes_lines_only(item: &Item) -> bool {
+    let b = &item.body;
+    b.get("kind") == Some(&json!("message"))
+        && b.get("role") == Some(&json!("agent"))
+        && b.get("attachments").and_then(Value::as_array).is_none_or(|a| a.is_empty())
+        && !item.text().trim().is_empty()
+        && crate::background_turn::without_hermes_lines(item.text()).is_empty()
+}
+
+/// The background turns' code word in the agent's messages (background_turn.rs `is_silent`, `told`), in every
+/// conversation (27/11, Alex: a watcher's « [SILENT] » shown as a second message, the main conversation then kept every
+/// one): a message that carries it says its other words only, one with nothing else to tell leaves, and so do the hollow
+/// lines of its turn before it (« Rien de nouveau. », then « [SILENT] »: the whole turn is silent), and the code word
+/// translated alone (`silent_reply`: « [PAS UN MOT] »). Only in a run without the person (its input `OPENS` the turn),
+/// never in code: the agent's words in the person's own turn are left as they are (review 27/11), but for the
+/// translated marker alone outside the main conversation, as before.
+pub fn quiet(items: &mut Vec<Item>, main: bool) {
+    let message = |i: &Item| i.body.get("kind") == Some(&json!("message")) && i.body.get("role") == Some(&json!("agent"));
+    // a turn here: from the person's words, or from a run's input without them (a routine's, a hand-back's: `OPENS`),
+    // to the next (`turn` is the person's message: the runs after it would share it). Only a run without the person
+    // has the code word read (review 27/11: the agent's own words in the person's turn are never touched)
+    let mut group = 0usize;
+    let mut background = vec![false];
+    let groups: Vec<usize> = items
+        .iter()
+        .map(|i| {
+            let person = matches!(i.body.get("role").and_then(Value::as_str), Some("person" | "peer"));
+            let opens = i.body.get(OPENS) == Some(&json!(true));
+            if person || opens {
+                group += 1;
+                background.push(opens && !person);
+            }
+            group
+        })
+        .collect();
+    let mut gone = vec![false; items.len()];
+    let mut silent_turns: HashSet<usize> = HashSet::new();
+    for (n, item) in items.iter_mut().enumerate() {
+        if !message(&*item) {
+            continue;
+        }
+        if !background[groups[n]] {
+            // the person's turn: as before, the code word translated hidden outside main only
+            if !main && silent_reply(&*item) {
+                gone[n] = true;
+            }
+            continue;
+        }
+        let text = item.text().to_string();
+        if crate::background_turn::code_word_in(&text) {
+            match crate::background_turn::told(&text) {
+                None if silent_reply_body(&*item) => {
+                    gone[n] = true;
+                    silent_turns.insert(groups[n]);
+                }
+                None => {
+                    item.body.insert("text".into(), json!(""));
+                }
+                Some(words) => {
+                    item.body.insert("text".into(), json!(words));
+                }
+            }
+        } else if silent_reply(&*item) {
+            gone[n] = true;
+        }
+    }
+    for (n, item) in items.iter().enumerate() {
+        if silent_turns.contains(&groups[n]) && message(item) && silent_reply_body(item) && crate::background_turn::hollow(item.text()) {
+            gone[n] = true;
+        }
+    }
+    let mut n = 0;
+    items.retain(|_| {
+        n += 1;
+        !gone[n - 1]
+    });
+}
+
+/// An agent's message with nothing attached nor renamed: its text is all it says.
+fn silent_reply_body(item: &Item) -> bool {
+    let b = &item.body;
+    b.get("attachments").and_then(Value::as_array).is_none_or(|a| a.is_empty()) && b.get("renamed").is_none()
 }
 
 /// An agent's message that only says it has nothing to tell (background_turn.rs `is_silent`), nothing attached.
@@ -883,15 +1036,25 @@ impl Page {
     /// days (an `s_` item lives two days at most, `SENDS_KEPT_SECONDS`), or without a time (an older store).
     fn replaced(&self) -> Vec<String> {
         let since = chrono::Utc::now().timestamp() as f64 - REPLACED_SECONDS;
-        self.items
+        let recent = |i: &&Item| i.kind() == "message" && !i.body.contains_key("sending") && (i.at >= since || i.at == 0.0);
+        let sent = self
+            .items
             .iter()
-            .filter(|i| i.kind() == "message" && !i.body.contains_key("sending") && (i.at >= since || i.at == 0.0))
+            .filter(recent)
             .flat_map(|i| {
                 let joined = i.body.get("joined").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
                 i.body.get("client_id").and_then(Value::as_str).into_iter().chain(joined)
             })
-            .map(|c| format!("s_{c}"))
-            .collect()
+            .map(|c| format!("s_{c}"));
+        // a carried message's row of the stopped turn (`REPLACES`): the apps 1.0 and 1.1 drop what this names by its id
+        // (whatever its age: a phone may hold it as long as its window)
+        let carried = self
+            .items
+            .iter()
+            .filter(|i| i.kind() == "message")
+            .flat_map(|i| i.body.get(REPLACES).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str))
+            .map(str::to_string);
+        sent.chain(carried).collect()
     }
 
     /// Its `s_` items lost (send.rs `lost`): `not_sent` instead of `sending` (the apps draw « Pas envoyé », a tap sends
@@ -942,6 +1105,10 @@ pub fn draws(item: &Item) -> bool {
 /// the one before it for the waiting cards (`place_waiting`; 22/11 relecture 2, R5: a card went under the words of a
 /// task's hand-back hours later, under another day).
 pub const OPENS: &str = "_opens";
+
+/// The items a phone may hold that this one replaces (never served: `Page::replaced` names them): a carried message's
+/// row « Ajouté pendant la réponse » of the turn the brake stopped.
+pub const REPLACES: &str = "_replaces";
 
 /// A row of the person's role with nothing of theirs that opens a turn: the input of a run Hermes or the bridge
 /// started (notes only, Hermes' process notice). Never a steer within a turn (the bridge's, wrapped by Hermes), nor
@@ -1270,6 +1437,49 @@ mod tests {
         assert_eq!(silent, vec![false, true, false]);
     }
 
+    /// 27/11, Alex: after a watcher's routine, « [SILENT] » came as a SECOND message, and stayed: the first, a real
+    /// report or a hollow line, the second the code word alone (the main conversation kept every one). Every
+    /// conversation now: the code word alone leaves, a hollow line before it in its turn too, a real report stays (and
+    /// carries no code word); outside main, the translated marker as before.
+    #[test]
+    fn the_code_word_in_a_second_message_never_shows() {
+        let rows = |first: &str, second: &str| {
+            let mut r = vec![
+                row(1, "user", json!("<!--bip:watch\nYour watcher « Mac » woke up.\n-->")),
+                row(2, "assistant", json!(first)),
+                row(3, "tool", json!("ok")),
+                row(4, "assistant", json!(second)),
+            ];
+            r[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "memory", "arguments": "{}"}}]));
+            r[2].tool_call_id = Some("a".into());
+            r
+        };
+        let shown = |rows: &[Row], main: bool| -> Vec<String> {
+            let mut got = items(rows);
+            quiet(&mut got, main);
+            got.iter().filter(|i| i.body.get("role") == Some(&json!("agent"))).map(|i| i.text().to_string()).collect()
+        };
+        for main in [true, false] {
+            let report = rows("Le MacBook Air M4 est à 899 € chez Boulanger.", "[SILENT]");
+            assert_eq!(shown(&report, main), ["Le MacBook Air M4 est à 899 € chez Boulanger."], "main {main}");
+            let hollow = rows("Rien de nouveau sur les prix.", "**[SILENT]**");
+            assert!(shown(&hollow, main).is_empty(), "main {main}: {:?}", shown(&hollow, main));
+            // the code word after the words, in one message: the words, without it
+            let tail = rows("Je regarde.", "Le Mac est à 899 €.\n\n[SILENT]");
+            assert_eq!(shown(&tail, main), ["Je regarde.", "Le Mac est à 899 €."], "main {main}");
+            let paren = rows("Rien à signaler.", "Rien de neuf. (SILENT)");
+            assert!(shown(&paren, main).is_empty(), "main {main}: {:?}", shown(&paren, main));
+        }
+        // a run of its own after the person's turn: its code word never takes the person's answer with it
+        let after = [row(1, "user", json!("Quoi de neuf ?")), row(2, "assistant", json!("Rien de nouveau.")),
+                     row(3, "user", json!("<!--bip:handback\nYour task ended.\n-->")), row(4, "assistant", json!("[SILENT]"))];
+        assert_eq!(shown(&after, true), ["Rien de nouveau."]);
+        // a translated marker: hidden outside main, kept in a person's own conversation
+        let marker = [row(1, "user", json!("Ça va ?")), row(2, "assistant", json!("[RIEN]"))];
+        assert_eq!(shown(&marker, false), Vec::<String>::new());
+        assert_eq!(shown(&marker, true), ["[RIEN]"]);
+    }
+
     #[test]
     fn items_come_in_the_order_the_apps_draw_them() {
         // each assistant row: its words first, then its own calls (their results folded in); the final answer last
@@ -1419,6 +1629,82 @@ mod tests {
         let nothing = items(&[row(1, "user", json!("Range")), row(2, "assistant", json!(format!(" {FAILED_NOT_PROCESSED}\n")))]);
         assert_eq!(nothing[1].body["notice"]["stopped"], "not_processed");
         assert_eq!(stopped_kind(&format!("Hermes dit : {FAILED_PARTIAL}")), None, "a reply quoting it stays a reply");
+    }
+
+    /// 27/11, Alex's aibox (Famille): the brake stopped a turn, and the conversation showed Hermes' English line
+    /// « Operation interrupted: waiting for model response (0.0s elapsed). » above the brake's own. A turn the bridge
+    /// stopped (its rescue row follows) never shows Hermes' line, nor its rescue turn when that one is stopped too; a
+    /// person's own Stop, without a rescue, keeps it (the apps tell it).
+    #[test]
+    fn hermes_line_never_shows_when_the_bridge_stopped_the_turn() {
+        let interrupted = "Operation interrupted: waiting for model response (0.0s elapsed).";
+        let mut rows = vec![
+            row(1, "user", json!("Trouve un cadeau pour Mamino")),
+            row(2, "assistant", json!("Je cherche.")),
+            row(3, "tool", json!("{\"success\": false}")),
+            row(4, "assistant", json!(interrupted)),
+            row(5, "user", json!(format!("{RESCUE_MARK} Je n'arrive pas à joindre Internet pour l'instant.\n\nnote"))),
+            row(6, "assistant", Value::Null),
+            row(7, "tool", json!("refused")),
+            row(8, "assistant", json!("Operation interrupted: handling API error (timeout).")),
+        ];
+        rows[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "web_search", "arguments": "{}"}}]));
+        rows[2].tool_call_id = Some("a".into());
+        rows[5].tool_calls = Some(json!([{"id": "b", "function": {"name": "web_search", "arguments": "{}"}}]));
+        rows[6].tool_call_id = Some("b".into());
+        let got = items(&rows);
+        let texts: Vec<&str> = got.iter().map(|i| i.text()).collect();
+        assert!(texts.iter().all(|t| !t.contains("Operation interrupted")), "{texts:?}");
+        assert!(got.iter().any(|i| i.body.get("notice").is_some_and(|n| n["code"] == "loop_rescue")));
+        // the person's own Stop: as it was
+        let own = items(&[row(1, "user", json!("Cherche")), row(2, "assistant", json!(interrupted))]);
+        assert_eq!(own[1].text(), interrupted);
+    }
+
+    /// 27/11, Alex's aibox: 4 rescue turns of 9 said nothing; the conversation kept the brake's first sentence alone
+    /// (« Je me suis arrêté : … »). When the rescue turn says nothing, the line's second sentence follows it, as in the
+    /// stream (`loop_rescue_failed`); when it answers, its words say the rest.
+    #[test]
+    fn a_rescue_turn_that_said_nothing_leaves_the_whole_line() {
+        let over = crate::loop_brake::Over::Failing("web_search".into());
+        let input = crate::loop_brake::rescue_input(&over, "fr");
+        let said = |rows: &[Row]| -> Vec<String> {
+            items(rows).iter().filter(|i| i.kind() == "notice").map(|i| i.body.get("notice").unwrap()["text"].as_str().unwrap().to_string()).collect()
+        };
+        let silent = [row(1, "user", json!("Cherche")), row(2, "user", json!(format!("<!--bip:now 9 h-->\n{input}"))),
+                      row(3, "assistant", json!("Operation interrupted: waiting for model response (2.0s elapsed)."))];
+        assert_eq!(said(&silent), [crate::loop_brake::notice_text(&over, "fr")]);
+        let answered = [row(1, "user", json!("Cherche")), row(2, "user", json!(input.clone())),
+                        row(3, "assistant", json!("Le web ne répond pas, je réessaie dans un moment ?"))];
+        assert_eq!(said(&answered), [crate::loop_brake::notice_head(&over, "fr")]);
+        // still to come: the first sentence for now
+        assert_eq!(said(&answered[..2]), [crate::loop_brake::notice_head(&over, "fr")]);
+        assert!(items(&silent).iter().all(|i| !i.text().contains("bip:")));
+    }
+
+    /// 27/11 (Famille): words added during a turn the brake stopped are started again as the next message
+    /// (msg_queue.rs `carry`): shown once, there, never as « Ajouté pendant la réponse » with a check that lies.
+    #[test]
+    fn words_carried_after_the_brake_show_once_as_the_next_message() {
+        let gloves = "Trouve-moi des gants en laine Merino pour Mamino";
+        let steer = format!("[OUT-OF-BAND USER MESSAGE from the user]\n{gloves}\n[/OUT-OF-BAND USER MESSAGE]");
+        let rows = vec![
+            row(1, "user", json!("Écris à Léa")),
+            row(2, "user", json!(steer)),
+            row(3, "assistant", json!("Operation interrupted: waiting for model response (0.0s elapsed).")),
+            row(4, "user", json!(format!("{RESCUE_MARK} Je me suis arrêté.\n\nnote"))),
+            row(5, "assistant", json!("Je n'ai pas pu lire ton agenda. Je m'occupe des gants juste après.")),
+            row(6, "user", json!(format!("<!--bip:now 9 h-->\n{}\n{gloves}", crate::msg_queue::CARRIED_NOTE))),
+            row(7, "assistant", json!("Voici trois paires.")),
+        ];
+        let got = items(&rows);
+        let people: Vec<(&str, bool)> = got
+            .iter()
+            .filter(|i| i.body.get("role") == Some(&json!("person")))
+            .map(|i| (i.text(), i.body.get("added_during_run").is_some()))
+            .collect();
+        assert_eq!(people, [("Écris à Léa", false), (gloves, false)]);
+        assert!(got.iter().all(|i| !i.text().contains("bip:") && !i.text().contains("Not a new subject")));
     }
 
     /// turn_restart.rs: a turn stopped for new words and started again with them shows the two messages and the one
@@ -2112,5 +2398,113 @@ position; not tool output and not a new delivery when replayed from conversation
     fn a_steer_joined_to_words_shows_without_its_wrapper() {
         let got = items(&[row(1, "user", json!(format!("Et après ?\n\n{}", steer("et le musée"))))]);
         assert_eq!(got[0].text(), "Et après ?\n\net le musée");
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    fn row(id: i64, role: &str, content: Value) -> Row {
+        Row {
+            row: id,
+            order: id,
+            uid: Some(format!("u{id}")),
+            role: role.into(),
+            content,
+            timestamp: 1000.0 + id as f64,
+            shown: true,
+            ..Default::default()
+        }
+    }
+
+    fn items(rows: &[Row]) -> Vec<Item> {
+        segment_items("vie", 0, "s1", rows, &HashSet::new(), &mut String::new())
+    }
+
+    fn steer(words: &str) -> String {
+        format!("[OUT-OF-BAND USER MESSAGE from the user]\n{words}\n[/OUT-OF-BAND USER MESSAGE]")
+    }
+
+    /// C1. The carried words remove every « Ajouté pendant la réponse » row of the conversation whose text they
+    /// contain (`text.contains(i.text())`, searched over all items so far), not only the stopped turn's: an earlier,
+    /// unrelated « ok » added to another answer disappears because « Booking » contains « ok ».
+    #[test]
+    fn carried_words_never_take_an_earlier_added_message_with_them() {
+        let rows = vec![
+            row(1, "user", json!("Cherche un hôtel à Lyon")),
+            row(2, "user", json!(steer("ok"))),
+            row(3, "assistant", json!("Voici trois hôtels.")),
+            row(4, "user", json!("Écris à Léa")),
+            row(5, "user", json!(steer("Réserve sur Booking"))),
+            row(6, "assistant", json!("Operation interrupted: waiting for model response (0.0s elapsed).")),
+            row(7, "user", json!(format!("{RESCUE_MARK} Je me suis arrêté.\n\nnote"))),
+            row(8, "assistant", json!("Je n'ai pas pu écrire à Léa. Je m'occupe de la réservation juste après.")),
+            row(9, "user", json!(format!("<!--bip:now 9 h-->\n{}\nRéserve sur Booking", crate::msg_queue::CARRIED_NOTE))),
+            row(10, "assistant", json!("C'est réservé.")),
+        ];
+        let people: Vec<String> = items(&rows)
+            .iter()
+            .filter(|i| i.body.get("role") == Some(&json!("person")))
+            .map(|i| i.text().to_string())
+            .collect();
+        assert_eq!(people, ["Cherche un hôtel à Lyon", "ok", "Écris à Léa", "Réserve sur Booking"]);
+    }
+
+    /// C2. `quiet` now runs on the main conversation's every agent message, the person's own turns included: code the
+    /// agent wrote (`f"{silent}"`) or an answer about the code word loses words in the conversation (the stream showed
+    /// them whole).
+    #[test]
+    fn the_agents_own_words_in_the_persons_turn_are_never_cut() {
+        for (asked, said) in [
+            ("Écris une fonction qui affiche le mode", "Voici :\n```python\ndef show(silent=False):\n    print(f\"mode: {silent}\")\n```"),
+            ("Que veut dire [SILENT] ?", "« [SILENT] » est le mot de code que j'utilise quand je n'ai rien à te dire."),
+        ] {
+            let rows = [row(1, "user", json!(asked)), row(2, "assistant", json!(said))];
+            let before: Vec<String> = items(&rows).iter().map(|i| i.text().to_string()).collect();
+            let mut got = items(&rows);
+            quiet(&mut got, true);
+            let after: Vec<String> = got.iter().map(|i| i.text().to_string()).collect();
+            assert_eq!(after, before, "{said:?}");
+        }
+    }
+
+    /// R2-1 (relecture 2, 901176782). The apps merge an `after=` page after the item it `joins`, keeping what they
+    /// hold before it (iPhone `ThreadTimeline.apply`, Android `TimelineWindow.merge`, as in the 1.1 apps); they drop
+    /// only what `replaced` names. A phone that read the conversation once the rescue turn answered holds the row
+    /// « Ajouté pendant la réponse » of the stopped turn; its catch-up then brings the carried message, the old row
+    /// never named as gone: the person's words drawn twice (the first still with its check « Pris en compte »).
+    #[test]
+    fn a_phone_that_followed_the_turn_draws_the_carried_words_once() {
+        let words = "Réserve sur Booking";
+        let mut rows = vec![
+            row(1, "user", json!("Écris à Léa")),
+            row(2, "user", json!(steer(words))),
+            row(3, "assistant", json!("Operation interrupted: waiting for model response (0.0s elapsed).")),
+            row(4, "user", json!(format!("{RESCUE_MARK} Je me suis arrêté.\n\nnote"))),
+            row(5, "assistant", json!("Je n'ai pas pu écrire à Léa. Je m'occupe de la réservation juste après.")),
+        ];
+        // what the phone holds: the conversation read after the rescue turn's answer
+        let held = page(items(&rows), &Want { chosen: true, ..Default::default() });
+        assert_eq!(held.items.iter().filter(|i| i.text() == words).count(), 1);
+        let last = held.items.last().unwrap().cursor();
+        // then the carried message and its answer: the phone's catch-up after what it holds
+        rows.push(row(6, "user", json!(format!("<!--bip:now 9 h-->\n{}\n{words}", crate::msg_queue::CARRIED_NOTE))));
+        rows.push(row(7, "assistant", json!("C'est réservé.")));
+        let caught = page(items(&rows), &Want { after: Some(last), chosen: true, ..Default::default() });
+        // the apps' merge
+        let gone: HashSet<String> = caught.replaced().into_iter().collect();
+        let kept: Vec<&Item> = held.items.iter().filter(|i| !gone.contains(&i.id)).collect();
+        let shown: Vec<String> = match (caught.reset, caught.joins.as_ref()) {
+            (false, Some(joins)) => {
+                let at = kept.iter().position(|i| &i.cursor() == joins).expect("joins a held item");
+                let ids: HashSet<&str> = caught.items.iter().map(|i| i.id.as_str()).collect();
+                kept[..=at].iter().filter(|i| !ids.contains(i.id.as_str())).map(|i| i.text().to_string())
+                    .chain(caught.items.iter().map(|i| i.text().to_string())).collect()
+            }
+            _ => caught.items.iter().map(|i| i.text().to_string()).collect(),
+        };
+        assert_eq!(shown.iter().filter(|t| *t == words).count(), 1, "{shown:?}");
     }
 }

@@ -142,6 +142,35 @@ const CHAIN_MAX: usize = 6;
 /// A run whose end on a promise may be continued (runs.rs `go_on`): a person's conversation turn an app started and
 /// follows, not a background task's, a routine's or any unattended turn, a group discussion's, the brake's rescue
 /// turn or a continuation itself, nor a turn the brake stopped, that handed work over or hit its token limit.
+/// An event of a run after the brake stopped it (`stop_looping`): the model's words are over, so a delta is left out
+/// (what Hermes streams then is its own interruption line), and Hermes' lines leave a final text (`hermes_line`:
+/// « Operation interrupted: … », « [interrupt: …] »); None when nothing of it is left. The rescue turn's events, which
+/// go on in this stream, are forwarded around this (`forward`).
+fn after_the_brake(event: SSEEvent) -> Option<SSEEvent> {
+    if is_delta(&event.r#type) {
+        return None;
+    }
+    let mut data = event.data.clone();
+    let mut changed = false;
+    for key in ["output", "content", "final_output", "text"] {
+        let Some(said) = data.get(key).and_then(Value::as_str).map(str::to_string) else { continue };
+        if !said.lines().any(crate::background_turn::hermes_line) {
+            continue;
+        }
+        let words = crate::background_turn::without_hermes_lines(&said);
+        if words.is_empty() && event.r#type == "assistant.completed" {
+            return None;
+        }
+        data.insert(key.into(), json!(words));
+        changed = true;
+    }
+    if !changed {
+        return Some(event);
+    }
+    let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
+    Some(SSEEvent::new(event.r#type, data, raw))
+}
+
 fn go_on_fits(st: &SubscriptionState) -> bool {
     !st.background
         && !st.unattended
@@ -397,9 +426,24 @@ pub fn append_to_backlog(backlog: &mut VecDeque<SSEEvent>, event: &SSEEvent) {
 #[derive(Default)]
 pub struct WholeWords {
     held: VecDeque<SSEEvent>,
+    /// The run it reads (`of_run`): its code word is left out only when it is a turn without the person.
+    run: Option<Arc<RunSubscription>>,
 }
 
 impl WholeWords {
+    /// For the run `sub` (`pass` reads whether it is a turn without the person: a routine's, a task's, a hand-back's).
+    pub fn of_run(sub: &Arc<RunSubscription>) -> WholeWords {
+        WholeWords { held: VecDeque::new(), run: Some(sub.clone()) }
+    }
+
+    /// A turn without the person (background_turn.rs marks it `unattended`; a background task's run).
+    fn without_the_person(&self) -> bool {
+        self.run.as_ref().is_some_and(|sub| {
+            let st = lock(&sub.state);
+            st.unattended || st.background
+        })
+    }
+
     /// The events to write now for `event` (none while a text is being written).
     pub fn pass(&mut self, event: SSEEvent) -> Vec<SSEEvent> {
         if in_text(&event.r#type) {
@@ -410,6 +454,17 @@ impl WholeWords {
             return vec![event];
         }
         let mut out: Vec<SSEEvent> = self.held.drain(..).collect();
+        // a text that is the background turns' code word and nothing to tell (« [SILENT] » as a second message, 27/11):
+        // never drawn, as the conversation never keeps it (threads/timeline.rs `quiet`); a turn of the person's: as
+        // written (review 2, 27/11: « [SILENT] est le mot de code… »)
+        let said: String = out.iter().filter(|e| is_delta(&e.r#type)).map(SSEEvent::text).collect();
+        if !out.iter().any(|e| e.r#type == crate::media::FILE)
+            && self.without_the_person()
+            && crate::background_turn::code_word_in(&said)
+            && crate::background_turn::is_silent(&said)
+        {
+            out.clear();
+        }
         out.push(event);
         out
     }
@@ -626,6 +681,9 @@ pub struct SubscriptionState {
     pub loop_rescue: Option<(crate::loop_brake::Over, String)>,
     /// This run is the rescue turn of that run (its limits: `rescue_limits`; never rescued itself).
     pub rescue_of: Option<String>,
+    /// A rescue turn its brake would have stopped was told instead to answer now (`stop_looping`): its next limit
+    /// stops it.
+    pub rescue_told: bool,
     /// This run is the continuation of that run, which ended on a promise (`go_on`; never continued itself).
     pub go_on_of: Option<String>,
     /// This run's end waits for that run, its continuation (`go_on`) or the brake's rescue turn (`loop_rescue`), whose
@@ -734,6 +792,7 @@ impl Default for SubscriptionState {
             braked: false,
             brake_said: None,
             loop_rescue: None,
+            rescue_told: false,
             rescue_of: None,
             go_on_of: None,
             continued_by: None,
@@ -1898,6 +1957,9 @@ impl RunHub {
     fn dispatch(&self, sub: &Arc<RunSubscription>, event: SSEEvent) {
         let mut inner = lock(&self.inner);
         let mut st = lock(&sub.state);
+        // the brake stopped it: Hermes' words after the stop (« Operation interrupted: waiting for model response
+        // (0.0s elapsed). ») never reach the conversation, its stream nor its end (27/11, Alex's aibox)
+        let Some(event) = (if st.braked { after_the_brake(event) } else { Some(event) }) else { return };
         let event = if event.r#type == "approval.request" {
             self.with_always(sub, self.in_plain_words(sub, &st, event))
         } else {
@@ -2181,9 +2243,34 @@ impl RunHub {
         let failed = crate::loop_brake::completed_with_error(&event.data);
         let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
         let limits = Self::turn_limits(st, &settings, browser_tool(&tool));
-        let over = st.turn.completed(&tool, failed, &limits);
+        // a network error is no broken tool (27/11: a Wi-Fi cut of a few seconds stopped a turn): counted apart
+        // (never for the tools whose failure is work output, nor the browser: a slow page is no Internet cut)
+        let over = if failed && crate::loop_brake::failure_counted(&tool) && crate::loop_brake::transient_failure(&event.data) {
+            st.turn.failed_transiently(&tool, &limits, crate::py::time_time())
+        } else {
+            let over = st.turn.completed(&tool, failed, &limits);
+            // « already there » (Hermes' memory, 27/11): the same call again to check it is no loop, and it is told so
+            if !failed && crate::loop_brake::already_there(&event.data) {
+                st.turn.confirmed(&tool);
+            }
+            over
+        };
         if !settings.enabled || st.braked || st.finished || st.delegating > 0 || st.subagents > 0 {
+            let _ = st.turn.take_warning();
             return;
+        }
+        // told once to wait a few seconds before trying again (a steer, after its current tool calls); not a rescue
+        // turn, told not to use the internet again
+        if let (Some(warning), true) = (st.turn.take_warning(), settings.warn && over.is_none() && st.rescue_of.is_none()) {
+            tracing::info!(agent = %sub.agent.name, run_id = %sub.run_id, reason = %warning.reason(),
+                "brake_warned: the agent told what a tool's answer means (the network failed, or saved already)");
+            let (hermes, agent, run_id, text) =
+                (self.hermes.clone(), sub.agent.clone(), sub.run_id.clone(), warning.text());
+            self.spawn(async move {
+                if let Err(err) = hermes.steer_run(&agent, &run_id, &text).await {
+                    tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "brake_warned: steer refused");
+                }
+            });
         }
         if let Some(over) = over {
             let rescuing = st.rescue_of.is_some();
@@ -2241,7 +2328,9 @@ impl RunHub {
     /// bridge's tools (an empty preview), so the brake's `same_call` can't see them: it hears it from the tool here,
     /// and stops the run at that limit like any loop (release bench of 4/11: an after-call turn made its page, then
     /// asked for it 9 times more until its token limit, 333k tokens).
-    pub fn same_write_again(&self, agent: &str, run_id: &str, tool: &str, calls: u32) {
+    /// `done`: the write went through before and its repeats are answered « already done » (27/11: asked again to
+    /// check it, harmless): held to `same_lookup`; a refused one to `same_call`.
+    pub fn same_write_again(&self, agent: &str, run_id: &str, tool: &str, calls: u32, done: bool) {
         let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else { return };
         let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
         let mut st = lock(&sub.state);
@@ -2250,7 +2339,7 @@ impl RunHub {
         }
         let rescuing = st.rescue_of.is_some();
         let limits = if rescuing { settings.rescue_limits() } else { settings.limits(st.background) };
-        if calls >= limits.same_call {
+        if calls >= if done { limits.same_lookup } else { limits.same_call } {
             let over = crate::loop_brake::Over::SameCall(crate::loop_brake::bare(tool).to_string());
             self.stop_looping(&sub, &mut st, over, rescuing, &settings);
         }
@@ -2315,6 +2404,21 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         settings: &crate::loop_brake::Settings,
     ) {
         let config = self.config.as_ref().map(|shared| shared.get());
+        // A rescue turn stopped says nothing at all (27/11, Alex's aibox: 4 of 9 « did not answer », the model calling
+        // the stopped tool again or its few calls used): told once to stop calling tools and answer now, after its
+        // current call; stopped only at its next limit.
+        if rescuing && !st.rescue_told {
+            st.rescue_told = true;
+            tracing::info!(agent = %sub.agent.name, run_id = %sub.run_id, reason = %crate::loop_brake::reason(&over),
+                "rescue turn at its limit: told to answer now");
+            let (hermes, agent, run_id) = (self.hermes.clone(), sub.agent.clone(), sub.run_id.clone());
+            self.spawn(async move {
+                if let Err(err) = hermes.steer_run(&agent, &run_id, crate::loop_brake::RESCUE_ANSWER_NOW).await {
+                    tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "rescue turn: answer-now steer refused");
+                }
+            });
+            return;
+        }
         st.braked = true;
         // The safety net's rescue would start the same work again in a background task.
         st.rescued = true;
@@ -2551,6 +2655,41 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     /// `rescue_seconds` or says nothing: a `loop_rescue_failed` notice with what the person can do, and this run's
     /// own end.
     async fn loop_rescue(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent) -> SSEEvent {
+        if lock(&sub.state).loop_rescue.is_none() {
+            return terminal;
+        }
+        // words the person added meanwhile (27/11, Alex's aibox: « Trouve-moi des gants… » lost with the stop): those
+        // the turn never took come back at its end by Hermes' `pending_steer` (msg_queue.rs `run_ended`), carried on
+        // the rescue turn's end; those it took are the next message (`carry`), the rescue turn told of both
+        let pending = as_str(terminal.data.get("pending_steer")).filter(|p| !p.trim().is_empty());
+        let queues = self.queues.get().and_then(std::sync::Weak::upgrade);
+        let mut added = queues.as_ref().map(|q| q.steered_words(&sub.agent.name, &sub.run_id)).unwrap_or_default();
+        if let Some(words) = pending.as_deref().and_then(crate::threads::timeline::person_text) {
+            if !added.iter().any(|a| words.contains(a.as_str())) {
+                added.push(words);
+            }
+        }
+        let mut end = self.loop_rescue_turn(sub, terminal, &added).await;
+        let mut carried = false;
+        if let Some(queues) = queues {
+            let session = lock(&sub.state).session_id.clone().filter(|s| !s.is_empty());
+            if let Some(session) = session {
+                carried = queues.carry(&sub.agent, &session, &sub.run_id, pending.as_deref());
+            }
+        }
+        // carried with the others, in the order written (review 27/11): never brought back a second time
+        if carried && end.data.remove("pending_steer").is_some() {
+            end.raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(end.data.clone()));
+        }
+        if let Some(pending) = pending.filter(|_| !carried && end.data.get("pending_steer").is_none()) {
+            end.data.insert("pending_steer".into(), json!(pending));
+            end.raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(end.data.clone()));
+        }
+        end
+    }
+
+    /// `loop_rescue`'s turn itself; `added`: the person's words added during the stopped turn, told to it.
+    async fn loop_rescue_turn(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent, added: &[String]) -> SSEEvent {
         let (plan, session) = {
             let mut st = lock(&sub.state);
             (st.loop_rescue.take(), st.session_id.clone())
@@ -2568,8 +2707,18 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             None => false,
         };
         let mut started = None;
+        if let Some(s) = session.as_ref() {
+            lock(&sub.state).session_id.get_or_insert_with(|| s.clone());
+        }
         if let Some(session) = session.as_ref().filter(|_| !behind) {
-            let mut input = crate::loop_brake::rescue_input(&over, &lang);
+            let mut input = crate::loop_brake::rescue_input_with(&over, &lang, added);
+            // the stopped tool's answer when it worked (a file given, a page made: 27/11, `give_file` 3 times): the
+            // rescue turn, which may not call it again, still has what the person needs
+            if let crate::loop_brake::Over::SameCall(tool) = &over {
+                if let Some(answer) = crate::loop_brake::TURNS.answer_of(&agent.name, &sub.run_id, tool) {
+                    input = format!("{input}\n\n{}", crate::loop_brake::rescue_answer_note(tool, &answer));
+                }
+            }
             if let Some(config) = &self.config {
                 input = crate::dates::now::stamped(&config.get(), &agent, &input);
             }
@@ -4162,6 +4311,17 @@ mod tests {
         assert!(whole.pass(delta("message.delta", "Fini.")).is_empty());
         let end = whole.pass(other("run.completed"));
         assert_eq!((end[0].data["delta"].as_str(), end[1].r#type.as_str()), (Some("Fini."), "run.completed"));
+        // the code word as a text of its own (27/11), in a turn without the person: never drawn; beside real words,
+        // they pass; in the person's own turn, as written (review 2)
+        let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, "run_w"));
+        lock(&sub.state).unattended = true;
+        let mut quiet = WholeWords::of_run(&sub);
+        assert!(quiet.pass(delta("message.delta", "[SIL")).is_empty() && quiet.pass(delta("message.delta", "ENT]")).is_empty());
+        assert_eq!(quiet.pass(other("tool.started")).iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), ["tool.started"]);
+        assert!(quiet.pass(delta("message.delta", "Le Mac est à 899 €. [SILENT]")).is_empty());
+        assert_eq!(quiet.pass(other("run.completed")).len(), 2);
+        assert!(whole.pass(delta("message.delta", "[SILENT] est le mot de code que j'utilise.")).is_empty());
+        assert_eq!(whole.pass(other("run.completed")).len(), 2, "the person's turn: as written");
         assert!(whole.pass(delta("message.delta", "Cou")).is_empty());
         assert_eq!(whole.rest().iter().map(|e| e.text()).collect::<String>(), "Cou");
         assert!(whole.rest().is_empty());
@@ -5093,8 +5253,8 @@ mod tests {
             hub.dispatch(&chat, started.clone());
             hub.dispatch(&task, started.clone());
             if calls > 1 {
-                hub.same_write_again("daily", "run_chat", "mcp__bipagents__create_page", calls);
-                hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", calls);
+                hub.same_write_again("daily", "run_chat", "mcp__bipagents__create_page", calls, false);
+                hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", calls, false);
             }
             // a conversation's turn at its 3rd identical call, not before
             assert_eq!(lock(&chat.state).braked, calls >= 3, "chat at {calls}");
@@ -5104,14 +5264,22 @@ mod tests {
         // a background turn at the task's same_call (5)
         assert!(!lock(&task.state).braked);
         hub.dispatch(&task, started.clone());
-        hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", 5);
+        hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", 5, false);
         assert!(lock(&task.state).braked && notices(&task).len() == 1);
         // its line kept for whoever tells its person (background_turn.rs `Ran::stopped`): nobody follows a background turn
         let said = hub.brake_said("daily", "run_task").unwrap_or_default();
         assert!(said.starts_with("I stopped") && said.ends_with('.'), "{said}");
         assert!(hub.brake_said("daily", "run_chat").is_some() && hub.brake_said("daily", "run_gone").is_none());
         // nothing followed: nothing to stop
-        hub.same_write_again("daily", "run_gone", "mcp__bipagents__create_page", 9);
+        hub.same_write_again("daily", "run_gone", "mcp__bipagents__create_page", 9, false);
+        // 27/11: a write that went through, asked again to check it (answered « already done »): its lookups' limit, 5
+        let check = run("run_check");
+        for calls in 2..=4u32 {
+            hub.same_write_again("daily", "run_check", "mcp__bipagents__notebook_write", calls, true);
+            assert!(!lock(&check.state).braked, "checked {calls} times");
+        }
+        hub.same_write_again("daily", "run_check", "mcp__bipagents__notebook_write", 5, true);
+        assert!(lock(&check.state).braked);
     }
 
     #[tokio::test]
@@ -5682,5 +5850,63 @@ tool output and not a new delivery when replayed from conversation history]";
         for said in [&request, &rescue_prompt(&request, &[], "")] {
             assert!(!said.contains("OUT-OF-BAND") && !said.contains("<!--"), "{said}");
         }
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    fn event(kind: &str, data: Value) -> SSEEvent {
+        SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}")
+    }
+
+    fn turn(hub: &RunHub, run: &str) -> Arc<RunSubscription> {
+        let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, run));
+        lock(&sub.state).session_id = Some(format!("api_{run}"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        sub
+    }
+
+    /// A1. The tools whose failure is work output (`FAILURE_TOLERANT_TOOLS`: « a page that refuses to be read among
+    /// several ») and the visible browser (its own limits) were never stopped for failing. `transient_failure` is read
+    /// before that exemption (runs.rs `brake_failure`): eight slow pages in a row (« Read timed out », a Playwright
+    /// « TimeoutError ») now stop the turn with « Je n'arrive pas à joindre Internet » although the network is fine.
+    #[tokio::test]
+    async fn slow_pages_never_stop_a_turn_as_the_internet_unreachable() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let extract = turn(&hub, "run_extract");
+        for i in 0..8 {
+            hub.dispatch(&extract, event("tool.started", json!({"tool": "web_extract", "tool_call_id": format!("e{i}"),
+                "args": {"urls": [format!("https://boutique-{i}.example/gants")]}})));
+            hub.dispatch(&extract, event("tool.completed", json!({"tool": "web_extract", "tool_call_id": format!("e{i}"),
+                "error": true, "preview": "{\"error\": \"Read timed out. (read timeout=30)\"}"})));
+        }
+        assert!(!lock(&extract.state).braked, "web_extract failing on slow pages is work output, never a loop");
+        let browse = turn(&hub, "run_browse");
+        for i in 0..8 {
+            hub.dispatch(&browse, event("tool.started", json!({"tool": "mcp__stealth__navigate", "tool_call_id": format!("b{i}"),
+                "args": {"url": format!("https://site-{i}.example")}})));
+            hub.dispatch(&browse, event("tool.completed", json!({"tool": "mcp__stealth__navigate", "tool_call_id": format!("b{i}"),
+                "error": true, "preview": "{\"error\": \"TimeoutError: Navigation timeout of 30000 ms exceeded\"}"})));
+        }
+        assert!(!lock(&browse.state).braked, "the browser has its own limits (browser_calls, page_reads)");
+    }
+
+    /// A2. `already_there` (« already exists in », « already saved »…) is read in ANY tool's answer, and `confirmed`
+    /// then takes the call back from `same_call`/`same_lookup`: the very same `read_file` (a work tool: no `same_tool`)
+    /// whose page holds « already exists in » is held to the total (60) instead of its lookups' limit (5).
+    #[tokio::test]
+    async fn the_same_read_whose_text_says_already_exists_is_still_a_loop() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let run = turn(&hub, "run_read");
+        for i in 0..6 {
+            hub.dispatch(&run, event("tool.started", json!({"tool": "read_file", "tool_call_id": format!("r{i}"),
+                "args": {"path": "/workspace/app/db.py"}})));
+            hub.dispatch(&run, event("tool.completed", json!({"tool": "read_file", "tool_call_id": format!("r{i}"), "error": false,
+                "preview": "{\"content\": \"     1|def add(name):\\n     2|    raise ValueError(f'{name} already exists in the table')\"}"})));
+        }
+        assert!(lock(&run.state).braked, "the same read 6 times: stopped at same_lookup (5), as for any read");
     }
 }

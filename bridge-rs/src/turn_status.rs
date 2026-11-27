@@ -153,6 +153,8 @@ impl Loop {
             Warning::Discovery(n, hard) => ("discovery", None, *n, hard + 1),
             // many web searches: the apps' « one tool again and again » (no new kind for them to know)
             Warning::Searches(n, hard) => ("same_tool", kind("web_search"), *n, hard + 1),
+            // never shown as a loop (runs.rs `brake_failure` only steers it): the apps' nearest kind should one reach them
+            Warning::Network(tool) | Warning::Saved(tool) => ("same_tool", kind(tool), 1, 2),
         };
         Loop { over, kind, count, stop_at }
     }

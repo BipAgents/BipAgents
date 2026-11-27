@@ -242,7 +242,8 @@ that path."
                         return tool_text(
                             &format!(
                                 "Put in your person's {label}, folder « {FOLDER} », as « {name} »: {link}\nGive them \
-this link in your reply and say it is in their {label}, folder {FOLDER}.{also}"
+this link in your reply and say it is in their {label}, folder {FOLDER}. It is given: don't call give_file again for \
+this file.{also}"
                             ),
                             false,
                         );
@@ -265,7 +266,7 @@ this link in your reply and say it is in their {label}, folder {FOLDER}.{also}"
         Ok(()) => tool_text(
             &format!(
                 "{media_line}\nPut the line above alone on its own line in your reply: your person gets the file in \
-the app. Never tell them it is in a folder."
+the app. It is given: don't call give_file again for this file. Never tell them it is in a folder."
             ),
             false,
         ),
@@ -532,6 +533,8 @@ mod tests {
         let done = call_with(&config, &agent, &args(json!({"path": "/envoi/devis.pdf"})), &drive_catalog()).await;
         assert_eq!(done["isError"], false);
         assert!(text(&done).starts_with("MEDIA:/envoi/devis.pdf\n"), "{}", text(&done));
+        // given once (27/11: asked again and again): said so
+        assert!(text(&done).contains("don't call give_file again"), "{}", text(&done));
         // kept by the bridge: the app gets it even once the sandbox is reset
         let outbox = crate::agent_files::external_outbox(&config, "wellness");
         std::fs::remove_file(outbox.join("devis.pdf")).unwrap();

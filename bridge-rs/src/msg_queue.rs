@@ -68,6 +68,13 @@ pub const WAIT_MARK: &str = "[bipagents:files_waiting]";
 /// How long a turn told to wrap up for a pushed message may still go on before the bridge stops it (a tool call
 /// that runs for minutes: the steer waits for it). `BIPAGENTS_PUSH_STOP_SECONDS` in the tests.
 pub const PUSH_STOP_SECONDS: f64 = 90.0;
+/// The note before words a turn took but never got to, the brake having stopped it (runs.rs `loop_rescue`): they start
+/// again as the person's next message, first in line (`carry`), and the conversation shows them there once
+/// (threads/timeline.rs: their row « Ajouté pendant la réponse » leaves, its check would say they were dealt with).
+pub const CARRIED_OPEN: &str = "<!--bip:carried";
+pub const CARRIED_NOTE: &str = "<!--bip:carried\nNot a new subject: your person wrote this while you were working on \
+your answer just before, which was stopped before you could do it. Do it now.\n-->";
+
 /// Items an agent's queue holds at most.
 pub const ITEMS_MAX: usize = 30;
 /// One item's words at most (a message, not a document).
@@ -590,6 +597,52 @@ impl Queues {
     /// locks, no file read).
     pub fn waits_in(&self, agent: &str, session_id: &str) -> bool {
         lock(&self.state).get(agent).is_some_and(|q| q.waits_in(session_id))
+    }
+
+    /// The person's words steered into that run (`steer`), theirs only (the bridge's notes out), in order.
+    pub fn steered_words(&self, agent: &str, run_id: &str) -> Vec<String> {
+        lock(&self.state)
+            .get(agent)
+            .map(|q| {
+                q.steers
+                    .iter()
+                    .filter(|s| s.run_id == run_id)
+                    .filter_map(|s| crate::threads::timeline::person_text(&s.text))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The brake stopped `run_id` (runs.rs `loop_rescue`): the person's words steered into it, those it took and those
+    /// it never took (`pending`: Hermes' `pending_steer`, which `run_ended` then finds nothing more to bring back), are
+    /// its conversation's next messages, in the order the person wrote them (review 27/11), first in line and started
+    /// the moment it ends, told why (`CARRIED_NOTE`), each with its app id (the apps that hold its row « Ajouté pendant
+    /// la réponse » see it come again under that id). Whether some were.
+    pub fn carry(&self, agent: &AgentConfig, session_id: &str, run_id: &str, _pending: Option<&str>) -> bool {
+        let (_, carried) = self.update(&agent.name, |q| {
+            let steered: Vec<Steer> = q.steers.iter().filter(|s| s.run_id == run_id).cloned().collect();
+            let words: Vec<(String, Option<String>)> = steered
+                .iter()
+                .filter_map(|s| crate::threads::timeline::person_text(&s.text).map(|w| (w, s.client_id.clone())))
+                .collect();
+            if words.is_empty() || q.items.len() + words.len() > ITEMS_MAX {
+                return (false, false);
+            }
+            q.steers.retain(|s| s.run_id != run_id);
+            for (at, (said, client_id)) in words.into_iter().enumerate() {
+                let input = Some(Value::String(format!("{CARRIED_NOTE}\n{said}")));
+                let mut item = new_item(session_id, &said, true, Sent { input, client_id, ..Sent::default() });
+                item.pushed = true;
+                q.items.insert(at, item);
+            }
+            q.changed();
+            (true, true)
+        });
+        if carried {
+            tracing::info!(agent = %agent.name, run_id = %run_id, "queue: words of a turn the brake stopped carried to the next");
+            self.kick(&agent.name);
+        }
+        carried
     }
 
     /// Words of the person went into that run while it went on (`steer`; read like `waits_in`).
@@ -1195,5 +1248,47 @@ mod tests {
             again.add(&agent, "s1", &format!("m{i}"), None, false, Sent::default()).unwrap();
         }
         assert_eq!(again.add(&agent, "s1", "one more", None, false, Sent::default()).unwrap_err(), "full");
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    /// B1. Words added during a turn the brake stopped: one the turn took (« Écris aussi à Paul », carried by `carry`)
+    /// and one it never took (« Et trouve des gants », Hermes' `pending_steer`, brought back by `run_ended` on the
+    /// rescue turn's end). `carry` puts the first in front, then `run_ended` puts the later words in front of it: the
+    /// person's words start in the wrong order (the later first).
+    #[tokio::test]
+    async fn words_taken_and_words_never_taken_start_in_the_order_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        config.agents.insert(
+            "maison".into(),
+            crate::config::AgentConfig {
+                name: "maison".into(),
+                hermes_url: "http://127.0.0.1:9".into(),
+                hermes_key: "x".into(),
+                ..Default::default()
+            },
+        );
+        let shared = SharedConfig::new(config.clone());
+        let hermes = HermesClient::new(reqwest::Client::new());
+        let hub = Arc::new(RunHub::new(hermes.clone(), None, 60, None));
+        let queues = Queues::new(shared, hermes, hub);
+        let agent = config.agents["maison"].clone();
+        let (taken, never) = ("Écris aussi à Paul", "Et trouve des gants");
+        queues.update_quiet("maison", |q| {
+            q.steers.push(Steer { run_id: "r1".into(), text: taken.into(), client_id: Some("c1".into()) });
+            q.steers.push(Steer { run_id: "r1".into(), text: never.into(), client_id: Some("c2".into()) });
+            (true, ())
+        });
+        // runs.rs `loop_rescue`: carried after the rescue turn, then the end (the rescue's, with the pending words)
+        assert!(queues.carry(&agent, "s1", "r1", Some(never)));
+        queues.run_ended("maison", "r1", Some("s1"), "run.completed", Some(never));
+        let texts: Vec<String> = queues.get("maison").items.iter().map(|i| i.text.clone()).collect();
+        assert_eq!(texts, [taken, never], "the words in the order the person wrote them");
     }
 }

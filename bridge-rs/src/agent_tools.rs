@@ -2408,7 +2408,8 @@ async fn mcp_call(
         if let Some(t) = turn.as_ref() {
             let calls = crate::loop_brake::TURNS.same_write_calls(&agent.name, Some(t), &name, &arguments);
             if calls > 1 {
-                state.hub.same_write_again(&agent.name, &t.run_id, &name, calls);
+                let done = crate::loop_brake::TURNS.already_done(&agent.name, Some(t), &name, &arguments);
+                state.hub.same_write_again(&agent.name, &t.run_id, &name, calls, done);
             }
         }
         return Ok(answer(refused));

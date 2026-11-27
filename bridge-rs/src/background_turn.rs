@@ -49,27 +49,127 @@ pub const SILENT: &str = "[SILENT]";
 pub const SILENT_RULE: &str = "answer exactly [SILENT]: a code word for the app, never translated, kept exactly as \
 written (in English, in brackets, nothing else), whatever the conversation's language";
 
-/// A reply that tells the person nothing: empty, the code word (with anything after it), « SILENT » or « NO_REPLY »
-/// without brackets (as Hermes' cron reads them), or only one short bracketed marker in any language (« [PAS UN MOT] »,
-/// « [RIEN] », « [SILENCIO] »: the code word translated). A report that starts with a bracketed tag and goes on is not
-/// silent.
-pub fn is_silent(text: &str) -> bool {
-    static NOTES: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"<!--[\s\S]*?(?:-->|$)").expect("valid regex"));
+/// The code word wherever it stands (27/11, Alex: « [SILENT] » seen again): in brackets, parentheses or braces, in bold,
+/// italics or code, with spaces or punctuation around; `NO_REPLY` too (as Hermes' cron reads it).
+static CODE_WORD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    // in brackets whatever the case (« [silent] »); in parentheses or braces, written as the code word is (« (SILENT) »:
+    // `{silent}` is code, review 27/11)
+    regex::Regex::new(
+        r"[*_`«»“”\x22]*\s*(?:\[\s*(?i:silent|no[_ ]reply)\s*\]|[(\{【]\s*(?:SILENT|NO[_ ]REPLY)\s*[)\}】])\s*[*_`«»“”\x22]*[.!]?",
+    )
+        .expect("valid regex")
+});
+
+static NOTES: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"<!--[\s\S]*?(?:-->|$)").expect("valid regex"));
+
+/// Whether `text` carries the code word (`CODE_WORD`), or is « SILENT » / « NO_REPLY » alone without brackets.
+pub fn code_word_in(text: &str) -> bool {
     let bare = NOTES.replace_all(text, "");
-    let t = bare.trim().trim_matches(|c: char| matches!(c, '`' | '*' | '_' | '"' | '«' | '»' | '“' | '”')).trim();
-    if t.is_empty() || bare.trim_start().starts_with(SILENT) {
+    if CODE_WORD.is_match(&bare) {
         return true;
+    }
+    let t = undressed(&bare);
+    let t = t.trim_end_matches(['.', '!']).trim();
+    ["SILENT", "NO_REPLY", "NO REPLY"].iter().any(|w| t.eq_ignore_ascii_case(w))
+}
+
+/// `text` without the code word (`CODE_WORD`) and the empty lines it leaves: what the agent told besides it.
+pub fn without_code_word(text: &str) -> String {
+    // never inside code the agent wrote (review 27/11: `print(f"mode: {silent}")`)
+    if !CODE_WORD.is_match(text) || text.contains("```") {
+        return text.trim().to_string();
+    }
+    let out = CODE_WORD.replace_all(text, "");
+    let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
+    let mut kept: Vec<&str> = Vec::new();
+    for line in lines {
+        if line.trim().is_empty() && kept.last().is_none_or(|l| l.trim().is_empty()) {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n").trim().to_string()
+}
+
+fn undressed(text: &str) -> &str {
+    text.trim().trim_matches(|c: char| matches!(c, '`' | '*' | '_' | '"' | '«' | '»' | '“' | '”')).trim()
+}
+
+/// A line saying only that there is nothing to tell (« Rien de nouveau. », « Nothing new », « RAS »…), in four
+/// languages: hollow next to the code word, never alone a reason for silence (« Rien de neuf. » alone is a report).
+pub fn hollow(text: &str) -> bool {
+    let t = undressed(&NOTES.replace_all(text, "")).to_lowercase().replace('’', "'");
+    let t = t.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+    if t.is_empty() {
+        return true;
+    }
+    const ALONE: &[&str] = &["rien", "ras", "r.a.s", "nothing", "none", "nichts", "nada", "ninguna", "aucun", "aucune"];
+    const OPENING: &[&str] = &[
+        "rien de nouveau", "rien de neuf", "rien à signaler", "rien a signaler", "rien à dire", "rien à te dire",
+        "aucun changement", "pas de changement", "aucune nouveauté", "pas de nouveauté", "aucune nouvelle",
+        "pas de nouvelles", "toujours rien", "rien n'a changé", "nothing new", "nothing to report", "nothing to tell",
+        "no news", "no change", "no update", "all quiet", "still nothing", "nothing has changed", "nichts neues",
+        "nichts zu melden", "keine änderung", "keine neuigkeiten", "noch nichts", "nada nuevo", "nada que informar",
+        "nada que contar", "sin novedad", "sin novedades", "sin cambios", "todavía nada", "ningún cambio", "no hay novedades",
+    ];
+    // after the opening, a few words more at most, no figure, nothing that turns it into news (« mais Darty… »)
+    const BUT: &[&str] = &["mais", "sauf", "cependant", "but", "except", "however", "aber", "außer", "pero", "salvo", "excepto"];
+    let hollow_rest = |rest: &str| {
+        rest.starts_with(|c: char| !c.is_alphanumeric())
+            && rest.chars().count() <= 60
+            && !rest.chars().any(|c| c.is_ascii_digit())
+            && !rest.split(|c: char| !c.is_alphanumeric()).any(|w| BUT.contains(&w))
+    };
+    ALONE.contains(&t.as_str()) || OPENING.iter().any(|o| t == *o || t.strip_prefix(*o).is_some_and(hollow_rest))
+}
+
+/// A reply that tells the person nothing: empty, « SILENT » or « NO_REPLY » without brackets (as Hermes' cron reads
+/// them), only one short marker in brackets, parentheses or braces in any language (« [PAS UN MOT] », « (RIEN) »,
+/// « [SILENCIO] »: the code word translated), or the code word anywhere with nothing but a hollow line besides it
+/// (« Rien de nouveau. [SILENT] »). A report that carries the code word and says something is not silent: it is told
+/// without the code word (`told`). A report that starts with a bracketed tag and goes on is not silent.
+pub fn is_silent(text: &str) -> bool {
+    let bare = NOTES.replace_all(text, "");
+    let t = undressed(&bare);
+    if t.is_empty() {
+        return true;
+    }
+    // the code word first: silent whatever follows (the reason for the silence, « [SILENT] Toujours 1 199 €, pas de
+    // baisse. »: int-1.1e's rule, review 27/11)
+    if CODE_WORD.find(t).is_some_and(|m| m.start() == 0) || bare.trim_start().starts_with(SILENT) {
+        return true;
+    }
+    if CODE_WORD.is_match(&bare) && !bare.contains("```") {
+        let rest = without_code_word(&bare);
+        return hollow(&rest) || marker_only(undressed(&rest));
     }
     let t = t.trim_end_matches(['.', '!']).trim();
     if ["SILENT", "NO_REPLY", "NO REPLY"].iter().any(|w| t.eq_ignore_ascii_case(w)) {
         return true;
     }
-    let Some(inner) = t.strip_prefix('[').and_then(|r| r.strip_suffix(']')) else { return false };
+    marker_only(t)
+}
+
+/// One short marker alone, in brackets, parentheses or braces (« [PAS UN MOT] », « (RIEN) »).
+fn marker_only(t: &str) -> bool {
+    let t = t.trim_end_matches(['.', '!']).trim();
+    let inner = [('[', ']'), ('(', ')'), ('{', '}')]
+        .iter()
+        .find_map(|(open, close)| t.strip_prefix(*open).and_then(|r| r.strip_suffix(*close)));
+    let Some(inner) = inner else { return false };
     let inner = inner.trim();
     inner.chars().count() <= 32
         && inner.chars().any(char::is_alphabetic)
         && inner.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | '!' | '\'' | '’'))
+}
+
+/// What the person is told of `text`: None when it is silent (`is_silent`), else its words without the code word.
+pub fn told(text: &str) -> Option<String> {
+    if is_silent(text) {
+        return None;
+    }
+    Some(if code_word_in(text) { without_code_word(text) } else { text.to_string() })
 }
 
 /// What a turn whose person is not there to answer reads (`Kind::reports_alone`), in the starter's hidden note: the
@@ -658,6 +758,8 @@ impl Pipeline {
 
     async fn deliver_as(&self, d: &Delivery, urgent: bool) -> bool {
         let agent = &d.agent;
+        // a report that carries the code word besides what it tells (27/11): told without it, its push and Boîte line
+        let said = if code_word_in(&d.text) { without_code_word(&d.text) } else { d.text.clone() };
         // a report or a moment: a smart agent's next pass of the day may be due (offer_ideas.rs)
         crate::offer_ideas::noted(&self.config.get(), &agent.name, &d.key);
         // a watcher's or a trigger's same words just told in this conversation: there again, never pushed twice
@@ -679,7 +781,7 @@ impl Pipeline {
             }
             if let (true, Some(push)) = (notify, &self.push) {
                 let run = d.run_id.clone().unwrap_or_else(|| format!("session:{}", d.session));
-                push.notify_reply(&agent.name, &run, &d.text, Some(&d.session)).await;
+                push.notify_reply(&agent.name, &run, &said, Some(&d.session)).await;
             } else if let Some(threads) = self.threads() {
                 threads.touch(&agent.name, Some(&d.session), "run").await;
             }
@@ -688,7 +790,7 @@ impl Pipeline {
         let Some(outbox) = &self.outbox else { return false };
         let message = BoiteMessage {
             id: Some(d.key.clone()),
-            text: d.text.clone(),
+            text: said,
             files: d.files.clone(),
             title: Some(d.title.clone()),
             session_id: Some(d.session.clone()),
@@ -733,6 +835,33 @@ mod tests {
         }
         // the note's words: the code word itself, the same text every run (the prompt cache)
         assert!(SILENT_RULE.contains(SILENT) && SILENT_RULE.contains("never translated"));
+    }
+
+    /// 27/11, Alex: « [SILENT] » still shown at times. The code word in any short dress, anywhere, with nothing but a
+    /// hollow line beside it, is silent; beside a real report, the report is told without it.
+    #[test]
+    fn the_code_word_anywhere_and_never_a_report_lost() {
+        for quiet in ["(SILENT)", "{SILENT}", "【SILENT】", "( silent )", "**(SILENT)**", "`{NO_REPLY}`", "[SILENT].",
+            "Rien de nouveau. [SILENT]", "Rien de neuf.\n\n[SILENT]", "[SILENT]\n\nRien à signaler.", "RAS [SILENT]",
+            "Nothing new. (SILENT)", "Nichts Neues. [SILENT]", "Sin novedades. [SILENT]", "Aucun changement depuis hier. [SILENT]",
+            "(RIEN)", "{NADA}", "<!--bip:x-->(SILENCE)", "[SILENT]\n\nLe prix n'a pas bougé : 1 199 €."] {
+            assert!(is_silent(quiet), "{quiet:?} should be silent");
+            assert_eq!(told(quiet), None, "{quiet:?}");
+        }
+        for (said, words) in [
+            ("Le MacBook Air est à 899 € chez Boulanger. [SILENT]", "Le MacBook Air est à 899 € chez Boulanger."),
+            ("Rien de nouveau sur Fnac, mais Darty le vend 899 €.\n(SILENT)", "Rien de nouveau sur Fnac, mais Darty le vend 899 €."),
+            ("Billets en vente ! [SILENT]", "Billets en vente !"),
+        ] {
+            assert!(!is_silent(said), "{said:?} is a report");
+            assert_eq!(told(said).as_deref(), Some(words), "{said:?}");
+        }
+        // what has no code word is as before: « Rien de neuf. » alone is a report, told as written
+        assert_eq!(told("Rien de neuf.").as_deref(), Some("Rien de neuf."));
+        assert_eq!(told("SILENT NIGHT est passé à la radio").as_deref(), Some("SILENT NIGHT est passé à la radio"));
+        assert!(!code_word_in("SILENT NIGHT est passé à la radio") && code_word_in("ok (SILENT)") && !code_word_in("print(f\"mode: {silent}\")"));
+        assert!(!is_silent("(42)") && !is_silent("(voir le rapport ci-dessous pour tous les détails du jour)"));
+        assert!(hollow("Rien à signaler.") && !hollow("Rien que pour toi : 899 €") && !hollow("Rien de neuf, sauf un e-mail de la banque qui demande ta signature avant vendredi sur le contrat de prêt, à lire attentivement, et un rappel du garage pour la révision de la voiture."));
     }
 
     #[test]
@@ -899,5 +1028,27 @@ mod rcl_review_probes {
     #[test]
     fn rcl_hermes_repetition_line_is_no_reply() {
         assert_eq!(ended_with("completed".into(), "[the reply degenerated into a repetition loop and was interrupted]").1, "");
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    /// D1. The code word first was silent whatever followed (« the code word (with anything after it) », int-1.1e; the
+    /// lab of 13/11). Now a reason after it that is not in the « hollow » list makes it a report: told, pushed, put
+    /// in the Boîte (`told`, `deliver_as`, Bot Chat), and a watcher's wake-up is read as news (`watchers::read_reply`).
+    #[test]
+    fn the_code_word_first_then_why_is_still_silence() {
+        for quiet in [
+            "[SILENT] Toujours 1 199 € chez Boulanger, pas de baisse.",
+            "[SILENT] — the price is unchanged (€1,199), nothing to tell.",
+            "[SILENT]\nJ'ai vérifié Fnac et Darty : mêmes prix qu'hier.",
+        ] {
+            assert!(is_silent(quiet), "{quiet:?}");
+            assert_eq!(told(quiet), None, "{quiet:?}");
+            assert_eq!(crate::watchers::read_reply(quiet), None, "{quiet:?}");
+        }
     }
 }

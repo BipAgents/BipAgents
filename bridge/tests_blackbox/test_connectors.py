@@ -180,13 +180,23 @@ def test_a_connector_end_to_end_the_secret_never_reaches_the_agent_the_model_or_
     assert card["bip_secret_kind"] == "password" and card["choices"] == ["once", "deny"]
     assert card["description"] == "Vie a besoin de ton accès Garmin (connect.garmin.example)"
     assert "garmin" in text(result) and PASSWORD not in json.dumps(result) and EMAIL not in json.dumps(result)
-    # the same name again is refused; a notification can refuse a card, never give it
-    again = tool(bridge, "ask_secret", {"name": "garmin", "site": "x.example", "kind": "password", "reason": "r"})
-    assert not_done(again) and "already in the vault" in text(again)
+    # the same name again (27/11: a watcher told « if a password is refused, ask for it again with ask_secret » was
+    # refused « already in the vault » again and again): a card to type it anew, for the same account; refused here,
+    # the one kept stays
+    again, card = ask(bridge, {"name": "garmin", "site": "connect.garmin.example", "kind": "password",
+                               "reason": "Garmin a refusé le mot de passe"}, None)
+    assert card["bip_secret_identifier"] == EMAIL and card["bip_secret_identifier_label"] == "E-mail de ton compte Garmin"
+    assert not_done(again) and "refused" in text(again), text(again)
+    assert [r["label"] for r in vault_records(bridge) if r["label"] == "garmin"] == ["garmin"]
+    # a notification can refuse a card, never give it
     with ThreadPoolExecutor(1) as pool:
         waiting = pool.submit(tool, bridge, "ask_secret", {"name": "strava", "site": "strava.example", "kind": "token",
                                                             "reason": "r"})
         other = wait_card(bridge, "bip-secret-")
+        # asked again while it waits: nothing failed (never « Not done », which the brake counts as the tool failing)
+        dup = tool(bridge, "ask_secret", {"name": "strava", "site": "strava.example", "kind": "token", "reason": "r"})
+        assert not not_done(dup) and dup.get("isError") is False, dup
+        assert "already waiting" in text(dup) and "don't call ask_secret again in this turn" in text(dup), text(dup)
         yes = bridge.post("/v1/approve", headers=AUTH, json={"agent": "vie", "run_id": other["run_id"], "choice": "once"})
         assert yes.status_code == 409 and yes.json()["detail"]["code"] == "needs_secure_field"
         no = bridge.post("/v1/approve", headers=AUTH, json={"agent": "vie", "run_id": other["run_id"], "choice": "deny"})

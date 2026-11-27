@@ -53,6 +53,8 @@
 //!     live_browser_calls = 5  live_page_reads = 3    live_discovery_same = 2 live_discovery_calls = 3 live_same_failure = 2
 //!     routine_tool_calls = 120 idle_seconds = 120
 //!     rescue = true           rescue_tool_calls = 5  rescue_seconds = 180
+//!     offline_failures = 4    offline_seconds = 30   task_offline_failures = 6 task_offline_seconds = 120
+//!     live_offline_failures = 2 live_offline_seconds = 8
 //!
 //! Searching its own tools (2026-10-28, real-day bench: 9 `tool_search` and 2 `tool_describe`, all different, in 3
 //! minutes, unheld): Hermes' `tool_search` and `tool_describe` count apart. The same query (`discovery_query`: its
@@ -71,8 +73,17 @@
 //! out of sight (`rescue_input`, its row hidden by the apps: `[bipagents:loop_rescue]`) why it was stopped, not to
 //! call that tool again, and to answer with what it has: what it tried, what it found, what blocked it, one or two
 //! ways forward. That turn has tight limits (`rescue_limits`: `rescue_tool_calls` calls, the stopped tool refused at
-//! the bridge's MCP and stopping the turn at its second call) and is never rescued itself. The person reads the
-//! brake's short line (`notice_head`), then the agent's own reply; when the rescue fails too, the full plain line.
+//! the bridge's MCP and stopping the turn at its second call) and is never rescued itself. At its first limit it is
+//! told once to stop calling tools and answer (`RESCUE_ANSWER_NOW`, 27/11: 4 rescue turns of 9 said nothing, stopped
+//! for calling the tool again), and stopped only at the next. The person reads the brake's short line
+//! (`notice_head`), then the agent's own reply; when the rescue fails too, the full plain line (in the conversation
+//! too: `RESCUE_THEN`). Words the person added meanwhile are told to it and taken up right after it (runs.rs
+//! `loop_rescue`, msg_queue.rs `carry`); a stopped `give_file` or page's answer is given to it (`rescue_answer_note`).
+//!
+//! Checking what is done is no loop (27/11: a preference noted, then « je vérifie… » stopped as « la même étape »):
+//! Hermes' `memory` again with the same words is held to `same_lookup`, an answer « already there » is not counted and
+//! tells the agent it is done (`Warning::Saved`); the bridge's write asked again answers « Already done », what it
+//! answered, and is stopped at `same_lookup` (a refused one at `same_call`).
 //! Background tasks and routines get no rescue turn.
 //!
 //! A tool failing again and again (20/11, Alex in a Live call: « Laisse-moi vérifier sur le web », then Hermes' own
@@ -82,6 +93,15 @@
 //! retries included, stops the turn with « Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je
 //! réessaie plus tard ? » (`Over::Failing`), then the rescue turn. A Live call's turns are not runs the hub follows
 //! (Hermes' `chat/stream`, live_turns.rs): their stream is braked there, with the `live` limits.
+//!
+//! The network away for a few seconds (27/11 08:52, Alex's aibox on Wi-Fi: `web_search` failed three times in three
+//! seconds, Tavily's name not resolved then Hermes' keyless rescue's, and `same_failure` stopped the turn with « Je
+//! n'arrive pas à chercher sur le web ») is no broken tool. A failure whose answer says the network failed
+//! (`transient_failure`: a name not resolved, a connection refused or cut, a time-out, a 5xx, a 429, as Hermes and
+//! urllib3 word them) neither counts toward `same_failure` nor clears it; the agent is told once to wait a few seconds
+//! and try again (`Warning::Network`), and the turn is stopped only when such errors come `offline_failures` times in
+//! a row over at least `offline_seconds` (or twice as many whatever the time), with « Je n'arrive pas à joindre
+//! Internet pour l'instant. Tu veux que je réessaie plus tard ? » (`Over::Offline`), then the rescue turn.
 //!
 //! Searching the web again and again, every search answered (the same 20/11 call, seen in the place's log: no search
 //! failed, the model kept trying new words; once already on 19/11): more than `web_searches` in a turn (20; a task 40,
@@ -129,6 +149,12 @@ pub struct Limits {
     /// new words each time, every search answered, never settling: Hermes' own cap, twice that day and once the day
     /// before). A long research belongs in a background task (`task_web_searches`).
     pub web_searches: u32,
+    /// A network error (a name not resolved, a connection refused or reset, a time-out, a 5xx, a 429:
+    /// `transient_failure`) is no broken tool (27/11, Alex's aibox on Wi-Fi: three in three seconds stopped a turn at
+    /// `same_failure`): counted apart, any tool, the turn stopped once they come this many times in a row over at
+    /// least `offline_seconds`…
+    pub offline_failures: u32,
+    pub offline_seconds: f64,
 }
 
 /// `[brake]`.
@@ -173,6 +199,9 @@ impl Default for Settings {
                 // the bench's longest legitimate research turn makes 12 (brake-traces `web_research_long`), the real
                 // day's 5 or 6
                 web_searches: 20,
+                // a Wi-Fi that drops for a few seconds: told to wait, stopped after half a minute of it
+                offline_failures: 4,
+                offline_seconds: 30.0,
             },
             // under Hermes' own cap of 150 model calls (tool_diet.rs), so the brake speaks first
             task: Limits {
@@ -187,6 +216,8 @@ impl Default for Settings {
                 discovery_calls: 15,
                 same_failure: 5,
                 web_searches: 40,
+                offline_failures: 6,
+                offline_seconds: 120.0,
             },
             // a call: a few quick lookups, then speak (the media, long and browser tools are closed there:
             // live_turns.rs `LIVE_CLOSED_TOOLS`); a tool failing twice in a row is said out loud at once
@@ -203,6 +234,9 @@ impl Default for Settings {
                 same_failure: 2,
                 // a call's good turn makes one search (the lab, 20/11), two or three to refine; Alex 20/11: 6
                 web_searches: 6,
+                // a person waits on the line: a few seconds at most
+                offline_failures: 2,
+                offline_seconds: 8.0,
             },
             // a routine is scheduled work (the task's limits): as many bridge calls as a task, under Hermes' cap of 150
             routine_tool_calls: 120,
@@ -233,6 +267,8 @@ impl Limits {
             discovery_calls: up(self.discovery_calls),
             same_failure: up(self.same_failure),
             web_searches: up(self.web_searches),
+            offline_failures: up(self.offline_failures),
+            offline_seconds: self.offline_seconds * 1.5,
         }
     }
 }
@@ -247,6 +283,8 @@ pub fn over_of(warning: &Warning) -> Over {
         Warning::Browser(..) => Over::Browser,
         Warning::Searches(..) => Over::Searches,
         Warning::DiscoverySame(..) | Warning::Discovery(..) => Over::Discovery,
+        Warning::Network(tool) => Over::Offline(tool.clone()),
+        Warning::Saved(tool) => Over::SameCall(tool.clone()),
     }
 }
 
@@ -271,6 +309,12 @@ impl Settings {
             discovery_calls: n(&format!("{prefix}discovery_calls"), d.discovery_calls, 2),
             same_failure: n(&format!("{prefix}same_failure"), d.same_failure, 2),
             web_searches: n(&format!("{prefix}web_searches"), d.web_searches, 2),
+            offline_failures: n(&format!("{prefix}offline_failures"), d.offline_failures, 2),
+            offline_seconds: table
+                .get(format!("{prefix}offline_seconds").as_str())
+                .and_then(Value::as_f64)
+                .unwrap_or(d.offline_seconds)
+                .clamp(0.0, 3_600.0),
         };
         Settings {
             enabled: table.get("enabled").and_then(Value::as_bool).unwrap_or(d.enabled),
@@ -306,6 +350,9 @@ impl Settings {
             discovery_calls: 2,
             same_failure: 2,
             web_searches: 2,
+            // the network still away: said at once
+            offline_failures: 2,
+            offline_seconds: 0.0,
         }
     }
 
@@ -483,6 +530,79 @@ pub fn completed_with_error(data: &serde_json::Map<String, Value>) -> bool {
         || head.contains("\"success\":false")
 }
 
+/// A failed tool's answer (`tool.completed`, its `error` or its preview: `completed_with_error`) that says the network
+/// failed, not the tool: a name not resolved, a connection refused, reset or cut, a time-out, the other side busy (a
+/// 5xx, a 429). Read in its preview as Hermes words it (urllib3's `NameResolutionError`, `Max retries exceeded`, the
+/// keyless rescue's « request failed: … », `[Errno 111] Connection refused`, « HTTP 503 »…). A client error (HTTP 4xx
+/// but 408 and 429) is the tool's: a wrong key, a wrong query, whatever else it says.
+pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
+    static STATUS: LazyLock<regex::Regex> = LazyLock::new(|| {
+        // « HTTP 503 », « status code 429 », urllib's « HTTP Error 500 », requests' « 500 Server Error »
+        regex::Regex::new(r"(?i)\b(?:(?:http(?:\s+error)?|status(?:\s+code)?|error\s+code)\b[\s:=']*(\d{3})|(\d{3})\s+(?:server|client)\s+error)\b")
+            .expect("valid regex")
+    });
+    if !completed_with_error(data) && data.get("is_error").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    let preview = data.get("preview").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+    // the first status said decides: a quoted query further on (« invalid query 'http 503' ») doesn't
+    if let Some(code) = STATUS.captures(&preview).and_then(|c| c.get(1).or(c.get(2))).and_then(|m| m.as_str().parse::<u16>().ok()) {
+        if code == 408 || code == 429 || (500..600).contains(&code) {
+            return true;
+        }
+        if (400..500).contains(&code) {
+            return false;
+        }
+    }
+    const NETWORK: &[&str] = &[
+        // the name not resolved
+        "nameresolutionerror", "name resolution", "failed to resolve", "name or service not known",
+        "nodename nor servname", "getaddrinfo failed", "no address associated with hostname", "could not resolve host",
+        // no connection, or cut
+        "connection refused", "connectionrefusederror", "connection reset", "connectionreseterror",
+        "connection aborted", "connectionabortederror", "remotedisconnected", "remote end closed connection",
+        "network is unreachable", "no route to host", "newconnectionerror", "failed to establish a new connection",
+        // too slow
+        "timed out", "readtimeout", "connecttimeout", "timeouterror",
+        // the other side busy
+        "too many requests", "service unavailable", "bad gateway", "gateway timeout",
+        // Node's and Chrome's words
+        "enotfound", "eai_again", "econnrefused", "econnreset", "etimedout", "socket hang up", "fetch failed",
+        "net::err_name_not_resolved", "net::err_internet_disconnected", "net::err_connection", "net::err_timed_out",
+        "net::err_network_changed",
+    ];
+    NETWORK.iter().any(|m| preview.contains(m))
+}
+
+/// A tool's answer (`tool.completed`, not failed) that says what it was asked is there already: Hermes' `memory`
+/// (« Entry already exists (no duplicate added). »), and the like. Read in its preview's first words.
+pub fn already_there(data: &serde_json::Map<String, Value>) -> bool {
+    // Hermes' `memory` only, in its exact words (tools/memory_tool_store.py `_success_response`): another tool's text
+    // that says « already exists » (a file read, a search) is its content, not a confirmation (review 27/11, A2)
+    if bare(&event_tool(data)) != "memory" {
+        return false;
+    }
+    let preview = data.get("preview").and_then(Value::as_str).unwrap_or("");
+    let said = serde_json::from_str::<Value>(preview)
+        .ok()
+        .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string));
+    match said {
+        Some(message) => message.starts_with(MEMORY_ALREADY),
+        // a long answer cut at 500 characters (its entries after the message): the message as Hermes writes it
+        None => preview.contains(&format!("\"message\": \"{MEMORY_ALREADY}")),
+    }
+}
+
+/// Hermes' `memory` adding an entry it has already (v0.23.1).
+const MEMORY_ALREADY: &str = "Entry already exists (no duplicate added)";
+
+/// A tool held to `same_failure` (and to the network's count, `failed_transiently`): not one whose failure is work
+/// output (`FAILURE_TOLERANT_TOOLS`), nor the visible browser (its own limits), nor a call Hermes did not name.
+pub fn failure_counted(tool: &str) -> bool {
+    let name = bare(tool);
+    !name.is_empty() && !FAILURE_TOLERANT_TOOLS.contains(&name) && !crate::runs::browser_tool(name)
+}
+
 /// Why a turn was stopped.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Over {
@@ -502,6 +622,8 @@ pub enum Over {
     Failing(String),
     /// Too many web searches in one turn, answered or not.
     Searches,
+    /// The network away for a while: every call that needs it failing (`transient_failure`; the last one's bare name).
+    Offline(String),
 }
 
 /// A turn's tool calls so far.
@@ -522,6 +644,9 @@ pub struct TurnCount {
     last_failed: bool,
     /// Each tool's failures since the turn's last call that went through (bare name): `same_failure`.
     failures: HashMap<String, u32>,
+    /// The network errors in a row (any tool), and when the first of them came: `offline_failures`, `offline_seconds`.
+    offline: u32,
+    offline_since: f64,
     /// Web searches in this turn, answered or not: `web_searches`.
     pub searches: u32,
     /// A rescue turn's stopped tool (bare name): its second call stops the turn (the first is refused at the MCP for
@@ -556,6 +681,11 @@ pub enum Warning {
     DiscoverySame(u32, u32),
     /// … or many in all (how many, the hard limit it is stopped past).
     Discovery(u32, u32),
+    /// A tool couldn't reach the network (its bare name): wait a few seconds, then try again.
+    Network(String),
+    /// A tool answered that what it was asked is there already (its bare name: Hermes' `memory` « Entry already
+    /// exists »): it is done, nothing to call again.
+    Saved(String),
 }
 
 /// The steers the bridge's brake gives start with this (the apps hide such rows: `[bipagents:`).
@@ -572,6 +702,8 @@ impl Warning {
             Warning::Searches(..) => "web_searches".into(),
             Warning::DiscoverySame(..) => "discovery_same".into(),
             Warning::Discovery(..) => "discovery".into(),
+            Warning::Network(_) => "network".into(),
+            Warning::Saved(tool) => format!("saved:{tool}"),
         }
     }
 
@@ -586,11 +718,29 @@ impl Warning {
             Warning::Searches(n, _) => format!("{n} web searches"),
             Warning::DiscoverySame(n, _) => format!("the same tool search {n} times"),
             Warning::Discovery(n, _) => format!("{n} tool searches"),
+            Warning::Network(tool) => format!("a network error ({tool})"),
+            Warning::Saved(tool) => format!("already saved ({tool})"),
         }
     }
 
     /// The note the agent gets (a steer, after its current tool calls), in English, out of the person's sight.
     pub fn text(&self) -> String {
+        if let Warning::Saved(tool) = self {
+            return format!(
+                "{WARN_MARK} A note from the app, not from your person: {tool} just told you this is saved already: it \
+is done, and calling it again changes nothing (that is no way to check it). Don't call {tool} again for it: tell your \
+person plainly that it is noted."
+            );
+        }
+        if let Warning::Network(tool) = self {
+            return format!(
+                "{WARN_MARK} A note from the app, not from your person: {tool} couldn't reach the internet (a network \
+error: a name not resolved, a connection refused or cut, a time-out). It is often brief: wait a few seconds before \
+trying again (with the terminal, `sleep 5`, if you have it), then try once or twice more. If it still fails, tell your \
+person plainly that you can't reach the internet right now and offer to try again later; don't work around it with \
+other tools."
+            );
+        }
         let what = match self {
             Warning::SameCall(tool, n, hard) => {
                 format!("you have made exactly the same {tool} call {n} times in this turn; at {hard} the turn is stopped")
@@ -620,6 +770,7 @@ stopped. If no tool does it, say so to the person"
                 "you have searched your tools {count} times in this turn; past {hard} the turn is stopped. Use a tool \
 you found, or tell the person plainly what you can't do"
             ),
+            Warning::Network(_) | Warning::Saved(_) => String::new(), // above
         };
         format!(
             "{WARN_MARK} A note from the app, not from your person: {what}. Change approach (other words, another \
@@ -729,7 +880,11 @@ impl TurnCount {
                 let again = self.per_call.entry(format!("{name}\u{1f}{signature}")).or_insert(0);
                 *again += 1;
                 let again = *again;
-                let limit = if lookup_tool(&name, Some(signature)) { limits.same_lookup } else { limits.same_call };
+                // Hermes' `memory` keeps an entry once (« Entry already exists »): the same write again is no harm, so
+                // a lookup's limit (27/11: checked by adding it again)
+                let idempotent = name == "memory";
+                let limit =
+                    if idempotent || lookup_tool(&name, Some(signature)) { limits.same_lookup } else { limits.same_call };
                 if again >= limit {
                     return Some(Over::SameCall(name));
                 }
@@ -764,14 +919,56 @@ impl TurnCount {
             // any call that went through is progress (an edit, then the test run again): the failures start again
             // (review 20/11: Hermes' own guard resets on its progress tools; here on any success, Live included)
             self.failures.clear();
+            self.offline = 0;
             return None;
         }
-        if name.is_empty() || FAILURE_TOLERANT_TOOLS.contains(&name.as_str()) || crate::runs::browser_tool(&name) {
+        if !failure_counted(&name) {
             return None;
         }
         let count = self.failures.entry(name.clone()).or_insert(0);
         *count += 1;
         (*count >= limits.same_failure).then_some(Over::Failing(name))
+    }
+
+    /// The turn's call of `tool` answered that what it was asked is there already (`already_there`: Hermes' `memory`
+    /// « Entry already exists (no duplicate added) »): the same call made again to check it (27/11, Alex's aibox: a
+    /// preference noted, then « je vérifie que ta préférence est bien enregistrée », stopped as « la même étape »
+    /// twice) is not counted toward `same_call` (its other limits still hold: `same_tool`, the total), and the agent
+    /// is told once that it is done.
+    pub fn confirmed(&mut self, tool: &str) {
+        let name = bare(tool).to_string();
+        if name != self.last_tool || name != "memory" {
+            return;
+        }
+        if let Some(count) = self.last_call.clone().and_then(|key| self.per_call.get_mut(&key)) {
+            *count = count.saturating_sub(1);
+        }
+        if self.warned.insert(Warning::Saved(name.clone()).key()) {
+            self.warning = Some(Warning::Saved(name));
+        }
+    }
+
+    /// The turn's call of `tool` failed on the network (`transient_failure`) at `now`: neither counted as the tool
+    /// failing (`same_failure`) nor clearing those failures. The agent is told once in the turn to wait a few seconds
+    /// before trying again (`Warning::Network`); the turn is stopped (`Over::Offline`) once such errors came
+    /// `offline_failures` times in a row over at least `offline_seconds`, or twice as many times whatever the time.
+    pub fn failed_transiently(&mut self, tool: &str, limits: &Limits, now: f64) -> Option<Over> {
+        let name = bare(tool).to_string();
+        if name == self.last_tool {
+            self.last_failed = true;
+        }
+        if self.offline == 0 {
+            self.offline_since = now;
+        }
+        self.offline += 1;
+        let lasted = now - self.offline_since >= limits.offline_seconds;
+        if (self.offline >= limits.offline_failures && lasted) || self.offline >= 2 * limits.offline_failures {
+            return Some(Over::Offline(name));
+        }
+        if self.warned.insert(Warning::Network(String::new()).key()) {
+            self.warning = Some(Warning::Network(name));
+        }
+        None
     }
 }
 /// What the person's subject was, in plain words: the area of the tool the turn kept calling.
@@ -861,6 +1058,16 @@ pub fn notice_head(over: &Over, lang: &str) -> String {
     if let Over::Failing(tool) = over {
         return failing_head(tool, lang);
     }
+    if let Over::Offline(_) = over {
+        return match lang {
+            "fr" => "Je n'arrive pas à joindre Internet pour l'instant.",
+            "de" => "Ich komme gerade nicht ins Internet.",
+            "es" => "Ahora mismo no consigo conectarme a internet.",
+            "nl" => "Ik kan nu geen verbinding maken met internet.",
+            _ => "I can't reach the internet right now.",
+        }
+        .to_string();
+    }
     if let Over::Searches = over {
         return match lang {
             "fr" => "J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre.",
@@ -919,7 +1126,7 @@ pub fn notice_head(over: &Over, lang: &str) -> String {
         }
         .to_string(),
         Over::Failing(tool) => failing_head(tool, lang),
-        Over::Searches => String::new(), // above
+        Over::Searches | Over::Offline(_) => String::new(), // above
     }
 }
 
@@ -977,7 +1184,7 @@ pub fn notice_tail(over: &Over, lang: &str) -> &'static str {
             _ => "Tell me if you want me to make it a deeper search in the background.",
         };
     }
-    if let Over::Failing(_) = over {
+    if let Over::Failing(_) | Over::Offline(_) = over {
         // what failed is outside: later, not « another way »
         return match lang {
             "fr" => "Tu veux que je réessaie plus tard ?",
@@ -1026,13 +1233,18 @@ pub fn notice_text(over: &Over, lang: &str) -> String {
 /// Android Hermes.kt); `person_request` skips it (`[bipagents:`).
 pub const RESCUE_MARK: &str = "[bipagents:loop_rescue]";
 
+/// A rescue turn at its limits (runs.rs `stop_looping`), told once instead of being stopped: a turn stopped says nothing.
+pub const RESCUE_ANSWER_NOW: &str = "[bipagents:brake] A note from the app, not from your person: stop calling tools \
+now. Answer your person in their language, in a few plain sentences, with what you already have: what you tried, what \
+blocked you, and one or two ways forward.";
+
 /// The tool a rescue turn may not call again (bare name): the one the turn kept calling.
 pub fn stopped_tool(over: &Over) -> Option<String> {
     match over {
         Over::SameTool(tool) | Over::SameCall(tool) => Some(tool.clone()),
         Over::Discovery => Some("tool_search".into()),
         Over::Searches => Some("web_search".into()),
-        Over::Failing(tool) if !tool.is_empty() => Some(tool.clone()),
+        Over::Failing(tool) | Over::Offline(tool) if !tool.is_empty() => Some(tool.clone()),
         _ => None,
     }
 }
@@ -1040,6 +1252,26 @@ pub fn stopped_tool(over: &Over) -> Option<String> {
 /// The rescue turn's input (runs.rs `loop_rescue`): the mark, the person's line (in their language: what the apps
 /// show of this row), then the agent's instruction, in English, out of the person's sight.
 pub fn rescue_input(over: &Over, lang: &str) -> String {
+    rescue_input_with(over, lang, &[])
+}
+
+/// `rescue_input`, with the words the person added while the stopped turn went on (`added`): taken up right after it
+/// as their next message (msg_queue.rs `carry`), so the rescue turn neither answers them nor forgets them.
+pub fn rescue_input_with(over: &Over, lang: &str, added: &[String]) -> String {
+    let base = rescue_input_alone(over, lang);
+    let added: Vec<String> =
+        added.iter().map(|w| w.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|w| !w.is_empty()).collect();
+    if added.is_empty() {
+        return base;
+    }
+    let quoted = added.iter().map(|w| format!("« {} »", crate::tools_knowledge::head(w, 400))).collect::<Vec<_>>().join(", ");
+    format!(
+        "{base}\n\nWhile you were working, your person also wrote: {quoted}. It is taken up right after this answer, as \
+their next message: don't answer it here, just say in a few words that you'll see to it right after."
+    )
+}
+
+fn rescue_input_alone(over: &Over, lang: &str) -> String {
     let what = match over {
         Over::SameCall(tool) => match lookup_phrase(tool, "en").filter(|_| lookup_tool(tool, None)) {
             Some(phrase) => format!("repeated {phrase} ({tool}) with the same arguments again and again"),
@@ -1052,6 +1284,9 @@ pub fn rescue_input(over: &Over, lang: &str) -> String {
         Over::Discovery => "kept searching your tools (tool_search, tool_describe) for one to do it".to_string(),
         Over::Searches => "made far too many web searches in one turn, new words each time, without settling".to_string(),
         Over::Failing(tool) => format!("kept calling {tool} although it failed every time (it looks unavailable now)"),
+        Over::Offline(tool) => format!(
+            "couldn't reach the internet: {tool} and the calls before it failed on the network again and again, for a while"
+        ),
     };
     let dont = match over {
         Over::SameCall(tool) | Over::SameTool(tool) => format!("Don't call {tool} again in this turn."),
@@ -1064,15 +1299,21 @@ pub fn rescue_input(over: &Over, lang: &str) -> String {
 uncertain, and offer to carry the research on as a background task (propose_task) if it needs more."
             .to_string(),
         Over::Failing(tool) => format!("Don't call {tool} again in this turn, nor work around it with another tool."),
+        Over::Offline(_) => "Don't call any tool that needs the internet again in this turn.".to_string(),
     };
     format!(
-        "{RESCUE_MARK} {head}\n\n(A note from the app, not from your person.) You were stopped because you {what}. \
+        "{RESCUE_MARK} {head}\n{RESCUE_THEN}{tail}-->\n\n(A note from the app, not from your person.) You were stopped because you {what}. \
 {dont} With what you already have, answer the person in their language: what you were trying to do, what you found \
 so far, what blocked you, and propose one or two concrete ways forward (or ask one precise question). Use another \
 tool only if it is really needed, two at most.",
-        head = notice_head(over, lang)
+        head = notice_head(over, lang),
+        tail = notice_tail(over, lang)
     )
 }
+
+/// Before the line's second sentence in the rescue turn's input (`notice_tail`): the conversation adds it under the
+/// brake's line when the rescue turn said nothing (threads/timeline.rs), as the stream does (`loop_rescue_failed`).
+pub const RESCUE_THEN: &str = "<!--bip:then ";
 
 /// For the logs.
 pub fn reason(over: &Over) -> String {
@@ -1085,6 +1326,7 @@ pub fn reason(over: &Over) -> String {
         Over::Discovery => "too many tool searches".to_string(),
         Over::Searches => "too many web searches".to_string(),
         Over::Failing(tool) => format!("the same tool failing again and again ({tool})"),
+        Over::Offline(tool) => format!("the network unreachable ({tool})"),
     }
 }
 
@@ -1177,6 +1419,13 @@ fn signature_of(tool: &str, arguments: &Dict) -> String {
 }
 
 impl Turns {
+    /// Whether this very write (tool and arguments) went through in `turn` (its repeats are answered « already done »,
+    /// not refused: the hub stops them later, `RunHub::same_write_again`).
+    pub fn already_done(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict) -> bool {
+        let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        turns.get(&turn_key(agent, turn)).is_some_and(|t| t.seen.contains(&signature_of(tool, arguments)))
+    }
+
     /// How many times `turn` has asked for this very write (tool and arguments), once it was refused as already done:
     /// 0 when it never was.
     pub fn same_write_calls(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict) -> u32 {
@@ -1298,13 +1547,22 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
             let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(1);
             *calls += 1;
             tracing::info!(agent = %agent, tool = %tool, calls = *calls, "the same write again in this turn: refused");
-            let done = "Already done in this turn with exactly these arguments: not done again.";
+            // a file given (27/11, Alex's aibox: `give_file` 3 times, stopped): « not done again » read as a failure,
+            // « call that one now » as an invitation; the file is given, the reply is what is left to do
+            if let (true, Some(answer)) = (bare(tool) == crate::give_file::TOOL_NAME, entry.answers.get(&signature_of(tool, arguments))) {
+                return Some(tool_text(&given_again(answer), false));
+            }
+            // done: what it answered then, and what to do now (27/11: a note written, then « asked again to check »
+            // until the brake stopped the turn; « not done again » read as a failure)
+            let name = bare(tool);
+            let done = format!(
+                "Already done: this exact {name} call worked earlier in this turn, nothing failed, and doing it again \
+changes nothing. Don't call {name} again for it: tell your person it is done."
+            );
             return Some(tool_text(
                 &match entry.answers.get(&signature_of(tool, arguments)) {
-                    Some(answer) => format!(
-                        "{done} If you meant another tool, call that one now. Its result, the same as before:\n{answer}"
-                    ),
-                    None => format!("{done} There is nothing more to do for it; tell the person what you did."),
+                    Some(answer) => format!("{done} What it answered then:\n{answer}"),
+                    None => done,
                 },
                 false,
             ));
@@ -1315,6 +1573,14 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
             return Some(tool_text(&writes_refused(entry.writes, scheduled), true));
         }
         None
+    }
+
+    /// What `tool` answered `agent` when it worked in the turn of run `run_id` (its first such answer).
+    pub fn answer_of(&self, agent: &str, run_id: &str, tool: &str) -> Option<String> {
+        let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        let turn = Turn { run_id: run_id.to_string(), background: false, banned: None };
+        let prefix = format!("{}\u{1f}", bare(tool));
+        turns.get(&turn_key(agent, Some(&turn)))?.answers.iter().find(|(sig, _)| sig.starts_with(&prefix)).map(|(_, a)| a.clone())
     }
 
     /// The note a routine's call gets with its result (its limits getting close), once.
@@ -1409,6 +1675,23 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
             entry.answers.insert(signature_of(tool, arguments), crate::tools_knowledge::head(&text, 1500).to_string());
         }
     }
+}
+
+/// What `give_file` asked again for the same file in a turn answers: given already, and what to put in the reply.
+pub fn given_again(answer: &str) -> String {
+    format!(
+        "Already given: this file is your person's already, nothing failed. Don't call give_file again for it: write \
+your reply now, with what give_file answered you:\n{answer}"
+    )
+}
+
+/// What the stopped turn's tool answered when it worked (its first answer, by `Turns::record_answer`), for its rescue
+/// turn (runs.rs `loop_rescue`): a file given or a page made the person still needs from its answer.
+pub fn rescue_answer_note(tool: &str, answer: &str) -> String {
+    format!(
+        "{tool} worked the first time in that turn; what it answered you is still good (put it in your answer when it \
+is for your person, a MEDIA: line alone on its line):\n{answer}"
+    )
 }
 
 /// What a write past the turn's writes gets. The model words its message from it, so it carries what the person must
@@ -1639,6 +1922,34 @@ mod tests {
         turns.record_answer("daily", turn.as_ref(), "create_page", &page, &made);
         // and deleted again later in the same turn: allowed too
         assert!(turns.check(&settings, "daily", turn.as_ref(), "delete_page", &gone, 5.0).is_none());
+    }
+
+    /// 27/11, Alex's aibox: `same call repeated (give_file)` 5 times in a week (Vie, Bip). Asked again for the same file,
+    /// the bridge answered « Already done … not done again. If you meant another tool, call that one now. », read as a
+    /// failure and an invitation: the model asked again, and the brake stopped the turn; its rescue turn, told not to
+    /// call give_file, had no file to give. Now: given already, what to put in the reply; the rescue gets the answer.
+    #[test]
+    fn a_file_given_twice_is_said_given_and_its_rescue_has_it() {
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let turn = Some(Turn { run_id: "run_g".into(), background: false, banned: None });
+        let file = json!({"path": "/envoi/devis.pdf"}).as_object().cloned().unwrap();
+        let given = tool_text("MEDIA:/envoi/devis.pdf\nPut the line above alone on its own line in your reply.", false);
+        assert!(turns.check(&settings, "vie", turn.as_ref(), "mcp__bipagents__give_file", &file, 1.0).is_none());
+        turns.record_answer("vie", turn.as_ref(), "mcp__bipagents__give_file", &file, &given);
+        let again = turns.check(&settings, "vie", turn.as_ref(), "give_file", &file, 2.0).expect("given once");
+        let said = again["content"][0]["text"].as_str().unwrap();
+        assert!(said.starts_with("Already given") && said.contains("nothing failed"), "{said}");
+        assert!(said.contains("Don't call give_file again") && said.contains("MEDIA:/envoi/devis.pdf"), "{said}");
+        assert!(!said.contains("not done") && !said.contains("call that one now"), "{said}");
+        assert_eq!(again["isError"], json!(false));
+        // the hub still stops a third ask (`same_call`)
+        assert_eq!(turns.same_write_calls("vie", turn.as_ref(), "give_file", &file), 2);
+        // its rescue turn gets the first answer
+        let answer = turns.answer_of("vie", "run_g", "mcp__bipagents__give_file").expect("kept");
+        assert!(answer.starts_with("MEDIA:/envoi/devis.pdf"));
+        assert!(rescue_answer_note("give_file", &answer).contains("MEDIA:/envoi/devis.pdf"));
+        assert_eq!(turns.answer_of("vie", "run_other", "give_file"), None);
     }
 
     #[test]
@@ -2162,7 +2473,8 @@ réessaie autrement."
         // its input: the mark, the person's line, then the agent's instruction (out of sight)
         let input = rescue_input(&over, "fr");
         assert!(input.starts_with(
-            "[bipagents:loop_rescue] Je me suis arrêté : je relançais la même recherche dans nos anciennes discussions.\n\n"
+            "[bipagents:loop_rescue] Je me suis arrêté : je relançais la même recherche dans nos anciennes discussions.\n\
+<!--bip:then Dis-moi si tu veux que je réessaie autrement.-->\n\n"
         ));
         assert!(input.contains("Don't call session_search again in this turn."));
         assert!(input.contains("answer the person in their language"));
@@ -2389,6 +2701,157 @@ une recherche approfondie en tâche de fond."
         }
         assert_eq!(stopped_tool(&Over::Searches), Some("web_search".into()));
         assert!(rescue_input(&Over::Searches, "fr").contains("Don't search the web again"));
+    }
+
+    /// 27/11 09:2x, Alex: a preference noted (« Noté dans Podcast ›»), then « Je regarde comment configurer ça. » and
+    /// « Je me suis arrêté : je refaisais sans cesse la même étape. »; « T'as réussi à noter ? » → « Je vérifie que ta
+    /// préférence est bien enregistrée… » and the same stop in the next turn. Hermes' `memory` has no read: the model
+    /// checks by adding the same entry again (« Entry already exists (no duplicate added). »), three identical calls,
+    /// `same_call`. Now: such a confirmation is no loop, and the agent is told it is done; a write of the bridge's asked
+    /// again says « already done », what it answered, and that nothing failed; a read never counts as a write.
+    #[test]
+    fn checking_a_note_is_no_loop() {
+        let limits = Settings::default().conversation;
+        let mut turn = TurnCount::default();
+        let entry = "add: Podcast du matin : annoncer les rappels quelques jours avant, puis deux jours avant et la veille";
+        let exists = json!({"tool": "memory", "error": false,
+            "preview": "{\"success\": true, \"message\": \"Entry already exists (no duplicate added).\"}"}).as_object().cloned().unwrap();
+        assert_eq!(turn.note("memory", Some(entry), false, &limits), None);
+        assert_eq!(turn.completed("memory", false, &limits), None);
+        for i in 0..4 {
+            assert_eq!(turn.note("memory", Some(entry), false, &limits), None, "check {i}");
+            assert_eq!(turn.completed("memory", false, &limits), None);
+            assert!(already_there(&exists));
+            turn.confirmed("memory");
+        }
+        let told: Vec<Warning> = std::iter::from_fn(|| turn.take_warning()).collect();
+        assert!(told.contains(&Warning::Saved("memory".into())), "{told:?}");
+        assert!(Warning::Saved("memory".into()).text().contains("it is done"));
+        assert!(!already_there(&json!({"preview": "{\"success\": true, \"message\": \"Entry added.\"}"}).as_object().cloned().unwrap()));
+        // the same entry added again and again, never « already there »: still a loop, at a lookup's limit (5)
+        let mut turn = TurnCount::default();
+        for _ in 1..limits.same_lookup {
+            assert_eq!(turn.note("memory", Some(entry), false, &limits), None);
+        }
+        assert_eq!(turn.note("memory", Some(entry), false, &limits), Some(Over::SameCall("memory".into())));
+        // the bridge's own write asked again: done, what it answered, nothing failed
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let t = Some(Turn { run_id: "run_p".into(), background: false, banned: None });
+        let note = json!({"page": "Podcast", "facts": "Rappels : quelques jours avant, deux jours avant, la veille"}).as_object().cloned().unwrap();
+        assert!(turns.check(&settings, "vie", t.as_ref(), "notebook_write", &note, 1.0).is_none());
+        turns.record_answer("vie", t.as_ref(), "notebook_write", &note, &tool_text("Noté dans Podcast : 1 fait.", false));
+        let again = turns.check(&settings, "vie", t.as_ref(), "notebook_write", &note, 2.0).expect("done once");
+        let said = again["content"][0]["text"].as_str().unwrap();
+        assert!(said.starts_with("Already done") && said.contains("nothing failed") && said.contains("Noté dans Podcast"), "{said}");
+        assert!(!said.contains("not done") && !said.contains("call that one now"), "{said}");
+        assert!(turns.already_done("vie", t.as_ref(), "notebook_write", &note));
+        // reading it back to check: never a write
+        let read = json!({"page": "Podcast"}).as_object().cloned().unwrap();
+        assert!(!write_call("notebook_read", &read) && turns.check(&settings, "vie", t.as_ref(), "notebook_read", &read, 3.0).is_none());
+        assert!(lookup_tool("notebook_read", None));
+    }
+
+    /// The preview of a `tool.completed` Hermes sends (its result's first 500 characters), failed.
+    fn failed(preview: &str) -> serde_json::Map<String, Value> {
+        json!({"tool": "web_search", "duration": 0.04, "error": true, "preview": preview}).as_object().cloned().unwrap()
+    }
+
+    /// 27/11 08:52, Alex's aibox on Wi-Fi (Famille): a few seconds without the network, `web_search` failed three times
+    /// in three seconds (Tavily's name not resolved, then Hermes' keyless rescue's), and `same_failure` stopped the turn
+    /// with « Je n'arrive pas à chercher sur le web pour l'instant. ». A network error is no broken tool: counted apart,
+    /// the agent told once to wait a few seconds before trying again, and the turn stopped only when it lasts
+    /// (`offline_failures` failures over at least `offline_seconds`), with the right words.
+    #[test]
+    fn a_network_cut_of_a_few_seconds_is_no_broken_tool() {
+        let famille = "{\n  \"success\": false,\n  \"error\": \"Tavily search failed: HTTPSConnectionPool(host='api.tavily.com', \
+port=443): Max retries exceeded with url: /search (Caused by NameResolutionError(\\\"<urllib3.connection.HTTPSConnection \
+object at 0x7f2c>: Failed to resolve 'api.tavily.com' ([Errno -3] Temporary failure in name resolution)\\\")) (keyless rescue \
+also failed: Keyless Parallel search failed: request failed: HTTPSConnectionPool(host='search.parallel.ai', port=443): Max \
+retries exceeded with url: /mcp (Caused by NameResolutionError(\\\"<urllib3.connection.HTTPSConnection object>: Failed to resolve";
+        for preview in [
+            famille,
+            "Error searching web: [Errno 111] Connection refused",
+            "{\"error\": \"MCP call failed: ConnectionResetError(104, 'Connection reset by peer')\"}",
+            "{\"success\": false, \"error\": \"Keyless Exa search failed: request failed: HTTPSConnectionPool(host='mcp.exa.ai', port=443): Read timed out. (read timeout=20)\"}",
+            "{\"success\": false, \"error\": \"Keyless Parallel search failed: HTTP 503: Service Unavailable\"}",
+            "{\"success\": false, \"error\": \"Tavily search failed: HTTP 429: Too Many Requests\"}",
+            "Error: [Errno 101] Network is unreachable",
+            "{\"error\": \"getaddrinfo failed: nodename nor servname provided, or not known\"}",
+            "{\"error\": \"upstream connect error: 502 Bad Gateway\"}",
+            "{\"error\": \"request to https://api.example.com failed, reason: getaddrinfo ENOTFOUND api.example.com\"}",
+            "Error: net::ERR_NAME_NOT_RESOLVED at https://example.com",
+            "Error: HTTP Error 500: Internal Server Error",
+            "{\"error\": \"500 Server Error: Internal Server Error for url: https://api.example.com/x\"}",
+        ] {
+            assert!(transient_failure(&failed(preview)), "{preview}");
+        }
+        for preview in [
+            "{\"success\": false, \"error\": \"No web search provider configured. Run `hermes tools` to set one up.\"}",
+            "{\"success\": false, \"error\": \"Tavily search failed: HTTP 401: invalid api key\"}",
+            "Not done: give_file only hands your person a file you made, and needs `path`.",
+            "{\"error\": \"Invalid date: 2026-13-45\"}",
+            "{\"success\": false, \"error\": \"HTTP 400: invalid query 'http 503 timeout'\"}",
+        ] {
+            assert!(!transient_failure(&failed(preview)), "{preview}");
+        }
+        assert!(!transient_failure(&json!({"tool": "web_search", "error": false,
+            "preview": "Connection refused: the shop's page says so"}).as_object().cloned().unwrap()), "a result, not a failure");
+
+        let limits = Settings::default().conversation;
+        let mut turn = TurnCount::default();
+        // the morning of 27/11: three failures in three seconds, then the network is back
+        for (i, at) in [0.0, 1.0, 2.0].iter().enumerate() {
+            assert_eq!(turn.note("web_search", Some("gants merino"), false, &limits), None, "{i}");
+            assert_eq!(turn.failed_transiently("web_search", &limits, *at), None, "{i}: a cut of a few seconds goes on");
+        }
+        // told once: wait a few seconds, then try again
+        let told = turn.take_warning().expect("the agent is told to wait");
+        assert_eq!(told, Warning::Network("web_search".into()));
+        assert!(told.text().contains("wait a few seconds") && told.text().starts_with(WARN_MARK), "{}", told.text());
+        assert_eq!(turn.take_warning(), None, "once");
+        assert_eq!(turn.note("web_search", Some("gants merino"), false, &limits), None);
+        assert_eq!(turn.completed("web_search", false, &limits), None, "back: the count starts again");
+        // a cut that lasts: stopped once it has failed `offline_failures` times over `offline_seconds`
+        let mut turn = TurnCount::default();
+        let mut stopped = None;
+        let mut at = 0.0;
+        for i in 0..20 {
+            stopped = turn.failed_transiently("web_search", &limits, at);
+            if stopped.is_some() {
+                assert!(i + 1 >= limits.offline_failures as usize && at >= limits.offline_seconds, "{i} at {at}");
+                break;
+            }
+            at += 5.0;
+        }
+        assert_eq!(stopped, Some(Over::Offline("web_search".into())));
+        // hammering at once never runs for ever: twice as many failures stop it whatever the time
+        let mut turn = TurnCount::default();
+        let hard = (1..=40).find(|_| turn.failed_transiently("web_search", &limits, 0.0).is_some());
+        assert_eq!(hard, Some(2 * limits.offline_failures));
+        // a broken tool still stops at its third failure; network errors in between neither count nor clear them
+        let mut turn = TurnCount::default();
+        assert_eq!(turn.completed("calendar_list", true, &limits), None);
+        assert_eq!(turn.failed_transiently("web_search", &limits, 0.0), None);
+        assert_eq!(turn.completed("calendar_list", true, &limits), None);
+        assert_eq!(turn.completed("calendar_list", true, &limits), Some(Over::Failing("calendar_list".into())));
+        // said plainly, in four languages (and Dutch), never « chercher sur le web »
+        let offline = Over::Offline("web_search".into());
+        assert_eq!(
+            notice_text(&offline, "fr"),
+            "Je n'arrive pas à joindre Internet pour l'instant. Tu veux que je réessaie plus tard ?"
+        );
+        assert_eq!(notice_text(&offline, "en"), "I can't reach the internet right now. Do you want me to try again later?");
+        assert_eq!(notice_text(&offline, "de"), "Ich komme gerade nicht ins Internet. Soll ich es später noch einmal versuchen?");
+        assert_eq!(notice_text(&offline, "es"), "Ahora mismo no consigo conectarme a internet. ¿Quieres que lo intente más tarde?");
+        assert_eq!(reason(&offline), "the network unreachable (web_search)");
+        assert_eq!(stopped_tool(&offline), Some("web_search".into()));
+        assert!(rescue_input(&offline, "fr").contains("couldn't reach the internet"));
+        // a task waits longer, a call shorter; the config may change them
+        let d = Settings::default();
+        assert!(d.task.offline_seconds > d.conversation.offline_seconds && d.live.offline_seconds < d.conversation.offline_seconds);
+        let s = Settings::from_table(&json!({"offline_failures": 6, "offline_seconds": 45, "live_offline_failures": 1}));
+        assert_eq!((s.conversation.offline_failures, s.conversation.offline_seconds, s.live.offline_failures), (6, 45.0, 2));
     }
 
     #[test]

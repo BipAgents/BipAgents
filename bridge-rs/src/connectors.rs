@@ -1419,17 +1419,46 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
         tracing::info!(agent = %agent.name, site = %refused_site, "secret card not made: refused for this site in this turn");
         return Ok(refusal(&secrets::refused_again_text(&refused_site)));
     }
-    // a name already kept is not asked again (the person changes it from the connector's page)
+    // a name already kept, asked again: a card to type it anew (27/11, Alex's aibox: chasseur-mac's watcher told « if a
+    // password is refused, ask for it again with ask_secret » was refused « already in the vault » again and again,
+    // until the brake stopped it). The account it is for stays in the card; the person may refuse it.
     let known = state.vault.secret_items(&agent.name);
-    if kind != "code" && known.iter().any(|i| i.label == name && i.secret_info.as_ref().and_then(|s| s.get("kind")).and_then(Value::as_str) != Some("code")) {
-        return Ok(refusal(&format!(
-            "« {name} » is already in the vault: use it as it is. If it's wrong, the person changes it from the \
-             connector's page (« Modifier le mot de passe »); pick another name only for another account."
-        )));
-    }
+    let kept = (kind != "code")
+        .then(|| {
+            known.iter().find(|i| {
+                i.label == name && i.secret_info.as_ref().and_then(|s| s.get("kind")).and_then(Value::as_str) != Some("code")
+            })
+        })
+        .flatten();
     let identifier_label = crate::cards::quoted(&arg(arguments, "identifier_label"), 80);
     let identifier = crate::cards::quoted(&arg(arguments, "identifier"), 200);
+    // only what the agent gave is said back to it: never the identifier the person typed (review 27/11)
     let gave_identifier = !identifier.is_empty();
+    // the kept one's site and kind, never the agent's (review 27/11): another site is another secret
+    let (origin, kind) = match kept {
+        Some(item) => {
+            let kept_origin = item.origin.clone().unwrap_or_default();
+            if !origin.is_empty() && origin != kept_origin {
+                tracing::info!(agent = %agent.name, secret = %name, "secret card not made: a kept name asked for another site");
+                return Ok(refusal(&format!(
+                    "« {name} » is kept for another site{}: to have it typed anew, ask again without `site` (or with \
+                     that site); for this site, pick another name.",
+                    if kept_origin.is_empty() { String::new() } else { format!(" ({kept_origin})") }
+                )));
+            }
+            let kept_kind = item.secret_info.as_ref().and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or(&kind);
+            (kept_origin, kept_kind.to_string())
+        }
+        None => (origin, kind),
+    };
+    let kept_label = kept
+        .and_then(|i| i.secret_info.as_ref())
+        .and_then(|s| s.get("identifier_label"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let identifier_label = if identifier_label.is_empty() { kept_label.unwrap_or_default() } else { identifier_label };
+    let identifier = if identifier.is_empty() { kept.and_then(|i| i.identifier.clone()).unwrap_or_default() } else { identifier };
+    let replaced = kept.is_some();
     let connector = Some(arg(arguments, "connector")).filter(|c| !c.is_empty());
     let login_url = match kind == "password" && arg(arguments, "use") == "browser" {
         true => crate::vault::login_url_of(&site, &origin),
@@ -1452,7 +1481,12 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
     let line_fr = secrets::sentence(&shown_name(&config, &agent.name), &request); // the card's own, as card_place keeps it
     let id = match secrets::open(&agent.name, request) {
         Ok(id) => id,
-        Err(why) => return Ok(refusal(&why)),
+        // a card waits already, or enough were asked: nothing failed, the person has to answer first (never « Not
+        // done », which the brake counts as a failure: the same call again and again)
+        Err(why) => return Ok(text(&format!(
+            "{why} Nothing to do for it now: don't call ask_secret again in this turn. Tell your person a card waits \
+for them in the app, and go on with what you can do without it."
+        ))),
     };
     state.push.notify_bridge_card(&agent.name, &line, "secret_request", &id).await;
     let answer = secrets::wait(&id).await;
@@ -1470,7 +1504,11 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
                      login page, call vault_login: it types the identifier and the password."
                 )));
             }
-            let what = if kind == "code" { "held for the connector's next run, then gone" } else { "kept in the vault" };
+            let what = match (kind == "code", replaced) {
+                (true, _) => "held for the connector's next run, then gone",
+                (false, true) => "typed anew by the person, in place of the one kept before",
+                (false, false) => "kept in the vault",
+            };
             text(&format!("Saved as « {name} »{with}: {what}. You never see it; your connector reads it from its environment."))
         }
         Some(secrets::Outcome::Refused) => {
@@ -1505,9 +1543,11 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
                 }
             }
         }
-        None => refusal(&format!(
-            "The person did not answer yet: nothing is kept so far. Tell them a card waits for « {name} » in the app; \
-             once they answer it, you're told in this conversation and go on from there. Don't ask again."
+        // not a failure: the card waits for them (the brake never counts it, 27/11)
+        None => text(&format!(
+            "The card for « {name} » waits for your person in the app: nothing is kept so far. Tell them it waits there; \
+             once they answer it, you're told in this conversation and go on from there. Don't call ask_secret for it \
+             again in this turn."
         )),
     })
 }
