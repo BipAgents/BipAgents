@@ -209,7 +209,7 @@ open in the app",
         crate::agent_pairs::Answer::Empty => tool_text(&format!("{shown} got your message but answered nothing."), false),
         crate::agent_pairs::Answer::Waiting => tool_text(
             &format!(
-                "{shown} got your message and is still on it (it may be waiting for your person's approval). Don't \
+                "{shown} got your message and is still on it (busy, or waiting for your person's approval). Don't \
 send it again: {kept}."
             ),
             false,

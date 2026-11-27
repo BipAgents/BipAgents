@@ -11,8 +11,9 @@
 //!   peers.rs `SIGNATURE`) after a short note for the agent (`<!--bip:pair …-->`, hidden by the apps). Its turn is
 //!   a run the run hub follows (runs.rs): an approval or a question nobody follows is pushed and waits in the Boîte,
 //!   which shows inside the person's main conversation with that agent, as for the rooms. The asker gets the answer in
-//!   the same call; a turn waiting for the person past `agent_messages::ANSWER_SECONDS` goes on, and its answer is
-//!   kept here (the asker is told so).
+//!   the same call; a turn still going past `agent_messages::ANSWER_SECONDS` (it works, or waits for the person) goes
+//!   on, `APPROVAL_WAIT` at most, and its answer is kept here (the asker is told so; 27/11: until then a busy target's
+//!   turn was stopped there and said « couldn't answer »).
 //! - **One turn at a time in each agent's conversation of the pair**, never a wait on a turn that waits on the ask
 //!   (6/11; until then one lock per pair, and A → B → A waited on it for `ANSWER_SECONDS`, 600 s): A → B → A answers
 //!   in B's then A's conversation; a message to an agent whose conversation is held by a turn of the same chain of
@@ -79,7 +80,7 @@ pub const EXCHANGES_KEPT: usize = 200;
 pub const EXCHANGES_LISTED: usize = 50;
 /// Messages closer than this (seconds) belong to one exchange: one line in the main conversation.
 pub const EXCHANGE_GAP: f64 = 1800.0;
-/// A turn waiting for the person's approval (or answer) is followed this long.
+/// A target's turn (working, or waiting for the person's approval or answer) is followed this long at most.
 pub const APPROVAL_WAIT: f64 = 1800.0;
 /// How often the target's run is asked about.
 const POLL_SECONDS: f64 = 1.0;
@@ -544,8 +545,8 @@ fn forget_session(config: &Config, id: &str, agent: &str) {
     });
 }
 
-/// One turn of `target` on `framed` (the note and the signed ask), followed until it ends: stopped after `wait`
-/// seconds, or `APPROVAL_WAIT` while it waits for the person. `guest`: a relative's turn, with only these tools.
+/// One turn of `target` on `framed` (the note and the signed ask), followed until it ends (`follow_turn`: `APPROVAL_WAIT`
+/// at most). `guest`: a relative's turn, with only these tools.
 #[allow(clippy::too_many_arguments)]
 async fn turn(
     http: &reqwest::Client,
@@ -605,8 +606,8 @@ async fn turn(
     answer
 }
 
-/// The target's run `run_id` followed until it ends: stopped after `wait` seconds, or `APPROVAL_WAIT` while it waits
-/// for the person.
+/// The target's run `run_id` followed until it ends, `APPROVAL_WAIT` at most (working or waiting for the person): the
+/// asker has its answer within `wait`, else is told the target is still on it (`ask_with`).
 async fn follow_turn(
     hermes: &HermesClient,
     hub: Option<Arc<RunHub>>,
@@ -633,6 +634,8 @@ async fn follow_turn(
                 let status = tk::str_or_empty(run.get("status"));
                 if crate::jobs::TERMINAL.contains(&status.as_str()) {
                     if status != "completed" {
+                        tracing::warn!(agent = %target.name, run_id = %run_id, status = %status,
+                            "agent pair: the target's turn ended without its answer");
                         return Answer::Unreachable;
                     }
                     let output = run.get("output").and_then(Value::as_str).unwrap_or("");
@@ -649,14 +652,14 @@ async fn follow_turn(
             }
             Err(_) => {} // Hermes restarting: asked again next round
         }
-        let waiting = hub.as_ref().is_some_and(|hub| {
-            hub.pending_approvals(Some(&target.name))
-                .iter()
-                .any(|a| a.get("run_id").and_then(Value::as_str) == Some(run_id.as_str()))
-        });
+        // A turn still going at `wait` goes on (27/11, Alex's place: a busy target's turn, longer than the call's wait,
+        // was stopped there and noted « couldn't answer », its work lost, each message after it the same): the asker
+        // is told it is still on it (`ask_with`: `Waiting`) and its answer is kept here. Stopped only past
+        // `APPROVAL_WAIT`, whether it works or waits for the person.
         let elapsed = py::time_time() - since;
-        let limit = if waiting { APPROVAL_WAIT.max(wait) } else { wait };
-        if elapsed >= limit {
+        if elapsed >= APPROVAL_WAIT.max(wait) {
+            tracing::warn!(agent = %target.name, run_id = %run_id, seconds = elapsed.round() as i64,
+                "agent pair: the target's turn never ended, stopped");
             let _ = hermes.stop_run(target, &run_id).await;
             return Answer::Unreachable;
         }
