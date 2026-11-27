@@ -400,7 +400,7 @@ impl CronWatcher {
         if answers_another_agent(messages) {
             return; // an answer to another agent: that agent reports back to the user, one notification
         }
-        if let (Some(push), true) = (&self.push, !crate::background_turn::is_silent(&reply)) {
+        if let (Some(push), Some(reply)) = (&self.push, crate::background_turn::told(&reply)) {
             tracing::info!(agent = %agent.name, session = %sid, chars = pyx::len(&reply), "bot chat push");
             push.notify_reply(&agent.name, &format!("session:{sid}"), &reply, Some(sid)).await;
         }

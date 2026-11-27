@@ -735,10 +735,9 @@ impl Threads {
         self.with_vault_lines(agent, &mut items);
         with_pay_lines(&self.config.get(), agent, &mut items);
         with_carnet_lines(&self.config.get(), agent, &mut items);
-        if thread.kind != "main" {
-            // a run without the person that had nothing to tell (« [SILENT] », or the code word translated): no reply
-            items.retain(|i| !timeline::silent_reply(i));
-        }
+        // a run without the person that had nothing to tell (« [SILENT] », or outside main the code word translated):
+        // no reply; the code word beside real words: those words only (27/11: every conversation, main included)
+        timeline::quiet(&mut items, thread.kind == "main");
         let mut extra = self.boite(agent, thread, segments).await?;
         extra.extend(self.kept(agent, segments).await?);
         let mut items = timeline::merge(items, extra);

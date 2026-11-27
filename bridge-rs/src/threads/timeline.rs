@@ -757,6 +757,69 @@ pub fn segment_items(
     items
 }
 
+/// The background turns' code word in the agent's messages (background_turn.rs `is_silent`, `told`), in every
+/// conversation (27/11, Alex: a watcher's « [SILENT] » shown as a second message, the main conversation then kept every
+/// one): a message that carries it says its other words only, one with nothing else to tell leaves, and so do the hollow
+/// lines of its turn before it (« Rien de nouveau. », then « [SILENT] »: the whole turn is silent). Outside the main
+/// conversation, the code word translated alone too (`silent_reply`: « [PAS UN MOT] »); in it, a reply of the
+/// person's own turn that is one short bracketed word stays.
+pub fn quiet(items: &mut Vec<Item>, main: bool) {
+    let message = |i: &Item| i.body.get("kind") == Some(&json!("message")) && i.body.get("role") == Some(&json!("agent"));
+    // a turn here: from the person's words, or from a run's input without them (a routine's, a hand-back's: `OPENS`),
+    // to the next (`turn` is the person's message: the runs after it would share it)
+    let mut group = 0usize;
+    let groups: Vec<usize> = items
+        .iter()
+        .map(|i| {
+            let person = matches!(i.body.get("role").and_then(Value::as_str), Some("person" | "peer"));
+            if person || i.body.get(OPENS) == Some(&json!(true)) {
+                group += 1;
+            }
+            group
+        })
+        .collect();
+    let mut gone = vec![false; items.len()];
+    let mut silent_turns: HashSet<usize> = HashSet::new();
+    for (n, item) in items.iter_mut().enumerate() {
+        if !message(&*item) {
+            continue;
+        }
+        let text = item.text().to_string();
+        if crate::background_turn::code_word_in(&text) {
+            match crate::background_turn::told(&text) {
+                None if silent_reply_body(&*item) => {
+                    gone[n] = true;
+                    silent_turns.insert(groups[n]);
+                }
+                None => {
+                    item.body.insert("text".into(), json!(""));
+                }
+                Some(words) => {
+                    item.body.insert("text".into(), json!(words));
+                }
+            }
+        } else if !main && silent_reply(&*item) {
+            gone[n] = true;
+        }
+    }
+    for (n, item) in items.iter().enumerate() {
+        if silent_turns.contains(&groups[n]) && message(item) && silent_reply_body(item) && crate::background_turn::hollow(item.text()) {
+            gone[n] = true;
+        }
+    }
+    let mut n = 0;
+    items.retain(|_| {
+        n += 1;
+        !gone[n - 1]
+    });
+}
+
+/// An agent's message with nothing attached nor renamed: its text is all it says.
+fn silent_reply_body(item: &Item) -> bool {
+    let b = &item.body;
+    b.get("attachments").and_then(Value::as_array).is_none_or(|a| a.is_empty()) && b.get("renamed").is_none()
+}
+
 /// An agent's message that only says it has nothing to tell (background_turn.rs `is_silent`), nothing attached.
 pub fn silent_reply(item: &Item) -> bool {
     let b = &item.body;
@@ -1268,6 +1331,49 @@ mod tests {
                           row(3, "assistant", json!("[Météo] Soleil."))]);
         let silent: Vec<bool> = got.iter().map(silent_reply).collect();
         assert_eq!(silent, vec![false, true, false]);
+    }
+
+    /// 27/11, Alex: after a watcher's routine, « [SILENT] » came as a SECOND message, and stayed: the first, a real
+    /// report or a hollow line, the second the code word alone (the main conversation kept every one). Every
+    /// conversation now: the code word alone leaves, a hollow line before it in its turn too, a real report stays (and
+    /// carries no code word); outside main, the translated marker as before.
+    #[test]
+    fn the_code_word_in_a_second_message_never_shows() {
+        let rows = |first: &str, second: &str| {
+            let mut r = vec![
+                row(1, "user", json!("<!--bip:watch\nYour watcher « Mac » woke up.\n-->")),
+                row(2, "assistant", json!(first)),
+                row(3, "tool", json!("ok")),
+                row(4, "assistant", json!(second)),
+            ];
+            r[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "memory", "arguments": "{}"}}]));
+            r[2].tool_call_id = Some("a".into());
+            r
+        };
+        let shown = |rows: &[Row], main: bool| -> Vec<String> {
+            let mut got = items(rows);
+            quiet(&mut got, main);
+            got.iter().filter(|i| i.body.get("role") == Some(&json!("agent"))).map(|i| i.text().to_string()).collect()
+        };
+        for main in [true, false] {
+            let report = rows("Le MacBook Air M4 est à 899 € chez Boulanger.", "[SILENT]");
+            assert_eq!(shown(&report, main), ["Le MacBook Air M4 est à 899 € chez Boulanger."], "main {main}");
+            let hollow = rows("Rien de nouveau sur les prix.", "**[SILENT]**");
+            assert!(shown(&hollow, main).is_empty(), "main {main}: {:?}", shown(&hollow, main));
+            // the code word after the words, in one message: the words, without it
+            let tail = rows("Je regarde.", "Le Mac est à 899 €.\n\n[SILENT]");
+            assert_eq!(shown(&tail, main), ["Je regarde.", "Le Mac est à 899 €."], "main {main}");
+            let paren = rows("Rien à signaler.", "Rien de neuf. (SILENT)");
+            assert!(shown(&paren, main).is_empty(), "main {main}: {:?}", shown(&paren, main));
+        }
+        // a run of its own after the person's turn: its code word never takes the person's answer with it
+        let after = [row(1, "user", json!("Quoi de neuf ?")), row(2, "assistant", json!("Rien de nouveau.")),
+                     row(3, "user", json!("<!--bip:handback\nYour task ended.\n-->")), row(4, "assistant", json!("[SILENT]"))];
+        assert_eq!(shown(&after, true), ["Rien de nouveau."]);
+        // a translated marker: hidden outside main, kept in a person's own conversation
+        let marker = [row(1, "user", json!("Ça va ?")), row(2, "assistant", json!("[RIEN]"))];
+        assert_eq!(shown(&marker, false), Vec::<String>::new());
+        assert_eq!(shown(&marker, true), ["[RIEN]"]);
     }
 
     #[test]

@@ -410,6 +410,15 @@ impl WholeWords {
             return vec![event];
         }
         let mut out: Vec<SSEEvent> = self.held.drain(..).collect();
+        // a text that is the background turns' code word and nothing to tell (« [SILENT] » as a second message, 27/11):
+        // never drawn, as the conversation never keeps it (threads/timeline.rs `quiet`)
+        let said: String = out.iter().filter(|e| is_delta(&e.r#type)).map(SSEEvent::text).collect();
+        if !out.iter().any(|e| e.r#type == crate::media::FILE)
+            && crate::background_turn::code_word_in(&said)
+            && crate::background_turn::is_silent(&said)
+        {
+            out.clear();
+        }
         out.push(event);
         out
     }
@@ -4162,6 +4171,11 @@ mod tests {
         assert!(whole.pass(delta("message.delta", "Fini.")).is_empty());
         let end = whole.pass(other("run.completed"));
         assert_eq!((end[0].data["delta"].as_str(), end[1].r#type.as_str()), (Some("Fini."), "run.completed"));
+        // the code word as a text of its own (27/11): never drawn; beside real words, they pass
+        assert!(whole.pass(delta("message.delta", "[SIL")).is_empty() && whole.pass(delta("message.delta", "ENT]")).is_empty());
+        assert_eq!(whole.pass(other("tool.started")).iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), ["tool.started"]);
+        assert!(whole.pass(delta("message.delta", "Le Mac est à 899 €. [SILENT]")).is_empty());
+        assert_eq!(whole.pass(other("run.completed")).len(), 2);
         assert!(whole.pass(delta("message.delta", "Cou")).is_empty());
         assert_eq!(whole.rest().iter().map(|e| e.text()).collect::<String>(), "Cou");
         assert!(whole.rest().is_empty());
