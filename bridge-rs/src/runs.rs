@@ -2190,9 +2190,28 @@ impl RunHub {
         let failed = crate::loop_brake::completed_with_error(&event.data);
         let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
         let limits = Self::turn_limits(st, &settings, browser_tool(&tool));
-        let over = st.turn.completed(&tool, failed, &limits);
+        // a network error is no broken tool (27/11: a Wi-Fi cut of a few seconds stopped a turn): counted apart
+        let over = if failed && crate::loop_brake::transient_failure(&event.data) {
+            st.turn.failed_transiently(&tool, &limits, crate::py::time_time())
+        } else {
+            let over = st.turn.completed(&tool, failed, &limits);
+            over
+        };
         if !settings.enabled || st.braked || st.finished || st.delegating > 0 || st.subagents > 0 {
+            let _ = st.turn.take_warning();
             return;
+        }
+        // told once to wait a few seconds before trying again (a steer, after its current tool calls)
+        if let (Some(warning), true) = (st.turn.take_warning(), settings.warn && over.is_none()) {
+            tracing::info!(agent = %sub.agent.name, run_id = %sub.run_id, reason = %warning.reason(),
+                "brake_warned: the agent told what a tool's answer means (the network failed, or saved already)");
+            let (hermes, agent, run_id, text) =
+                (self.hermes.clone(), sub.agent.clone(), sub.run_id.clone(), warning.text());
+            self.spawn(async move {
+                if let Err(err) = hermes.steer_run(&agent, &run_id, &text).await {
+                    tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "brake_warned: steer refused");
+                }
+            });
         }
         if let Some(over) = over {
             let rescuing = st.rescue_of.is_some();

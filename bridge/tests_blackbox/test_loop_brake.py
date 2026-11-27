@@ -562,3 +562,47 @@ def test_a_task_the_brake_stops_is_paused_and_its_line_told(bridges, fakes):
     [pushed] = [p for p in fakes.apns.payloads() if p.get("j") == job["id"] or job["id"] in json.dumps(p)]
     said = bridge.get(f"/v1/notifications/{pushed['n']}", headers=AUTH).json()["preview"]
     assert "Écoles du quartier" in str(said) and "I stopped" in str(said), said
+TAVILY_DNS = ("{\n  \"success\": false,\n  \"error\": \"Tavily search failed: HTTPSConnectionPool(host='api.tavily.com', "
+              "port=443): Max retries exceeded with url: /search (Caused by NameResolutionError(\\\"Failed to resolve "
+              "'api.tavily.com' ([Errno -3] Temporary failure in name resolution)\\\")) (keyless rescue also failed: "
+              "Keyless Parallel search failed: request failed: HTTPSConnectionPool(host='search.parallel.ai', port=443): "
+              "Max retries exceeded with url: /mcp (Caused by NameResolutionError(")
+
+
+def searching(run_id, outcomes, output):
+    """web_search calls, each answered: True a network error, False a result."""
+    events = []
+    for cut in outcomes:
+        events.append(sse("tool.started", run_id=run_id, tool="web_search", preview="gants laine merino"))
+        events.append(sse("tool.completed", run_id=run_id, tool="web_search", duration=0.04, error=cut,
+                          preview=TAVILY_DNS if cut else "{\"success\": true, \"data\": {\"web\": []}}"))
+    return events + [sse("run.completed", run_id=run_id, output=output)]
+
+
+def test_a_network_cut_of_a_few_seconds_does_not_stop_the_turn(bridges, fakes):
+    """27/11 08:52, Alex's aibox on Wi-Fi (Famille): web_search failed three times in three seconds, Tavily's name not
+    resolved; the brake took it for a broken tool and stopped the turn (« Je n'arrive pas à chercher sur le web pour
+    l'instant. »). A network error is counted apart: the turn goes on, the agent told once to wait a few seconds."""
+    bridge = bridges.new()
+    bridge.config["jobs"] = {"handoff": False}
+    bridge.config["brake"] = {"rescue": False}
+    bridge.start()
+    found = "Voici trois paires de gants en mérinos pour Mamino."
+    fakes.hermes.runs["run_net"] = searching("run_net", [True, True, True, False], found)
+    events = follow(bridge, "run_net")
+    assert notices(events) == [], notices(events)
+    assert events[-1][0] == "run.completed" and events[-1][1]["output"] == found
+    assert not fakes.hermes.seen("/v1/runs/run_net/stop", "POST")
+    told = lambda: [s["body"]["input"] for s in fakes.hermes.steers if s["body"]["input"].startswith("[bipagents:brake]")]
+    assert wait_until(lambda: told(), timeout=10)
+    assert len(told()) == 1 and "wait a few seconds" in told()[0], told()
+    # a broken tool (not the network) still stops at its third failure
+    fakes.hermes.runs["run_broken"] = (
+        [e for _ in range(3) for e in (sse("tool.started", run_id="run_broken", tool="mcp_bipagents_calendar_list", preview="x"),
+                                       sse("tool.completed", run_id="run_broken", tool="mcp_bipagents_calendar_list",
+                                           error=True, preview="Error: the calendar's file is unreadable"))]
+        + [sse("run.cancelled", run_id="run_broken")])
+    said = notices(follow(bridge, "run_broken"))
+    assert said and said[0]["reason"] == "the same tool failing again and again (calendar_list)", said
+
+
