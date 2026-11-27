@@ -537,14 +537,16 @@ pub fn completed_with_error(data: &serde_json::Map<String, Value>) -> bool {
 /// but 408 and 429) is the tool's: a wrong key, a wrong query, whatever else it says.
 pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
     static STATUS: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?i)\b(?:http|status(?:\s+code)?|error\s+code)\b[\s:=']*(\d{3})\b").expect("valid regex")
+        // « HTTP 503 », « status code 429 », urllib's « HTTP Error 500 », requests' « 500 Server Error »
+        regex::Regex::new(r"(?i)\b(?:(?:http(?:\s+error)?|status(?:\s+code)?|error\s+code)\b[\s:=']*(\d{3})|(\d{3})\s+(?:server|client)\s+error)\b")
+            .expect("valid regex")
     });
     if !completed_with_error(data) && data.get("is_error").and_then(Value::as_bool) != Some(true) {
         return false;
     }
     let preview = data.get("preview").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
     // the first status said decides: a quoted query further on (« invalid query 'http 503' ») doesn't
-    if let Some(code) = STATUS.captures(&preview).and_then(|c| c[1].parse::<u16>().ok()) {
+    if let Some(code) = STATUS.captures(&preview).and_then(|c| c.get(1).or(c.get(2))).and_then(|m| m.as_str().parse::<u16>().ok()) {
         if code == 408 || code == 429 || (500..600).contains(&code) {
             return true;
         }
@@ -552,7 +554,7 @@ pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
             return false;
         }
     }
-    const NETWORK: [&str; 28] = [
+    const NETWORK: &[&str] = &[
         // the name not resolved
         "nameresolutionerror", "name resolution", "failed to resolve", "name or service not known",
         "nodename nor servname", "getaddrinfo failed", "no address associated with hostname", "could not resolve host",
@@ -564,6 +566,10 @@ pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
         "timed out", "readtimeout", "connecttimeout", "timeouterror",
         // the other side busy
         "too many requests", "service unavailable", "bad gateway", "gateway timeout",
+        // Node's and Chrome's words
+        "enotfound", "eai_again", "econnrefused", "econnreset", "etimedout", "socket hang up", "fetch failed",
+        "net::err_name_not_resolved", "net::err_internet_disconnected", "net::err_connection", "net::err_timed_out",
+        "net::err_network_changed",
     ];
     NETWORK.iter().any(|m| preview.contains(m))
 }
@@ -571,11 +577,30 @@ pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
 /// A tool's answer (`tool.completed`, not failed) that says what it was asked is there already: Hermes' `memory`
 /// (« Entry already exists (no duplicate added). »), and the like. Read in its preview's first words.
 pub fn already_there(data: &serde_json::Map<String, Value>) -> bool {
+    // Hermes' `memory` only, in its exact words (tools/memory_tool_store.py `_success_response`): another tool's text
+    // that says « already exists » (a file read, a search) is its content, not a confirmation (review 27/11, A2)
+    if bare(&event_tool(data)) != "memory" {
+        return false;
+    }
     let preview = data.get("preview").and_then(Value::as_str).unwrap_or("");
-    let head = preview.chars().take(300).collect::<String>().to_ascii_lowercase();
-    ["entry already exists", "no duplicate added", "already saved", "already exists in", "already in memory"]
-        .iter()
-        .any(|w| head.contains(w))
+    let said = serde_json::from_str::<Value>(preview)
+        .ok()
+        .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string));
+    match said {
+        Some(message) => message.starts_with(MEMORY_ALREADY),
+        // a long answer cut at 500 characters (its entries after the message): the message as Hermes writes it
+        None => preview.contains(&format!("\"message\": \"{MEMORY_ALREADY}")),
+    }
+}
+
+/// Hermes' `memory` adding an entry it has already (v0.23.1).
+const MEMORY_ALREADY: &str = "Entry already exists (no duplicate added)";
+
+/// A tool held to `same_failure` (and to the network's count, `failed_transiently`): not one whose failure is work
+/// output (`FAILURE_TOLERANT_TOOLS`), nor the visible browser (its own limits), nor a call Hermes did not name.
+pub fn failure_counted(tool: &str) -> bool {
+    let name = bare(tool);
+    !name.is_empty() && !FAILURE_TOLERANT_TOOLS.contains(&name) && !crate::runs::browser_tool(name)
 }
 
 /// Why a turn was stopped.
@@ -897,7 +922,7 @@ impl TurnCount {
             self.offline = 0;
             return None;
         }
-        if name.is_empty() || FAILURE_TOLERANT_TOOLS.contains(&name.as_str()) || crate::runs::browser_tool(&name) {
+        if !failure_counted(&name) {
             return None;
         }
         let count = self.failures.entry(name.clone()).or_insert(0);
@@ -912,7 +937,7 @@ impl TurnCount {
     /// is told once that it is done.
     pub fn confirmed(&mut self, tool: &str) {
         let name = bare(tool).to_string();
-        if name != self.last_tool {
+        if name != self.last_tool || name != "memory" {
             return;
         }
         if let Some(count) = self.last_call.clone().and_then(|key| self.per_call.get_mut(&key)) {
@@ -2754,6 +2779,10 @@ retries exceeded with url: /mcp (Caused by NameResolutionError(\\\"<urllib3.conn
             "Error: [Errno 101] Network is unreachable",
             "{\"error\": \"getaddrinfo failed: nodename nor servname provided, or not known\"}",
             "{\"error\": \"upstream connect error: 502 Bad Gateway\"}",
+            "{\"error\": \"request to https://api.example.com failed, reason: getaddrinfo ENOTFOUND api.example.com\"}",
+            "Error: net::ERR_NAME_NOT_RESOLVED at https://example.com",
+            "Error: HTTP Error 500: Internal Server Error",
+            "{\"error\": \"500 Server Error: Internal Server Error for url: https://api.example.com/x\"}",
         ] {
             assert!(transient_failure(&failed(preview)), "{preview}");
         }

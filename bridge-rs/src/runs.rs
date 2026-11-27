@@ -154,14 +154,15 @@ fn after_the_brake(event: SSEEvent) -> Option<SSEEvent> {
     let mut changed = false;
     for key in ["output", "content", "final_output", "text"] {
         let Some(said) = data.get(key).and_then(Value::as_str).map(str::to_string) else { continue };
-        let words = crate::background_turn::without_hermes_lines(&said);
-        if words != said.trim() {
-            if words.is_empty() && event.r#type == "assistant.completed" {
-                return None;
-            }
-            data.insert(key.into(), json!(words));
-            changed = true;
+        if !said.lines().any(crate::background_turn::hermes_line) {
+            continue;
         }
+        let words = crate::background_turn::without_hermes_lines(&said);
+        if words.is_empty() && event.r#type == "assistant.completed" {
+            return None;
+        }
+        data.insert(key.into(), json!(words));
+        changed = true;
     }
     if !changed {
         return Some(event);
@@ -2226,7 +2227,8 @@ impl RunHub {
         let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
         let limits = Self::turn_limits(st, &settings, browser_tool(&tool));
         // a network error is no broken tool (27/11: a Wi-Fi cut of a few seconds stopped a turn): counted apart
-        let over = if failed && crate::loop_brake::transient_failure(&event.data) {
+        // (never for the tools whose failure is work output, nor the browser: a slow page is no Internet cut)
+        let over = if failed && crate::loop_brake::failure_counted(&tool) && crate::loop_brake::transient_failure(&event.data) {
             st.turn.failed_transiently(&tool, &limits, crate::py::time_time())
         } else {
             let over = st.turn.completed(&tool, failed, &limits);
@@ -2240,8 +2242,9 @@ impl RunHub {
             let _ = st.turn.take_warning();
             return;
         }
-        // told once to wait a few seconds before trying again (a steer, after its current tool calls)
-        if let (Some(warning), true) = (st.turn.take_warning(), settings.warn && over.is_none()) {
+        // told once to wait a few seconds before trying again (a steer, after its current tool calls); not a rescue
+        // turn, told not to use the internet again
+        if let (Some(warning), true) = (st.turn.take_warning(), settings.warn && over.is_none() && st.rescue_of.is_none()) {
             tracing::info!(agent = %sub.agent.name, run_id = %sub.run_id, reason = %warning.reason(),
                 "brake_warned: the agent told what a tool's answer means (the network failed, or saved already)");
             let (hermes, agent, run_id, text) =
@@ -2650,13 +2653,18 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             }
         }
         let mut end = self.loop_rescue_turn(sub, terminal, &added).await;
+        let mut carried = false;
         if let Some(queues) = queues {
             let session = lock(&sub.state).session_id.clone().filter(|s| !s.is_empty());
             if let Some(session) = session {
-                queues.carry(&sub.agent, &session, &sub.run_id, pending.as_deref());
+                carried = queues.carry(&sub.agent, &session, &sub.run_id, pending.as_deref());
             }
         }
-        if let Some(pending) = pending.filter(|_| end.data.get("pending_steer").is_none()) {
+        // carried with the others, in the order written (review 27/11): never brought back a second time
+        if carried && end.data.remove("pending_steer").is_some() {
+            end.raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(end.data.clone()));
+        }
+        if let Some(pending) = pending.filter(|_| !carried && end.data.get("pending_steer").is_none()) {
             end.data.insert("pending_steer".into(), json!(pending));
             end.raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(end.data.clone()));
         }
@@ -5819,5 +5827,63 @@ tool output and not a new delivery when replayed from conversation history]";
         for said in [&request, &rescue_prompt(&request, &[], "")] {
             assert!(!said.contains("OUT-OF-BAND") && !said.contains("<!--"), "{said}");
         }
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    fn event(kind: &str, data: Value) -> SSEEvent {
+        SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}")
+    }
+
+    fn turn(hub: &RunHub, run: &str) -> Arc<RunSubscription> {
+        let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, run));
+        lock(&sub.state).session_id = Some(format!("api_{run}"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        sub
+    }
+
+    /// A1. The tools whose failure is work output (`FAILURE_TOLERANT_TOOLS`: « a page that refuses to be read among
+    /// several ») and the visible browser (its own limits) were never stopped for failing. `transient_failure` is read
+    /// before that exemption (runs.rs `brake_failure`): eight slow pages in a row (« Read timed out », a Playwright
+    /// « TimeoutError ») now stop the turn with « Je n'arrive pas à joindre Internet » although the network is fine.
+    #[tokio::test]
+    async fn slow_pages_never_stop_a_turn_as_the_internet_unreachable() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let extract = turn(&hub, "run_extract");
+        for i in 0..8 {
+            hub.dispatch(&extract, event("tool.started", json!({"tool": "web_extract", "tool_call_id": format!("e{i}"),
+                "args": {"urls": [format!("https://boutique-{i}.example/gants")]}})));
+            hub.dispatch(&extract, event("tool.completed", json!({"tool": "web_extract", "tool_call_id": format!("e{i}"),
+                "error": true, "preview": "{\"error\": \"Read timed out. (read timeout=30)\"}"})));
+        }
+        assert!(!lock(&extract.state).braked, "web_extract failing on slow pages is work output, never a loop");
+        let browse = turn(&hub, "run_browse");
+        for i in 0..8 {
+            hub.dispatch(&browse, event("tool.started", json!({"tool": "mcp__stealth__navigate", "tool_call_id": format!("b{i}"),
+                "args": {"url": format!("https://site-{i}.example")}})));
+            hub.dispatch(&browse, event("tool.completed", json!({"tool": "mcp__stealth__navigate", "tool_call_id": format!("b{i}"),
+                "error": true, "preview": "{\"error\": \"TimeoutError: Navigation timeout of 30000 ms exceeded\"}"})));
+        }
+        assert!(!lock(&browse.state).braked, "the browser has its own limits (browser_calls, page_reads)");
+    }
+
+    /// A2. `already_there` (« already exists in », « already saved »…) is read in ANY tool's answer, and `confirmed`
+    /// then takes the call back from `same_call`/`same_lookup`: the very same `read_file` (a work tool: no `same_tool`)
+    /// whose page holds « already exists in » is held to the total (60) instead of its lookups' limit (5).
+    #[tokio::test]
+    async fn the_same_read_whose_text_says_already_exists_is_still_a_loop() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let run = turn(&hub, "run_read");
+        for i in 0..6 {
+            hub.dispatch(&run, event("tool.started", json!({"tool": "read_file", "tool_call_id": format!("r{i}"),
+                "args": {"path": "/workspace/app/db.py"}})));
+            hub.dispatch(&run, event("tool.completed", json!({"tool": "read_file", "tool_call_id": format!("r{i}"), "error": false,
+                "preview": "{\"content\": \"     1|def add(name):\\n     2|    raise ValueError(f'{name} already exists in the table')\"}"})));
+        }
+        assert!(lock(&run.state).braked, "the same read 6 times: stopped at same_lookup (5), as for any read");
     }
 }

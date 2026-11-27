@@ -252,7 +252,7 @@ impl LiveBrake {
                 let failed = event.data.get("is_error").and_then(Value::as_bool).unwrap_or(false)
                     || crate::loop_brake::completed_with_error(&event.data);
                 // a network error: counted apart, a call's few seconds (loop_brake.rs `failed_transiently`)
-                if failed && crate::loop_brake::transient_failure(&event.data) {
+                if failed && crate::loop_brake::failure_counted(&tool) && crate::loop_brake::transient_failure(&event.data) {
                     self.turn.failed_transiently(&tool, &self.limits, crate::py::time_time())
                 } else {
                     self.turn.completed(&tool, failed, &self.limits)

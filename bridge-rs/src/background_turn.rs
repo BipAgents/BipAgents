@@ -52,7 +52,11 @@ written (in English, in brackets, nothing else), whatever the conversation's lan
 /// The code word wherever it stands (27/11, Alex: « [SILENT] » seen again): in brackets, parentheses or braces, in bold,
 /// italics or code, with spaces or punctuation around; `NO_REPLY` too (as Hermes' cron reads it).
 static CODE_WORD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?i)[*_`«»“”\x22]*\s*[\[(\{【]\s*(?:silent|no[_ ]reply)\s*[\])\}】]\s*[*_`«»“”\x22]*[.!]?")
+    // in brackets whatever the case (« [silent] »); in parentheses or braces, written as the code word is (« (SILENT) »:
+    // `{silent}` is code, review 27/11)
+    regex::Regex::new(
+        r"[*_`«»“”\x22]*\s*(?:\[\s*(?i:silent|no[_ ]reply)\s*\]|[(\{【]\s*(?:SILENT|NO[_ ]REPLY)\s*[)\}】])\s*[*_`«»“”\x22]*[.!]?",
+    )
         .expect("valid regex")
 });
 
@@ -72,7 +76,8 @@ pub fn code_word_in(text: &str) -> bool {
 
 /// `text` without the code word (`CODE_WORD`) and the empty lines it leaves: what the agent told besides it.
 pub fn without_code_word(text: &str) -> String {
-    if !CODE_WORD.is_match(text) {
+    // never inside code the agent wrote (review 27/11: `print(f"mode: {silent}")`)
+    if !CODE_WORD.is_match(text) || text.contains("```") {
         return text.trim().to_string();
     }
     let out = CODE_WORD.replace_all(text, "");
@@ -130,7 +135,12 @@ pub fn is_silent(text: &str) -> bool {
     if t.is_empty() {
         return true;
     }
-    if CODE_WORD.is_match(&bare) {
+    // the code word first: silent whatever follows (the reason for the silence, « [SILENT] Toujours 1 199 €, pas de
+    // baisse. »: int-1.1e's rule, review 27/11)
+    if CODE_WORD.find(t).is_some_and(|m| m.start() == 0) || bare.trim_start().starts_with(SILENT) {
+        return true;
+    }
+    if CODE_WORD.is_match(&bare) && !bare.contains("```") {
         let rest = without_code_word(&bare);
         return hollow(&rest) || marker_only(undressed(&rest));
     }
@@ -834,13 +844,12 @@ mod tests {
         for quiet in ["(SILENT)", "{SILENT}", "【SILENT】", "( silent )", "**(SILENT)**", "`{NO_REPLY}`", "[SILENT].",
             "Rien de nouveau. [SILENT]", "Rien de neuf.\n\n[SILENT]", "[SILENT]\n\nRien à signaler.", "RAS [SILENT]",
             "Nothing new. (SILENT)", "Nichts Neues. [SILENT]", "Sin novedades. [SILENT]", "Aucun changement depuis hier. [SILENT]",
-            "(RIEN)", "{NADA}", "<!--bip:x-->(SILENCE)"] {
+            "(RIEN)", "{NADA}", "<!--bip:x-->(SILENCE)", "[SILENT]\n\nLe prix n'a pas bougé : 1 199 €."] {
             assert!(is_silent(quiet), "{quiet:?} should be silent");
             assert_eq!(told(quiet), None, "{quiet:?}");
         }
         for (said, words) in [
             ("Le MacBook Air est à 899 € chez Boulanger. [SILENT]", "Le MacBook Air est à 899 € chez Boulanger."),
-            ("[SILENT]\n\nLe prix a baissé : 899 €.", "Le prix a baissé : 899 €."),
             ("Rien de nouveau sur Fnac, mais Darty le vend 899 €.\n(SILENT)", "Rien de nouveau sur Fnac, mais Darty le vend 899 €."),
             ("Billets en vente ! [SILENT]", "Billets en vente !"),
         ] {
@@ -850,7 +859,7 @@ mod tests {
         // what has no code word is as before: « Rien de neuf. » alone is a report, told as written
         assert_eq!(told("Rien de neuf.").as_deref(), Some("Rien de neuf."));
         assert_eq!(told("SILENT NIGHT est passé à la radio").as_deref(), Some("SILENT NIGHT est passé à la radio"));
-        assert!(!code_word_in("SILENT NIGHT est passé à la radio") && code_word_in("ok (silent)"));
+        assert!(!code_word_in("SILENT NIGHT est passé à la radio") && code_word_in("ok (SILENT)") && !code_word_in("print(f\"mode: {silent}\")"));
         assert!(!is_silent("(42)") && !is_silent("(voir le rapport ci-dessous pour tous les détails du jour)"));
         assert!(hollow("Rien à signaler.") && !hollow("Rien que pour toi : 899 €") && !hollow("Rien de neuf, sauf un e-mail de la banque qui demande ta signature avant vendredi sur le contrat de prêt, à lire attentivement, et un rappel du garage pour la révision de la voiture."));
     }
@@ -1019,5 +1028,27 @@ mod rcl_review_probes {
     #[test]
     fn rcl_hermes_repetition_line_is_no_reply() {
         assert_eq!(ended_with("completed".into(), "[the reply degenerated into a repetition loop and was interrupted]").1, "");
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    /// D1. The code word first was silent whatever followed (« the code word (with anything after it) », int-1.1e; the
+    /// lab of 13/11). Now a reason after it that is not in the « hollow » list makes it a report: told, pushed, put
+    /// in the Boîte (`told`, `deliver_as`, Bot Chat), and a watcher's wake-up is read as news (`watchers::read_reply`).
+    #[test]
+    fn the_code_word_first_then_why_is_still_silence() {
+        for quiet in [
+            "[SILENT] Toujours 1 199 € chez Boulanger, pas de baisse.",
+            "[SILENT] — the price is unchanged (€1,199), nothing to tell.",
+            "[SILENT]\nJ'ai vérifié Fnac et Darty : mêmes prix qu'hier.",
+        ] {
+            assert!(is_silent(quiet), "{quiet:?}");
+            assert_eq!(told(quiet), None, "{quiet:?}");
+            assert_eq!(crate::watchers::read_reply(quiet), None, "{quiet:?}");
+        }
     }
 }

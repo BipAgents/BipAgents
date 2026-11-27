@@ -613,25 +613,28 @@ impl Queues {
             .unwrap_or_default()
     }
 
-    /// The brake stopped `run_id` (runs.rs `loop_rescue`): the person's words steered into it that it took (not in
-    /// `pending`, Hermes' words it never took: those come back by `run_ended`, as before) but never got to are its
-    /// conversation's next message, first in line and started the moment it ends, told why (`CARRIED_NOTE`). Whether
-    /// some were.
-    pub fn carry(&self, agent: &AgentConfig, session_id: &str, run_id: &str, pending: Option<&str>) -> bool {
-        let pending = pending.unwrap_or("");
+    /// The brake stopped `run_id` (runs.rs `loop_rescue`): the person's words steered into it, those it took and those
+    /// it never took (`pending`: Hermes' `pending_steer`, which `run_ended` then finds nothing more to bring back), are
+    /// its conversation's next messages, in the order the person wrote them (review 27/11), first in line and started
+    /// the moment it ends, told why (`CARRIED_NOTE`), each with its app id (the apps that hold its row « Ajouté pendant
+    /// la réponse » see it come again under that id). Whether some were.
+    pub fn carry(&self, agent: &AgentConfig, session_id: &str, run_id: &str, _pending: Option<&str>) -> bool {
         let (_, carried) = self.update(&agent.name, |q| {
-            let taken: Vec<Steer> =
-                q.steers.iter().filter(|s| s.run_id == run_id && !pending.contains(s.text.trim())).cloned().collect();
-            let words: Vec<String> = taken.iter().filter_map(|s| crate::threads::timeline::person_text(&s.text)).collect();
-            if words.is_empty() || q.items.len() >= ITEMS_MAX {
+            let steered: Vec<Steer> = q.steers.iter().filter(|s| s.run_id == run_id).cloned().collect();
+            let words: Vec<(String, Option<String>)> = steered
+                .iter()
+                .filter_map(|s| crate::threads::timeline::person_text(&s.text).map(|w| (w, s.client_id.clone())))
+                .collect();
+            if words.is_empty() || q.items.len() + words.len() > ITEMS_MAX {
                 return (false, false);
             }
-            q.steers.retain(|s| !(s.run_id == run_id && !pending.contains(s.text.trim())));
-            let said = words.join("\n\n");
-            let input = Some(Value::String(format!("{CARRIED_NOTE}\n{said}")));
-            let mut item = new_item(session_id, &said, true, Sent { input, ..Sent::default() });
-            item.pushed = true;
-            q.items.insert(0, item);
+            q.steers.retain(|s| s.run_id != run_id);
+            for (at, (said, client_id)) in words.into_iter().enumerate() {
+                let input = Some(Value::String(format!("{CARRIED_NOTE}\n{said}")));
+                let mut item = new_item(session_id, &said, true, Sent { input, client_id, ..Sent::default() });
+                item.pushed = true;
+                q.items.insert(at, item);
+            }
             q.changed();
             (true, true)
         });
@@ -1245,5 +1248,47 @@ mod tests {
             again.add(&agent, "s1", &format!("m{i}"), None, false, Sent::default()).unwrap();
         }
         assert_eq!(again.add(&agent, "s1", "one more", None, false, Sent::default()).unwrap_err(), "full");
+    }
+}
+
+// -- independent review of fix-brake-network (27/11): red tests on 1d4df2027, kept as tests ------------------------------
+#[cfg(test)]
+mod review_fix_brake_network {
+    use super::*;
+
+    /// B1. Words added during a turn the brake stopped: one the turn took (« Écris aussi à Paul », carried by `carry`)
+    /// and one it never took (« Et trouve des gants », Hermes' `pending_steer`, brought back by `run_ended` on the
+    /// rescue turn's end). `carry` puts the first in front, then `run_ended` puts the later words in front of it: the
+    /// person's words start in the wrong order (the later first).
+    #[tokio::test]
+    async fn words_taken_and_words_never_taken_start_in_the_order_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        config.agents.insert(
+            "maison".into(),
+            crate::config::AgentConfig {
+                name: "maison".into(),
+                hermes_url: "http://127.0.0.1:9".into(),
+                hermes_key: "x".into(),
+                ..Default::default()
+            },
+        );
+        let shared = SharedConfig::new(config.clone());
+        let hermes = HermesClient::new(reqwest::Client::new());
+        let hub = Arc::new(RunHub::new(hermes.clone(), None, 60, None));
+        let queues = Queues::new(shared, hermes, hub);
+        let agent = config.agents["maison"].clone();
+        let (taken, never) = ("Écris aussi à Paul", "Et trouve des gants");
+        queues.update_quiet("maison", |q| {
+            q.steers.push(Steer { run_id: "r1".into(), text: taken.into(), client_id: Some("c1".into()) });
+            q.steers.push(Steer { run_id: "r1".into(), text: never.into(), client_id: Some("c2".into()) });
+            (true, ())
+        });
+        // runs.rs `loop_rescue`: carried after the rescue turn, then the end (the rescue's, with the pending words)
+        assert!(queues.carry(&agent, "s1", "r1", Some(never)));
+        queues.run_ended("maison", "r1", Some("s1"), "run.completed", Some(never));
+        let texts: Vec<String> = queues.get("maison").items.iter().map(|i| i.text.clone()).collect();
+        assert_eq!(texts, [taken, never], "the words in the order the person wrote them");
     }
 }

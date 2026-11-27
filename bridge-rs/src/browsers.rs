@@ -500,7 +500,8 @@ pub fn refresh_downloads(config: &Config, agent: &str) -> bool {
     let mut changed = false;
     let unit = Host::real(config).unit_path(agent);
     if let Some(text) = std::fs::read_to_string(&unit).ok().and_then(|t| unit_refreshed(&t, &place)) {
-        changed = std::fs::write(&unit, text).is_ok();
+        // whole or not at all (a cut while writing would leave a unit half written)
+        changed = crate::profile_files::write_atomic_keeping_owner(&unit, text.as_bytes()).is_ok();
     }
     // one writer of mcp.json at a time (`edit_proxy_settings`: the phone exit's and the guard's keys are written too)
     let _ = edit_proxy_settings(config, agent, |settings| {

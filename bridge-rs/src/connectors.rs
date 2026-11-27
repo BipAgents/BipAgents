@@ -1432,6 +1432,25 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
         .flatten();
     let identifier_label = crate::cards::quoted(&arg(arguments, "identifier_label"), 80);
     let identifier = crate::cards::quoted(&arg(arguments, "identifier"), 200);
+    // only what the agent gave is said back to it: never the identifier the person typed (review 27/11)
+    let gave_identifier = !identifier.is_empty();
+    // the kept one's site and kind, never the agent's (review 27/11): another site is another secret
+    let (origin, kind) = match kept {
+        Some(item) => {
+            let kept_origin = item.origin.clone().unwrap_or_default();
+            if !origin.is_empty() && origin != kept_origin {
+                tracing::info!(agent = %agent.name, secret = %name, "secret card not made: a kept name asked for another site");
+                return Ok(refusal(&format!(
+                    "« {name} » is kept for another site{}: to have it typed anew, ask again without `site` (or with \
+                     that site); for this site, pick another name.",
+                    if kept_origin.is_empty() { String::new() } else { format!(" ({kept_origin})") }
+                )));
+            }
+            let kept_kind = item.secret_info.as_ref().and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or(&kind);
+            (kept_origin, kept_kind.to_string())
+        }
+        None => (origin, kind),
+    };
     let kept_label = kept
         .and_then(|i| i.secret_info.as_ref())
         .and_then(|s| s.get("identifier_label"))
@@ -1440,7 +1459,6 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
     let identifier_label = if identifier_label.is_empty() { kept_label.unwrap_or_default() } else { identifier_label };
     let identifier = if identifier.is_empty() { kept.and_then(|i| i.identifier.clone()).unwrap_or_default() } else { identifier };
     let replaced = kept.is_some();
-    let gave_identifier = !identifier.is_empty();
     let connector = Some(arg(arguments, "connector")).filter(|c| !c.is_empty());
     let login_url = match kind == "password" && arg(arguments, "use") == "browser" {
         true => crate::vault::login_url_of(&site, &origin),
