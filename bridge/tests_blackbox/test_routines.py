@@ -627,8 +627,9 @@ def test_a_routine_the_brake_stops_tells_the_person_where_its_reports_land(bridg
     assert not call(bridge, "delete_page", {"page": page_id})["isError"]
     remade = call(bridge, "create_page", page)
     assert not remade["isError"] and not text_of(remade).startswith("Already done"), text_of(remade)
-    # and still again and again: the brake stops the run (a routine: the task's same_call, 5)
-    for _ in range(5):
+    # and still again and again: the brake stops the run (a routine, a write done already: the task's lookups' limit,
+    # 8 — asked again to check it is no loop at 5, 27/11)
+    for _ in range(8):
         call(bridge, "create_page", page)
     assert wait_until(lambda: hermes.started["r1"]["status"] == "cancelled", timeout=20)
     assert wait_until(lambda: [i for i in boite(bridge) if i["title"] == "Le point du soir"], timeout=30)

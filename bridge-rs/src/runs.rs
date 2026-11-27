@@ -2226,6 +2226,10 @@ impl RunHub {
             st.turn.failed_transiently(&tool, &limits, crate::py::time_time())
         } else {
             let over = st.turn.completed(&tool, failed, &limits);
+            // « already there » (Hermes' memory, 27/11): the same call again to check it is no loop, and it is told so
+            if !failed && crate::loop_brake::already_there(&event.data) {
+                st.turn.confirmed(&tool);
+            }
             over
         };
         if !settings.enabled || st.braked || st.finished || st.delegating > 0 || st.subagents > 0 {
@@ -2300,7 +2304,9 @@ impl RunHub {
     /// bridge's tools (an empty preview), so the brake's `same_call` can't see them: it hears it from the tool here,
     /// and stops the run at that limit like any loop (release bench of 4/11: an after-call turn made its page, then
     /// asked for it 9 times more until its token limit, 333k tokens).
-    pub fn same_write_again(&self, agent: &str, run_id: &str, tool: &str, calls: u32) {
+    /// `done`: the write went through before and its repeats are answered « already done » (27/11: asked again to
+    /// check it, harmless): held to `same_lookup`; a refused one to `same_call`.
+    pub fn same_write_again(&self, agent: &str, run_id: &str, tool: &str, calls: u32, done: bool) {
         let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else { return };
         let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
         let mut st = lock(&sub.state);
@@ -2309,7 +2315,7 @@ impl RunHub {
         }
         let rescuing = st.rescue_of.is_some();
         let limits = if rescuing { settings.rescue_limits() } else { settings.limits(st.background) };
-        if calls >= limits.same_call {
+        if calls >= if done { limits.same_lookup } else { limits.same_call } {
             let over = crate::loop_brake::Over::SameCall(crate::loop_brake::bare(tool).to_string());
             self.stop_looping(&sub, &mut st, over, rescuing, &settings);
         }
@@ -5157,8 +5163,8 @@ mod tests {
             hub.dispatch(&chat, started.clone());
             hub.dispatch(&task, started.clone());
             if calls > 1 {
-                hub.same_write_again("daily", "run_chat", "mcp__bipagents__create_page", calls);
-                hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", calls);
+                hub.same_write_again("daily", "run_chat", "mcp__bipagents__create_page", calls, false);
+                hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", calls, false);
             }
             // a conversation's turn at its 3rd identical call, not before
             assert_eq!(lock(&chat.state).braked, calls >= 3, "chat at {calls}");
@@ -5168,14 +5174,22 @@ mod tests {
         // a background turn at the task's same_call (5)
         assert!(!lock(&task.state).braked);
         hub.dispatch(&task, started.clone());
-        hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", 5);
+        hub.same_write_again("daily", "run_task", "mcp__bipagents__create_page", 5, false);
         assert!(lock(&task.state).braked && notices(&task).len() == 1);
         // its line kept for whoever tells its person (background_turn.rs `Ran::stopped`): nobody follows a background turn
         let said = hub.brake_said("daily", "run_task").unwrap_or_default();
         assert!(said.starts_with("I stopped") && said.ends_with('.'), "{said}");
         assert!(hub.brake_said("daily", "run_chat").is_some() && hub.brake_said("daily", "run_gone").is_none());
         // nothing followed: nothing to stop
-        hub.same_write_again("daily", "run_gone", "mcp__bipagents__create_page", 9);
+        hub.same_write_again("daily", "run_gone", "mcp__bipagents__create_page", 9, false);
+        // 27/11: a write that went through, asked again to check it (answered « already done »): its lookups' limit, 5
+        let check = run("run_check");
+        for calls in 2..=4u32 {
+            hub.same_write_again("daily", "run_check", "mcp__bipagents__notebook_write", calls, true);
+            assert!(!lock(&check.state).braked, "checked {calls} times");
+        }
+        hub.same_write_again("daily", "run_check", "mcp__bipagents__notebook_write", 5, true);
+        assert!(lock(&check.state).braked);
     }
 
     #[tokio::test]

@@ -51,10 +51,10 @@ def test_the_same_call_three_times_and_the_limits_in_the_config(bridges, fakes):
     bridge.config["jobs"] = {"handoff": False}   # no long-work steer here
     bridge.start()
     fakes.hermes.runs["run_same"] = (
-        [sse("tool.started", run_id="run_same", tool="memory", preview="add: le code du portail") for _ in range(3)]
+        [sse("tool.started", run_id="run_same", tool="send_message", preview="Léa: le code du portail") for _ in range(3)]
         + [sse("run.completed", run_id="run_same", output="ok")])
     notices = [data for name, data in follow(bridge, "run_same") if name == "bridge.notice" and data.get("code") == "loop_stopped"]
-    assert [n["reason"] for n in notices] == ["same call repeated (memory)"]
+    assert [n["reason"] for n in notices] == ["same call repeated (send_message)"]
     # 20 different calendar calls: under the configured 50
     fakes.hermes.runs["run_ok"] = looping("run_ok", 20)
     assert "bridge.notice" not in [name for name, _ in follow(bridge, "run_ok")]
@@ -636,3 +636,28 @@ def test_a_network_cut_of_a_few_seconds_does_not_stop_the_turn(bridges, fakes):
     assert said and said[0]["reason"] == "the same tool failing again and again (calendar_list)", said
 
 
+ENTRY = "add: Podcast du matin : annoncer les rappels quelques jours avant, puis deux jours avant et la veille"
+EXISTS = "{\"success\": true, \"message\": \"Entry already exists (no duplicate added).\"}"
+
+
+def test_checking_a_note_already_kept_is_no_loop(bridges, fakes):
+    """27/11 09:2x, Alex: a preference noted, then « Je me suis arrêté : je refaisais sans cesse la même étape. », and
+    again in the next turn after « T'as réussi à noter ? » → « Je vérifie… ». Hermes' memory has no read: the model
+    checked by adding the same entry again (« Entry already exists »). No stop: told once it is done; the reply comes."""
+    bridge = bridges.new()
+    bridge.config["jobs"] = {"handoff": False}
+    bridge.start()
+    done = "C'est bien noté dans ma mémoire."
+    events = [sse("tool.started", run_id="run_note", tool="memory", preview=ENTRY),
+              sse("tool.completed", run_id="run_note", tool="memory", preview="{\"success\": true, \"message\": \"Entry added.\"}")]
+    for _ in range(3):
+        events += [sse("tool.started", run_id="run_note", tool="memory", preview=ENTRY),
+                   sse("tool.completed", run_id="run_note", tool="memory", preview=EXISTS)]
+    fakes.hermes.runs["run_note"] = events + [sse("message.delta", run_id="run_note", delta=done),
+                                              sse("run.completed", run_id="run_note", output=done)]
+    got = follow(bridge, "run_note")
+    assert notices(got) == [], notices(got)
+    assert got[-1][1].get("output") == done
+    told = lambda: [s["body"]["input"] for s in fakes.hermes.steers if s["run_id"] == "run_note"]
+    assert wait_until(lambda: told(), timeout=10)
+    assert len(told()) == 1 and "saved already" in told()[0], told()

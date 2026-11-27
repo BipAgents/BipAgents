@@ -73,8 +73,9 @@
 //! out of sight (`rescue_input`, its row hidden by the apps: `[bipagents:loop_rescue]`) why it was stopped, not to
 //! call that tool again, and to answer with what it has: what it tried, what it found, what blocked it, one or two
 //! ways forward. That turn has tight limits (`rescue_limits`: `rescue_tool_calls` calls, the stopped tool refused at
-//! the bridge's MCP and stopping the turn at its second call) and is never rescued itself. The person reads the
-//! brake's short line (`notice_head`), then the agent's own reply; when the rescue fails too, the full plain line.
+//! Hermes' `memory` again with the same words is held to `same_lookup`, an answer « already there » is not counted and
+//! tells the agent it is done (`Warning::Saved`); the bridge's write asked again answers « Already done », what it
+//! answered, and is stopped at `same_lookup` (a refused one at `same_call`).
 //! Background tasks and routines get no rescue turn.
 //!
 //! A tool failing again and again (20/11, Alex in a Live call: « Laisse-moi vérifier sur le web », then Hermes' own
@@ -275,6 +276,7 @@ pub fn over_of(warning: &Warning) -> Over {
         Warning::Searches(..) => Over::Searches,
         Warning::DiscoverySame(..) | Warning::Discovery(..) => Over::Discovery,
         Warning::Network(tool) => Over::Offline(tool.clone()),
+        Warning::Saved(tool) => Over::SameCall(tool.clone()),
     }
 }
 
@@ -558,6 +560,16 @@ pub fn transient_failure(data: &serde_json::Map<String, Value>) -> bool {
     NETWORK.iter().any(|m| preview.contains(m))
 }
 
+/// A tool's answer (`tool.completed`, not failed) that says what it was asked is there already: Hermes' `memory`
+/// (« Entry already exists (no duplicate added). »), and the like. Read in its preview's first words.
+pub fn already_there(data: &serde_json::Map<String, Value>) -> bool {
+    let preview = data.get("preview").and_then(Value::as_str).unwrap_or("");
+    let head = preview.chars().take(300).collect::<String>().to_ascii_lowercase();
+    ["entry already exists", "no duplicate added", "already saved", "already exists in", "already in memory"]
+        .iter()
+        .any(|w| head.contains(w))
+}
+
 /// Why a turn was stopped.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Over {
@@ -638,6 +650,9 @@ pub enum Warning {
     Discovery(u32, u32),
     /// A tool couldn't reach the network (its bare name): wait a few seconds, then try again.
     Network(String),
+    /// A tool answered that what it was asked is there already (its bare name: Hermes' `memory` « Entry already
+    /// exists »): it is done, nothing to call again.
+    Saved(String),
 }
 
 /// The steers the bridge's brake gives start with this (the apps hide such rows: `[bipagents:`).
@@ -655,6 +670,7 @@ impl Warning {
             Warning::DiscoverySame(..) => "discovery_same".into(),
             Warning::Discovery(..) => "discovery".into(),
             Warning::Network(_) => "network".into(),
+            Warning::Saved(tool) => format!("saved:{tool}"),
         }
     }
 
@@ -670,11 +686,19 @@ impl Warning {
             Warning::DiscoverySame(n, _) => format!("the same tool search {n} times"),
             Warning::Discovery(n, _) => format!("{n} tool searches"),
             Warning::Network(tool) => format!("a network error ({tool})"),
+            Warning::Saved(tool) => format!("already saved ({tool})"),
         }
     }
 
     /// The note the agent gets (a steer, after its current tool calls), in English, out of the person's sight.
     pub fn text(&self) -> String {
+        if let Warning::Saved(tool) = self {
+            return format!(
+                "{WARN_MARK} A note from the app, not from your person: {tool} just told you this is saved already: it \
+is done, and calling it again changes nothing (that is no way to check it). Don't call {tool} again for it: tell your \
+person plainly that it is noted."
+            );
+        }
         if let Warning::Network(tool) = self {
             return format!(
                 "{WARN_MARK} A note from the app, not from your person: {tool} couldn't reach the internet (a network \
@@ -713,7 +737,7 @@ stopped. If no tool does it, say so to the person"
                 "you have searched your tools {count} times in this turn; past {hard} the turn is stopped. Use a tool \
 you found, or tell the person plainly what you can't do"
             ),
-            Warning::Network(_) => String::new(), // above
+            Warning::Network(_) | Warning::Saved(_) => String::new(), // above
         };
         format!(
             "{WARN_MARK} A note from the app, not from your person: {what}. Change approach (other words, another \
@@ -823,7 +847,11 @@ impl TurnCount {
                 let again = self.per_call.entry(format!("{name}\u{1f}{signature}")).or_insert(0);
                 *again += 1;
                 let again = *again;
-                let limit = if lookup_tool(&name, Some(signature)) { limits.same_lookup } else { limits.same_call };
+                // Hermes' `memory` keeps an entry once (« Entry already exists »): the same write again is no harm, so
+                // a lookup's limit (27/11: checked by adding it again)
+                let idempotent = name == "memory";
+                let limit =
+                    if idempotent || lookup_tool(&name, Some(signature)) { limits.same_lookup } else { limits.same_call };
                 if again >= limit {
                     return Some(Over::SameCall(name));
                 }
@@ -868,6 +896,25 @@ impl TurnCount {
         *count += 1;
         (*count >= limits.same_failure).then_some(Over::Failing(name))
     }
+
+    /// The turn's call of `tool` answered that what it was asked is there already (`already_there`: Hermes' `memory`
+    /// « Entry already exists (no duplicate added) »): the same call made again to check it (27/11, Alex's aibox: a
+    /// preference noted, then « je vérifie que ta préférence est bien enregistrée », stopped as « la même étape »
+    /// twice) is not counted toward `same_call` (its other limits still hold: `same_tool`, the total), and the agent
+    /// is told once that it is done.
+    pub fn confirmed(&mut self, tool: &str) {
+        let name = bare(tool).to_string();
+        if name != self.last_tool {
+            return;
+        }
+        if let Some(count) = self.last_call.clone().and_then(|key| self.per_call.get_mut(&key)) {
+            *count = count.saturating_sub(1);
+        }
+        if self.warned.insert(Warning::Saved(name.clone()).key()) {
+            self.warning = Some(Warning::Saved(name));
+        }
+    }
+
     /// The turn's call of `tool` failed on the network (`transient_failure`) at `now`: neither counted as the tool
     /// failing (`same_failure`) nor clearing those failures. The agent is told once in the turn to wait a few seconds
     /// before trying again (`Warning::Network`); the turn is stopped (`Over::Offline`) once such errors came
@@ -1309,6 +1356,13 @@ fn signature_of(tool: &str, arguments: &Dict) -> String {
 }
 
 impl Turns {
+    /// Whether this very write (tool and arguments) went through in `turn` (its repeats are answered « already done »,
+    /// not refused: the hub stops them later, `RunHub::same_write_again`).
+    pub fn already_done(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict) -> bool {
+        let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        turns.get(&turn_key(agent, turn)).is_some_and(|t| t.seen.contains(&signature_of(tool, arguments)))
+    }
+
     /// How many times `turn` has asked for this very write (tool and arguments), once it was refused as already done:
     /// 0 when it never was.
     pub fn same_write_calls(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict) -> u32 {
@@ -1430,13 +1484,17 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
             let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(1);
             *calls += 1;
             tracing::info!(agent = %agent, tool = %tool, calls = *calls, "the same write again in this turn: refused");
-            let done = "Already done in this turn with exactly these arguments: not done again.";
+            // done: what it answered then, and what to do now (27/11: a note written, then « asked again to check »
+            // until the brake stopped the turn; « not done again » read as a failure)
+            let name = bare(tool);
+            let done = format!(
+                "Already done: this exact {name} call worked earlier in this turn, nothing failed, and doing it again \
+changes nothing. Don't call {name} again for it: tell your person it is done."
+            );
             return Some(tool_text(
                 &match entry.answers.get(&signature_of(tool, arguments)) {
-                    Some(answer) => format!(
-                        "{done} If you meant another tool, call that one now. Its result, the same as before:\n{answer}"
-                    ),
-                    None => format!("{done} There is nothing more to do for it; tell the person what you did."),
+                    Some(answer) => format!("{done} What it answered then:\n{answer}"),
+                    None => done,
                 },
                 false,
             ));
@@ -2521,6 +2579,55 @@ une recherche approfondie en tâche de fond."
         }
         assert_eq!(stopped_tool(&Over::Searches), Some("web_search".into()));
         assert!(rescue_input(&Over::Searches, "fr").contains("Don't search the web again"));
+    }
+
+    /// 27/11 09:2x, Alex: a preference noted (« Noté dans Podcast ›»), then « Je regarde comment configurer ça. » and
+    /// « Je me suis arrêté : je refaisais sans cesse la même étape. »; « T'as réussi à noter ? » → « Je vérifie que ta
+    /// préférence est bien enregistrée… » and the same stop in the next turn. Hermes' `memory` has no read: the model
+    /// checks by adding the same entry again (« Entry already exists (no duplicate added). »), three identical calls,
+    /// `same_call`. Now: such a confirmation is no loop, and the agent is told it is done; a write of the bridge's asked
+    /// again says « already done », what it answered, and that nothing failed; a read never counts as a write.
+    #[test]
+    fn checking_a_note_is_no_loop() {
+        let limits = Settings::default().conversation;
+        let mut turn = TurnCount::default();
+        let entry = "add: Podcast du matin : annoncer les rappels quelques jours avant, puis deux jours avant et la veille";
+        let exists = json!({"tool": "memory", "error": false,
+            "preview": "{\"success\": true, \"message\": \"Entry already exists (no duplicate added).\"}"}).as_object().cloned().unwrap();
+        assert_eq!(turn.note("memory", Some(entry), false, &limits), None);
+        assert_eq!(turn.completed("memory", false, &limits), None);
+        for i in 0..4 {
+            assert_eq!(turn.note("memory", Some(entry), false, &limits), None, "check {i}");
+            assert_eq!(turn.completed("memory", false, &limits), None);
+            assert!(already_there(&exists));
+            turn.confirmed("memory");
+        }
+        let told: Vec<Warning> = std::iter::from_fn(|| turn.take_warning()).collect();
+        assert!(told.contains(&Warning::Saved("memory".into())), "{told:?}");
+        assert!(Warning::Saved("memory".into()).text().contains("it is done"));
+        assert!(!already_there(&json!({"preview": "{\"success\": true, \"message\": \"Entry added.\"}"}).as_object().cloned().unwrap()));
+        // the same entry added again and again, never « already there »: still a loop, at a lookup's limit (5)
+        let mut turn = TurnCount::default();
+        for _ in 1..limits.same_lookup {
+            assert_eq!(turn.note("memory", Some(entry), false, &limits), None);
+        }
+        assert_eq!(turn.note("memory", Some(entry), false, &limits), Some(Over::SameCall("memory".into())));
+        // the bridge's own write asked again: done, what it answered, nothing failed
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let t = Some(Turn { run_id: "run_p".into(), background: false, banned: None });
+        let note = json!({"page": "Podcast", "facts": "Rappels : quelques jours avant, deux jours avant, la veille"}).as_object().cloned().unwrap();
+        assert!(turns.check(&settings, "vie", t.as_ref(), "notebook_write", &note, 1.0).is_none());
+        turns.record_answer("vie", t.as_ref(), "notebook_write", &note, &tool_text("Noté dans Podcast : 1 fait.", false));
+        let again = turns.check(&settings, "vie", t.as_ref(), "notebook_write", &note, 2.0).expect("done once");
+        let said = again["content"][0]["text"].as_str().unwrap();
+        assert!(said.starts_with("Already done") && said.contains("nothing failed") && said.contains("Noté dans Podcast"), "{said}");
+        assert!(!said.contains("not done") && !said.contains("call that one now"), "{said}");
+        assert!(turns.already_done("vie", t.as_ref(), "notebook_write", &note));
+        // reading it back to check: never a write
+        let read = json!({"page": "Podcast"}).as_object().cloned().unwrap();
+        assert!(!write_call("notebook_read", &read) && turns.check(&settings, "vie", t.as_ref(), "notebook_read", &read, 3.0).is_none());
+        assert!(lookup_tool("notebook_read", None));
     }
 
     /// The preview of a `tool.completed` Hermes sends (its result's first 500 characters), failed.
