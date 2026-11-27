@@ -29,7 +29,9 @@ def test_a_place_s_own_profiles_lose_only_code_nothing_of_the_bridge(tmp_path):
     assert "hooks" not in after and "hooks_auto_accept" not in after and "inline_shell" not in after["skills"]
     assert after["quick_commands"] == {"s": {"type": "alias", "target": "/status"}}
     assert after["plugins"] == {"enabled": ["disk-cleanup"]}       # only Hermes' own plugins can load now
-    assert after["terminal"] == cfg["terminal"] and after["memory"] == cfg["memory"]    # the place's settings stay
+    assert after["memory"] == cfg["memory"]                                              # the place's settings stay
+    # its terminal back to the hub's sandbox, no host folder (config.yaml wins over .env)
+    assert after["terminal"] == {"backend": "docker", "docker_volumes": []}
     # programs named in settings go, the rest of their sections stays
     assert after["browser"] == {} and after["lsp"] == {} and after["tts"] == {}
     assert after["delegation"] == {} and after["vault"] == {"onepassword": {}}
@@ -204,3 +206,25 @@ def test_a_restore_keeps_the_sandbox_settings_as_hermes_writes_them(tmp_path):
     write(coach / ".env", text.replace("--dns=127.0.0.1", "--privileged"), 0o600)
     assert profile_guard.own_code(hub) == {str(coach): ["sandbox"]}
     assert "TERMINAL_DOCKER_EXTRA_ARGS" not in (coach / ".env").read_text()
+
+
+def test_an_import_says_what_a_link_kept_out(tmp_path):
+    """install.sh import and bipagents send: a member not put in because of a link is said (journal, left_out)."""
+    import io
+    import tarfile
+    from bipinstall import moving
+    home = tmp_path / "home"
+    (home / "x").mkdir(parents=True)
+    (home / "elsewhere").mkdir()
+    (home / "x" / "l").symlink_to(home / "elsewhere")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        info = tarfile.TarInfo("hermes/l/f")
+        info.size = 1
+        tar.addfile(info, io.BytesIO(b"x"))
+    buf.seek(0)
+    target = moving.Target(home=home, repo=tmp_path / "repo", tailnet_name=None, lan_address=None)
+    summary = moving.restore(tarfile.open(fileobj=buf, mode="r|"), {"roots": {"hermes": str(home / "x")},
+                             "source": {"repo": "/r", "home": "/h"}}, target)
+    assert summary[moving.SKIPPED] == ["hermes/l/f"] and list((home / "elsewhere").iterdir()) == []
+    assert "liens (raccourcis)" in profile_guard.left_out_labels(["links"], "fr")

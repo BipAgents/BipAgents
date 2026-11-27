@@ -654,6 +654,7 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=None)
         summary = moving.restore(tar, unpacked, target, untrusted=True)   # someone else's archive: no link
         exported_keys = summary.pop(moving.VAULT_KEYS, None)   # a sealed place's export: its stores' keys
+        skipped_links = summary.pop(moving.SKIPPED, None)       # said in the journal by restore; the app's below
         imported_config = scratch / "config" / "bridge.toml"
         imported_before = imported_config.read_text(encoding="utf-8") if imported_config.is_file() else ""
         if not lone and not imported_before:
@@ -733,7 +734,8 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
                           removing=bridgeconf.ANY)
         for name, out in left_out.items():   # the journal's (the app's: progress.json `left_out`)
             print(f"Not brought in {name}: {', '.join(out)}", flush=True)
-        info["left_out_code"] = sorted({label for out in left_out.values() for label in out})
+        info["left_out_code"] = sorted({label for out in left_out.values() for label in out}
+                                       | ({"links"} if skipped_links else set()))
 
         progress(base, 4)
         from . import migrations

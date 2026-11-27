@@ -49,6 +49,7 @@ MANIFEST = "manifest.json"
 SUMMARY = "summary.json"
 SQLITE = b"SQLite format 3\x00"
 SMALL = 64 * 1024 * 1024        # read whole before archiving: a file growing meanwhile cannot break the archive
+SKIPPED = "skipped_links"      # in restore()'s answer only: the archive's members not put in because of a link
 VAULT_KEYS = "vault_keys"       # in restore()'s answer only (never printed): an enrolled place's exported keys
 MOVED = "moved.json"            # in the config folder: what `--moving` stopped, for `bipagents resume`
 # The agents' own podman volumes (volumes.py): `podman-volumes/<name>.tar` in the archive, put in this folder of the
@@ -683,6 +684,7 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, untruste
     roots[VOLUMES] = target.home / VOLUMES_STAGE
     summary: Dict[str, Any] = {}
     opened: Dict[str, int] = {}
+    skipped: List[str] = []   # what was not put in: a link (untrusted), or anything under a link here
     binaries = own_binaries(target.home)
     try:
         while (member := tar.next()) is not None:
@@ -707,6 +709,7 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, untruste
             if _relative(dest, binaries) is not None:
                 continue   # an export from before 19/11 carries the source machine's: this one has its own
             if member.issym() and untrusted:
+                skipped.append(member.name)
                 continue
             if not (member.isdir() or member.issym() or member.isfile()):
                 continue
@@ -725,6 +728,7 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, untruste
                     continue   # a root is a folder
                 parent = _open_dir(parts[:-1], top, make=True)
             except NotBeneath:
+                skipped.append(member.name)
                 continue   # under a link: never written (our exports never put a file under one)
             try:
                 leaf = parts[-1]
@@ -756,6 +760,10 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, untruste
     finally:
         for fd in opened.values():
             os.close(fd)
+    if skipped:
+        summary[SKIPPED] = skipped
+        say(f"Not put in (a link, or under a folder that is a link here): {len(skipped)} item(s): "
+            + ", ".join(skipped[:10]) + (" …" if len(skipped) > 10 else ""))
     return summary
 
 

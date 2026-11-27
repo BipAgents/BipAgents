@@ -115,6 +115,49 @@ def stdio_servers(data: Dict[str, Any]) -> List[str]:
             or "url" not in entry]
 
 
+# What the bridge writes in its browser server's entry (browsers.rs mcp_server; `enabled` from tool_diet.rs).
+BRIDGE_KEYS = {"command", "args", "connect_timeout", "timeout", "tools", "call_context", "enabled"}
+
+
+def host_mount(volume: Any) -> bool:
+    """A sandbox volume whose source is a folder of the host (Hermes' rule, sandbox.rs: `/`, `~`, `./`, `../`, a
+    drive letter), not a named volume."""
+    text = str(volume)
+    source = text if re.match(r"^[A-Za-z]:[\\/]", text) else text.split(":", 1)[0]
+    return source.startswith(("/", "~", ".")) or re.match(r"^[A-Za-z]:", source) is not None
+
+
+def _own_terminal(data: Dict[str, Any], out: List[str], hub_backend: Optional[str]) -> None:
+    """A place's own profile's `terminal:` (it wins over .env, tools/terminal_scope.py) as BipAgents writes it: the
+    bridge's named volumes and arguments (sandbox.rs), its proxy env; never a host folder, other container
+    arguments, the working folder mounted, the host's user or environment, nor another backend than the hub's."""
+    terminal = data.get("terminal")
+    if not isinstance(terminal, dict):
+        return
+    changed = False
+    if hub_backend and terminal.get("backend", hub_backend) != hub_backend:
+        terminal["backend"] = hub_backend
+        changed = True
+    volumes = terminal.get("docker_volumes")
+    if volumes is not None:
+        kept = [v for v in volumes if not host_mount(v)] if isinstance(volumes, list) else []
+        if kept != volumes:
+            terminal["docker_volumes"] = kept
+            changed = True
+    args = terminal.get("docker_extra_args")
+    if args is not None:
+        kept = [a for a in args if isinstance(a, str) and BRIDGE_ARGS.fullmatch(a)] if isinstance(args, list) else []
+        if kept != args:
+            terminal["docker_extra_args"] = kept
+            changed = True
+    for key in ("docker_mount_cwd_to_workspace", "docker_run_as_host_user", "docker_forward_env"):
+        if terminal.get(key) not in (None, False, [], "", "false"):
+            terminal.pop(key)
+            changed = True
+    if changed and "sandbox" not in out:
+        out.append("sandbox")
+
+
 def bridge_browser(entry: Any, home: Optional[Path]) -> bool:
     """The bridge's own browser server (bridge-rs/src/browsers.rs `mcp_server`), exactly: `podman|docker exec -i
     bipagents-browser-<agent> /opt/stealth/mcp.sh`, or its bip-browser-mcp (in the place's bridge folder,
@@ -122,8 +165,8 @@ def bridge_browser(entry: Any, home: Optional[Path]) -> bool:
     if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
         return False
     command, args = entry["command"], entry.get("args") or []
-    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
-        return False
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args) or set(entry) - BRIDGE_KEYS:
+        return False   # an `env` or `cwd` of its own (LD_PRELOAD for the podman Hermes starts), or anything else
     if os.path.isabs(command) and os.path.basename(command) in ("podman", "docker") \
             and os.path.dirname(command) in ("/usr/bin", "/usr/local/bin", "/bin"):
         return len(args) == 4 and args[:2] == ["exec", "-i"] and args[3] == "/opt/stealth/mcp.sh" \
@@ -286,7 +329,8 @@ def _goal_gates(folder: Path, out: List[str]) -> None:
         db.close()
 
 
-def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home: Optional[Path] = None) -> List[str]:
+def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home: Optional[Path] = None,
+               hub_backend: Optional[str] = None) -> List[str]:
     """The code of a Hermes home (a profile, or a hub's root) taken out: `paths` (an empty folder is left, unsaid),
     MCP servers started as a program (on a place's own, `own`, but the bridge's browser), hooks, exec quick commands,
     plugins, skills' inline shell, programs named in settings, routines' scripts, goals' gates. Returns what was taken
@@ -305,6 +349,8 @@ def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home:
         data = _read_yaml(config)
         before = json.dumps(data, sort_keys=True, default=str)
         _code_settings(data, out, own, home)
+        if own:
+            _own_terminal(data, out, hub_backend)
         if json.dumps(data, sort_keys=True, default=str) != before:
             _write_yaml(config, data)
     _cron(folder, out)
@@ -419,9 +465,12 @@ def own_code(hermes_home: Path, home: Optional[Path] = None) -> Dict[str, List[s
     found: Dict[str, List[str]] = {}
     home = home or hermes_home.parent
     profiles = hermes_home / "profiles"
+    hub_terminal = _read_yaml(hermes_home / "config.yaml").get("terminal")
+    hub_backend = hub_terminal.get("backend") if isinstance(hub_terminal, dict) else None
+    hub_backend = hub_backend if hub_backend == "docker" else None   # a place's sandbox; else nothing forced
     for folder in [hermes_home] + (sorted(p for p in profiles.iterdir() if p.is_dir() and not p.is_symlink())
                                    if profiles.is_dir() else []):
-        out = strip_code(folder, OWN_CODE_PATHS, own=True, home=home)
+        out = strip_code(folder, OWN_CODE_PATHS, own=True, home=home, hub_backend=hub_backend)
         _env(folder, out, own=True)
         if out:
             found[str(folder)] = out
@@ -488,6 +537,8 @@ LEFT_OUT = {
            "Para un conector, pide a tu agente que lo vuelva a crear: funcionará en su entorno aislado."),
 }
 KINDS = {   # label kind → words, per language
+    "links": {"fr": "les liens (raccourcis) de tes dossiers", "en": "your folders' links (shortcuts)",
+              "de": "die Verknüpfungen deiner Ordner", "es": "los enlaces (accesos directos) de tus carpetas"},
     "mcp": {"fr": "les connecteurs installés sur l'ordinateur ({names})", "en": "connectors installed on the computer "
             "({names})", "de": "die auf dem Computer installierten Connectoren ({names})",
             "es": "los conectores instalados en el ordenador ({names})"},
@@ -510,12 +561,14 @@ def left_out_labels(labels: List[str], language: str = "en") -> Optional[str]:
     parts = []
     if servers:
         parts.append(KINDS["mcp"][lang].format(names=", ".join(servers)))
-    if any(not label.startswith(("mcp:", "env:")) and label != "sandbox" for label in labels):
+    if any(not label.startswith(("mcp:", "env:")) and label not in ("sandbox", "links") for label in labels):
         parts.append(KINDS["ext"][lang])
     if "sandbox" in labels:
         parts.append(KINDS["sandbox"][lang])
     if any(label.startswith("env:") for label in labels):
         parts.append(KINDS["env"][lang])
+    if "links" in labels:
+        parts.append(KINDS["links"][lang])
     return LEFT_OUT[lang].format(what="; ".join(parts)) if parts else None
 
 
