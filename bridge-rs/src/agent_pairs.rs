@@ -43,7 +43,10 @@
 //!
 //! pair      {id, agents: [{id, name, category, color, gone}] (sorted by id), messages: <count, all time>,
 //!            created, updated, last: message|null, exchanges: [{id, at, last, from, count}] (the last 50)}
-//! message   {id, at, from, to, kind: "ask"|"answer"|"notice", text, exchange}
+//! message   {id, at, from, to, kind: "ask"|"answer"|"notice", text, exchange, cause?}
+//!           cause (a notice of « couldn't answer », 27/11, optional): why, as a code the apps word —
+//!           "restarting" (its Hermes didn't answer: restarting or down), "busy" (Hermes refused: busy or full),
+//!           "failed" (its turn failed), "stopped" (its turn was stopped), "timeout" (it never ended).
 //! ```
 //!
 //! No Python counterpart.
@@ -110,7 +113,13 @@ pub struct Message {
     pub kind: String,
     pub text: String,
     pub exchange: u64,
+    /// A « couldn't answer » notice's cause, a code the apps word (`CAUSES`); none on the others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
+
+/// Why the target couldn't answer, as the thread's notice says it (`Message::cause`).
+pub const CAUSES: [&str; 5] = ["restarting", "busy", "failed", "stopped", "timeout"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Exchange {
@@ -227,6 +236,23 @@ pub fn record(config: &Config, from: &str, to: &str, kind: &str, text: &str, at:
     })
 }
 
+/// A « couldn't answer » notice from `from` to `to`, with its cause (`CAUSES`).
+pub fn record_notice(config: &Config, from: &str, to: &str, text: &str, cause: Option<&str>, at: f64) -> anyhow::Result<(u64, u64)> {
+    let id = pair_id(from, to);
+    change(config, |book| {
+        let pair = book.pairs.entry(id.clone()).or_insert_with(|| {
+            let mut agents = vec![from.to_string(), to.to_string()];
+            agents.sort();
+            Pair { id: id.clone(), agents, created: at, ..Default::default() }
+        });
+        let ids = add(pair, from, to, "notice", text, at);
+        if let Some(last) = pair.messages.last_mut() {
+            last.cause = cause.map(str::to_string);
+        }
+        ids
+    })
+}
+
 /// `record` on a loaded pair.
 pub fn add(pair: &mut Pair, from: &str, to: &str, kind: &str, text: &str, at: f64) -> (u64, u64) {
     pair.last_id += 1;
@@ -250,6 +276,7 @@ pub fn add(pair: &mut Pair, from: &str, to: &str, kind: &str, text: &str, at: f6
         kind: kind.to_string(),
         text,
         exchange,
+        cause: None,
     });
     if pair.messages.len() > MESSAGES_KEPT {
         let extra = pair.messages.len() - MESSAGES_KEPT;
@@ -479,7 +506,7 @@ async fn ask_with(
         let _ = started_tx.send(());
         // a relative's turn closes this agent's private bridge tools while it goes on (shared_pages.rs)
         let marked = guest.is_some().then(|| crate::peers::household_turn_began(&target.name));
-        let answer = turn(&http, hub, &config, &id, &target, &input, guest.as_deref(), wait, chain.as_deref()).await;
+        let (answer, cause) = turn(&http, hub, &config, &id, &target, &input, guest.as_deref(), wait, chain.as_deref()).await;
         if let Some(mark) = marked {
             crate::peers::household_turn_ended(mark);
         }
@@ -488,7 +515,7 @@ async fn ask_with(
         let kept = match &answer {
             Answer::Text(text) => record(&config, &target.name, &asker, "answer", text, at),
             Answer::Empty => record(&config, &target.name, &asker, "notice", "answered nothing", at),
-            Answer::Unreachable => record(&config, &target.name, &asker, "notice", "couldn't answer", at),
+            Answer::Unreachable => record_notice(&config, &target.name, &asker, "couldn't answer", cause, at),
             Answer::NotDelivered => record(&config, &target.name, &asker, "notice", "message not delivered", at),
             Answer::Waiting | Answer::Cycle | Answer::Queued => Ok((0, 0)),
         };
@@ -558,19 +585,20 @@ async fn turn(
     guest: Option<&[String]>,
     wait: f64,
     chain: Option<&str>,
-) -> Answer {
+) -> (Answer, Option<&'static str>) {
     // the place's files read as the turn starts (`session_search` closed for an agent the protection covers)
     let hermes = HermesClient::of_place(http.clone(), crate::config::SharedConfig::new(config.clone()));
     let input = crate::dates::now::stamped(config, target, framed);
-    let (answer, broken) = turn_in(&hermes, hub.clone(), config, id, target, &input, guest, wait, chain).await;
+    let (answer, broken, cause) = turn_in(&hermes, hub.clone(), config, id, target, &input, guest, wait, chain).await;
     if !broken {
-        return answer;
+        return (answer, cause);
     }
     // its conversation of the pair refused the turn or failed it at once (busy with nothing of ours, a history Hermes
     // or the model won't take): once more in a new hidden conversation, never the same failure again and again
     tracing::warn!(pair = %id, target = %target.name, "agent pair: its conversation failed the turn, once more in a new one");
     forget_session(config, id, &target.name);
-    turn_in(&hermes, hub, config, id, target, &input, guest, wait, chain).await.0
+    let (answer, _, cause) = turn_in(&hermes, hub, config, id, target, &input, guest, wait, chain).await;
+    (answer, cause)
 }
 
 /// A turn ending without its answer this soon (seconds) failed at once: its conversation, not its work.
@@ -589,7 +617,7 @@ async fn turn_in(
     guest: Option<&[String]>,
     wait: f64,
     chain: Option<&str>,
-) -> (Answer, bool) {
+) -> (Answer, bool, Option<&'static str>) {
     let hermes = hermes.clone();
     let mut started = None;
     let mut refused = None;
@@ -598,7 +626,7 @@ async fn turn_in(
             Ok(session) => session,
             Err(exc) => {
                 tracing::warn!(pair = %id, target = %target.name, error = %exc, body = %body_of(&exc), "agent pair: no conversation");
-                return (answer_to(&exc), false);
+                return (answer_to(&exc), false, Some(cause_of(&exc)));
             }
         };
         let started_run = match guest {
@@ -621,22 +649,22 @@ async fn turn_in(
                 tracing::warn!(pair = %id, target = %target.name, error = %exc, body = %body_of(&exc), "agent pair: no turn");
                 let answer = answer_to(&exc);
                 // busy with no turn of ours (one left by a stop or a restart), or its gateway failing: a new one
-                return (answer.clone(), answer == Answer::Unreachable);
+                return (answer.clone(), answer == Answer::Unreachable, Some(cause_of(&exc)));
             }
         }
     }
     let Some((run_id, session)) = started else {
-        return (refused.as_ref().map(answer_to).unwrap_or(Answer::Unreachable), false);
+        return (refused.as_ref().map(answer_to).unwrap_or(Answer::Unreachable), false, refused.as_ref().map(cause_of));
     };
     // what the target writes to an agent in this turn counts in the asker's chain (agent_hops.rs)
     if let Some(chain) = chain {
         crate::agent_hops::follow(&run_id, chain);
     }
     let since = py::time_time();
-    let answer = follow_turn(&hermes, hub, target, &run_id, &session, wait, guest.is_some()).await;
+    let (answer, cause) = follow_turn(&hermes, hub, target, &run_id, &session, wait, guest.is_some()).await;
     crate::agent_hops::forget_run(&run_id);
     let at_once = answer == Answer::Unreachable && py::time_time() - since < FAILED_AT_ONCE;
-    (answer, at_once)
+    (answer, at_once, cause)
 }
 
 /// The target's run `run_id` followed until it ends, `APPROVAL_WAIT` at most (working or waiting for the person): the
@@ -649,7 +677,7 @@ async fn follow_turn(
     session: &str,
     wait: f64,
     guest: bool,
-) -> Answer {
+) -> (Answer, Option<&'static str>) {
     let (run_id, session) = (run_id.to_string(), session.to_string());
     if let Some(hub) = &hub {
         // approvals and questions nobody follows are pushed (the Boîte); the answer goes back to the asker
@@ -677,11 +705,12 @@ async fn follow_turn(
                             "agent pair: the target's turn ended without completing");
                         // its words, when it wrote some before it ended (never Hermes' own « no reply » line)
                         if !output.trim().is_empty() && !crate::no_reply::is_hermes_no_reply(output) {
-                            return answer_of(crate::no_reply::words_before(output).unwrap_or(output));
+                            return (answer_of(crate::no_reply::words_before(output).unwrap_or(output)), None);
                         }
-                        return Answer::Unreachable;
+                        let cause = if status == "failed" { "failed" } else { "stopped" };
+                        return (Answer::Unreachable, Some(cause));
                     }
-                    return answer_of(output);
+                    return (answer_of(output), None);
                 }
             }
             Err(HermesError::Http { status: 404 | 410, .. }) => {
@@ -692,7 +721,7 @@ async fn follow_turn(
                 };
                 tracing::info!(agent = %target.name, run_id = %run_id, words = tk::chars(&output),
                     "agent pair: the target's run forgotten by Hermes, its last reply read");
-                return answer_of(&output);
+                return (answer_of(&output), None);
             }
             Err(exc) => {
                 // Hermes restarting, or a look refused: asked again next round, said once
@@ -716,7 +745,7 @@ async fn follow_turn(
             tracing::warn!(agent = %target.name, run_id = %run_id, seconds = elapsed.round() as i64,
                 "agent pair: the target's turn never ended, stopped");
             let _ = hermes.stop_run(target, &run_id).await;
-            return Answer::Unreachable;
+            return (Answer::Unreachable, Some("timeout"));
         }
     }
 }
@@ -730,6 +759,16 @@ fn not_its_conversation(exc: &HermesError) -> bool {
             ["profile_mismatch", "admission_conflict", "not_found"].iter().any(|code| body.contains(code))
         }
         _ => false,
+    }
+}
+
+/// A failed request's cause, as the pair's notice says it (`CAUSES`): Hermes refusing for being busy or full, else
+/// not answering (restarting, down, too slow).
+fn cause_of(exc: &HermesError) -> &'static str {
+    match exc {
+        HermesError::Http { status: 409 | 429, .. } => "busy",
+        HermesError::Http { status, .. } if (400..500).contains(status) => "failed",
+        _ => "restarting",
     }
 }
 
