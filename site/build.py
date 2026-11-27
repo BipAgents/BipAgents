@@ -109,15 +109,16 @@ def node_bip(category: str, mood: str = "idle", costume: str | None = None) -> s
 
 
 def favicon(category: str = "daily") -> str:
-    """The app's icon « Relief classique, rose » (scripts/pixel/icon.py) as an SVG with rounded corners."""
+    """The app's icon C1 « Corail Solaire + Ondes Live » (bips.js' iconSVG, the apps' icon-1024 inside) as an SVG with
+    rounded corners."""
     drawn = node_draw("m.iconSVG(26)")
     return drawn or ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
-                     '<rect width="120" height="120" rx="26" fill="#25272D"/></svg>')
+                     '<rect width="120" height="120" rx="26" fill="#2E2C2D"/></svg>')
 
 
 def app_icons(assets: Path) -> None:
-    """The app's icon as pictures, from the one scripts/pixel/icon.py writes for iOS: apple-touch-icon (180, opaque:
-    iOS rounds it), and 192/512 for browsers that want a PNG."""
+    """The app's icon C1 as pictures, from the apps' iOS icon (the C1 pack's master, internal/icons/c1/): apple-touch-icon
+    (180, opaque: iOS rounds it), and 192/512 for browsers that want a PNG; the same pictures as the pack's Web/."""
     big = REPO / "App" / "Assets.xcassets" / "AppIcon.appiconset" / "icon-1024.png"
     if not big.exists():
         return
