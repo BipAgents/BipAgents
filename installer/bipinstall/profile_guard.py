@@ -1,4 +1,5 @@
-"""What a place of the offer keeps of a Hermes profile it did not make (27/11, security triage § 0, lot A0).
+"""What a place of the offer keeps of a Hermes profile it did not make, and what it takes out of its own (27/11,
+security triage § 0, lot A0).
 
 Hermes treats a profile home as its owner's own code: whatever is written there runs as the account that runs the
 gateway, outside the agents' sandbox. Tried with Hermes 0.23.1 on a place made as the installer makes one
@@ -6,64 +7,81 @@ gateway, outside the agents' sandbox. Tried with Hermes 0.23.1 on a place made a
 `plugins.enabled`), a shell hook (`hooks:` with `hooks_auto_accept`), a skill's inline shell (`skills.inline_shell`)
 and a routine's script (`scripts/`) all ran as the place's account, and `.env` lines (`TERMINAL_DOCKER_VOLUMES`,
 `TERMINAL_DOCKER_EXTRA_ARGS`) changed the sandbox itself. Hermes' own docs say so ("anyone who can write into it can
-already run code as you", website/docs/user-guide/security.md, trusted-by-placement).
+already run code as you", website/docs/user-guide/security.md, trusted-by-placement). Read in its code too: the
+`secrets.command` source (/bin/sh -c), `command` TTS/STT providers, language servers (`lsp.servers`), the browser's
+binary and flags, delegation backends, password managers' binaries, the plugin host's launcher, and a goal's quality
+gates (`subprocess.run(shell=True)` after a messaging turn, kept in state.db).
 
-So a profile that comes from elsewhere (`bipagents send` → to_place.py) is cut down to what the place's own agents
-have: `foreign()` keeps its personality, memory, skills, conversations, routines and files, and of its settings only
-the sections listed in KEPT (the rest is the place's), its MCP servers reached by an address (never one started as a
-command: the bridge's own come back with `adopt` and `browser add`), its keys and tokens in `.env` (never a
-`TERMINAL_*`, `HERMES_*` or a process setting). `strip_code()` is the part that holds for a place's own profile
-too (a backup put back, a place moved): BipAgents never writes any of it on a place, so anything found there is taken
-out the same way. Both return what they took out, for the person (`left_out_labels`).
+- `foreign()`: a profile from elsewhere (`bipagents send` → to_place.py). Its personality, memory, skills,
+  conversations, routines (their prompt) and files stay; of its settings only the sections in KEPT, laid over the
+  place's hub's (to_place.place_profile), its MCP servers reached by an address only; of its `.env` only its keys
+  (ENV_KEPT); its goals lose their gates.
+- `own_code()`: a place's own Hermes home after its files came back (a restore, a planned move: backup.settle). What
+  BipAgents never writes on a place is taken out (an import before 27/11 kept it); what the bridge writes, compared by
+  value, stays (its browser server, its sandbox settings).
 
-The agents of the place make their own connectors in their sandbox (bridge-rs/src/connectors.rs: approved, run in the
-agent's container for each call): that is the way back for a connector that stays on the computer.
+Both say what they took out (`left_out_labels`: what the person reads). The agents of the place make their own
+connectors in their sandbox (bridge-rs/src/connectors.rs: approved, run in the agent's container for each call): that
+is the way back for a connector that stays on the computer.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
 import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Folders and files of a Hermes home (its root or a profile) Hermes 0.23.1 loads or runs code from, or that hand it
 # programs (get_hermes_home() / … in its code): gateway hooks, plugins and their state, routine scripts, programs
 # put on the agents' PATH, language servers, MCP servers installed from its catalog, skill bundles, Python
-# environments, npm and relay settings, the egress proxy's binary, shell hooks approved once.
+# environments, npm and relay settings, the egress proxy's binary, shell hooks approved once. Hermes makes some of
+# them empty in every home (`hooks/`): an empty folder is no code and is not said.
 CODE_PATHS = ("hooks", "plugins", "plugin-data", "plugin-update-checks", "scripts", "bin", "lib", "lsp",
               "mcp-installs", "skill-bundles", "environments", "installs", "pm-runtime", "node_modules", "npmrc",
               "relay-plugins.toml", "proxy", "shell-hooks-allowlist.json")
+# What a place's own profile never holds (BipAgents writes none of it, the person has no shell); the rest of
+# CODE_PATHS is state Hermes itself may keep there.
+OWN_CODE_PATHS = ("hooks", "plugins", "scripts", "shell-hooks-allowlist.json")
 
-# The settings (config.yaml) a foreign profile keeps: what the agent is like and how it talks, its memory and tools.
-# Everything else is the place's (its sandbox, model, gateway, browser, voices, vault, updates, paths, programs).
+# The settings (config.yaml) a foreign profile keeps over the hub's: what the agent is like and how it talks, its
+# memory and tools. Everything else is the place's hub's (its sandbox, model, gateway and media rule, browser, voices,
+# vault, updates, paths, programs).
 KEPT = ("_config_version", "agent", "display", "personalities", "memory", "timezone", "compression", "context",
         "human_delay", "streaming", "goals", "loops", "curator", "tool_output", "tool_loop_guardrails", "tools",
         "toolsets", "platform_toolsets", "approvals", "command_allowlist", "cron", "mcp_servers", "auxiliary",
-        "bot_mode", "bot_peers", "platforms", "session", "sessions", "privacy", "skills",
-        # replaced or completed for the place by to_place.place_profile
-        "model", "terminal", "providers")
+        "bot_mode", "bot_peers", "platforms", "session", "sessions", "privacy", "skills")
 # In `skills`: never run a skill's shell snippets on the host, never read skills from outside the profile.
 SKILLS_OUT = ("inline_shell", "inline_shell_timeout", "external_dirs", "create_dir", "trusted_project_dirs",
               "project_discovery")
-# Settings of code in any profile (a place's own included): BipAgents writes none of them on a place.
-CODE_SETTINGS = ("hooks", "hooks_auto_accept")
 
-# `.env`: names that set where and how programs run, never a key of the person's.
-ENV_OUT_PREFIXES = ("TERMINAL_", "HERMES_", "LD_", "PYTHON", "NODE_", "NPM_", "UV_", "PIP_", "GIT_", "SSH_",
-                    "DOCKER_", "PODMAN_", "CONTAINERS_", "XDG_", "BASH_", "DYLD_", "PERL", "RUBY", "GCONV_")
-ENV_OUT_NAMES = {"PATH", "HOME", "SHELL", "ENV", "BROWSER", "EDITOR", "VISUAL", "PAGER", "TMPDIR", "SUDO_PASSWORD",
-                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "MALLOC_CONF", "OPENSSL_CONF", "SSL_CERT_FILE",
-                 "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
-ENV_OUT_SUFFIXES = ("_PATH", "_BIN", "_BINARY", "_COMMAND", "_CMD", "_EXECUTABLE", "_ARGS", "_DIR", "_DIRS",
-                    "_HOME", "_LAUNCHER", "_PROXY")
+# `.env` of a foreign profile: its keys only (an API key, the agent's own key). Hermes hands a routed profile's .env
+# to the programs it starts (tools/environments/local.py), so nothing else of it comes: not a TERMINAL_* (the
+# sandbox), a HERMES_* (Hermes' own switches), nor a messaging platform's token (a platform started on the place).
+ENV_KEPT = re.compile(r"API_SERVER_KEY|[A-Z][A-Z0-9_]*_API_KEY")
+ENV_NEVER = ("TERMINAL_", "HERMES_", "EMAIL_")
+
+# `.env` of a place's own profile: what the bridge writes stays (its keys, its e-mail, Hermes' copy of the sandbox
+# settings it sets with `hermes config set terminal.…`, sandbox.rs), compared by value; these never.
+OWN_ENV_NEVER = re.compile(r"(LD_|DYLD_|PYTHON|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV$|PATH$|SHELLOPTS|BASHOPTS|PS4$|"
+                           r"LUA_INIT|JAVA_TOOL_OPTIONS|LESSOPEN|STORAGE_OPTS|STORAGE_DRIVER|CONTAINER_HOST|"
+                           r"CONTAINER_CONNECTION|OPENSSL_MODULES|OPENSSL_CONF|GCONV_PATH|HERMES_ACCEPT_HOOKS)")
+BRIDGE_ARGS = re.compile(r"--network=bipagents-sandbox|--dns=127\.0\.0\.1|--cpus=[0-9.]+")
+PROXY_ENV = {"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy", "npm_config_proxy",
+             "npm_config_https_proxy"}   # sandbox.rs PROXY_ENV
+IMAGES = {"localhost/bipagents-sandbox:latest", "nousresearch/hermes-sandbox", "docker.io/nousresearch/hermes-sandbox"}
+# what widens the sandbox, said to the person when it stays on the computer
+SANDBOX_WIDE = ("TERMINAL_DOCKER_VOLUMES", "TERMINAL_DOCKER_EXTRA_ARGS", "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
+                "TERMINAL_DOCKER_RUN_AS_HOST_USER", "TERMINAL_DOCKER_FORWARD_ENV", "TERMINAL_DOCKER_ENV")
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
     import yaml
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig", errors="replace")) if path.is_file() else {}
     except (OSError, ValueError, yaml.YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -81,8 +99,15 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _holds_something(path: Path) -> bool:
+    """A file, a link, or a folder with anything in it (Hermes makes some folders empty in every home)."""
+    if path.is_symlink() or not path.is_dir():
+        return path.exists() or path.is_symlink()
+    return any(_holds_something(child) for child in path.iterdir())
+
+
 def stdio_servers(data: Dict[str, Any]) -> List[str]:
-    """The MCP servers of a config Hermes starts as a program (an entry with `command`), by name."""
+    """The MCP servers of a config Hermes starts as a program (an entry with `command`, or no address), by name."""
     servers = data.get("mcp_servers")
     if not isinstance(servers, dict):
         return []
@@ -90,21 +115,84 @@ def stdio_servers(data: Dict[str, Any]) -> List[str]:
             or "url" not in entry]
 
 
-def _code_settings(data: Dict[str, Any], out: List[str], keep: tuple = (), own: bool = False) -> None:
-    """The settings of code taken out of `data` (in place), each said once in `out`. `keep`: MCP servers started as a
-    program that stay (the bridge's own, on a place's own profile). `own`: a place's own profile, whose `plugins`
-    section stays (only Hermes' bundled plugins can load once `plugins/` is gone) and whose skills keep their
-    folders."""
+def bridge_browser(entry: Any, home: Optional[Path]) -> bool:
+    """The bridge's own browser server (bridge-rs/src/browsers.rs `mcp_server`), exactly: `podman|docker exec -i
+    bipagents-browser-<agent> /opt/stealth/mcp.sh`, or its bip-browser-mcp (in the place's bridge folder,
+    rustbridge.py BINARIES) on one `…/browsers/<agent>/mcp.json` of the place."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+        return False
+    command, args = entry["command"], entry.get("args") or []
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return False
+    if os.path.isabs(command) and os.path.basename(command) in ("podman", "docker") \
+            and os.path.dirname(command) in ("/usr/bin", "/usr/local/bin", "/bin"):
+        return len(args) == 4 and args[:2] == ["exec", "-i"] and args[3] == "/opt/stealth/mcp.sh" \
+            and re.fullmatch(r"bipagents-browser-[a-z0-9][a-z0-9_-]*", args[2]) is not None
+    if home is None or os.path.basename(command) != "bip-browser-mcp" or len(args) != 1:
+        return False
+    bins = os.path.realpath(home / ".local" / "share" / "bipagents" / "bridge")
+    data = os.path.realpath(home / ".local" / "share" / "bipagents")
+    real, settings = os.path.realpath(command), os.path.realpath(args[0])
+    return real.startswith(bins + os.sep) and settings.startswith(data + os.sep) \
+        and os.path.basename(settings) == "mcp.json" and os.path.basename(os.path.dirname(os.path.dirname(settings))) == "browsers"
+
+
+def _host_programs(data: Dict[str, Any], out: List[str]) -> None:
+    """Settings naming a program Hermes runs on the host (BipAgents writes none): taken out, said once each."""
+    def drop(section: Any, key: str, label: str) -> None:
+        if isinstance(section, dict) and section.pop(key, None) not in (None, "", [], {}):
+            out.append(label)
+
+    secrets = data.get("secrets")
+    drop(secrets, "command", "secrets.command")
+    for name in ("onepassword", "bitwarden"):
+        for parent, label in ((secrets, "secrets"), (data.get("vault"), "vault")):
+            if isinstance(parent, dict):
+                drop(parent.get(name), "binary_path", f"{label}.{name}.binary_path")
+    for voice in ("tts", "stt"):
+        section = data.get(voice)
+        if not isinstance(section, dict):
+            continue
+        drop(section, "command", f"{voice}.command")
+        providers = section.get("providers")
+        if isinstance(providers, dict):
+            for name in [n for n, p in providers.items() if isinstance(p, dict) and (p.get("type") == "command"
+                                                                                       or "command" in p)]:
+                providers.pop(name)
+                out.append(f"{voice}.providers.{name}")
+                if section.get("provider") == name:
+                    section.pop("provider")
+        if section.get("provider") == "command":
+            section.pop("provider")
+            out.append(f"{voice}.provider")
+    drop(data.get("lsp"), "servers", "lsp.servers")
+    browser = data.get("browser")
+    for key in ("executable_path", "chromium_args"):
+        drop(browser, key, f"browser.{key}")
+    drop(data.get("delegation"), "backends", "delegation.backends")
+    plugins = data.get("plugins")
+    if isinstance(plugins, dict):
+        drop(plugins.get("host"), "launcher", "plugins.host.launcher")
+    desktop = data.get("desktop")
+    drop(desktop, "ssh_path", "desktop.ssh_path")
+
+
+def _code_settings(data: Dict[str, Any], out: List[str], own: bool, home: Optional[Path]) -> None:
+    """The settings of code taken out of `data` (in place), each said once in `out`. `own`: a place's own profile,
+    whose bridge browser server and `plugins` section stay (only Hermes' bundled plugins load once `plugins/` is
+    gone) and whose skills keep their folders."""
     servers = data.get("mcp_servers")
     if servers is not None and not isinstance(servers, dict):
         data.pop("mcp_servers")
     for name in stdio_servers(data):
-        if name not in keep:
-            data["mcp_servers"].pop(name)
-            out.append(f"mcp:{name}")
-    for key in CODE_SETTINGS:
-        if data.pop(key, None):
-            out.append(key)
+        if own and name == "stealth" and bridge_browser(data["mcp_servers"][name], home):
+            continue
+        data["mcp_servers"].pop(name)
+        out.append(f"mcp:{name}")
+    if data.pop("hooks", None):
+        out.append("hooks")
+    if data.pop("hooks_auto_accept", None):
+        out.append("hooks_auto_accept")
     quick = data.get("quick_commands")
     if isinstance(quick, dict):
         for name in [n for n, q in quick.items() if not isinstance(q, dict) or q.get("type") != "alias"]:
@@ -125,17 +213,20 @@ def _code_settings(data: Dict[str, Any], out: List[str], keep: tuple = (), own: 
             skills.pop(key, None)
     elif skills is not None:
         data.pop("skills")
+    _host_programs(data, out)
+
+
+def _json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_bytes().decode("utf-8-sig", errors="replace"))
+    except (OSError, ValueError):
+        return None
 
 
 def _cron(folder: Path, out: List[str]) -> None:
     """Routines keep their prompt; a script they ran stays out (a routine that was only a script goes)."""
     path = folder / "cron" / "jobs.json"
-    if not path.is_file():
-        return
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
+    doc = _json_file(path) if path.is_file() else None
     jobs = doc.get("jobs") if isinstance(doc, dict) else doc
     if not isinstance(jobs, list):
         return
@@ -164,87 +255,173 @@ def _cron(folder: Path, out: List[str]) -> None:
         path.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# What a place's own profile never holds (a backup put back or a place moved: backup.settle): BipAgents writes none of it there, the
-# person has no shell, and Hermes makes none of it by itself; the rest of CODE_PATHS is state Hermes may keep.
-OWN_CODE_PATHS = ("hooks", "plugins", "scripts", "shell-hooks-allowlist.json")
-BRIDGE_SERVERS = ("stealth",)   # the bridge's own stdio MCP server (bridge-rs/src/browsers.rs `mcp_server`)
+def _goal_gates(folder: Path, out: List[str]) -> None:
+    """A goal's quality gates (shell commands Hermes runs on the host after a messaging turn, hermes_cli/goals.py
+    `run_gate`), kept in state.db's `state_meta` under `goal:<session>`: emptied, the goal itself kept."""
+    path = folder / "state.db"
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=rw", uri=True, timeout=10)
+    except sqlite3.Error:
+        return
+    try:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_meta'").fetchone():
+            return
+        rows = db.execute("SELECT key, value FROM state_meta WHERE key LIKE 'goal:%'").fetchall()
+        for key, value in rows:
+            try:
+                state = json.loads(value)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(state, dict) and state.get("gates"):
+                state["gates"] = []
+                db.execute("UPDATE state_meta SET value = ? WHERE key = ?", (json.dumps(state), key))
+                if "goal_gates" not in out:
+                    out.append("goal_gates")
+        db.commit()
+    except sqlite3.Error:
+        return
+    finally:
+        db.close()
 
 
-def strip_code(folder: Path, keep_servers: tuple = (), paths: tuple = CODE_PATHS, own: bool = False) -> List[str]:
-    """The code of a Hermes home (a profile, or a hub's root) taken out: `paths`, MCP servers started as a program
-    (but `keep_servers`), hooks, exec quick commands, plugins, skills' inline shell, routines' scripts. Returns what
-    was taken out (`left_out_labels` says it in words). A place's own (`own`): see own_code()."""
+def strip_code(folder: Path, paths: tuple = CODE_PATHS, own: bool = False, home: Optional[Path] = None) -> List[str]:
+    """The code of a Hermes home (a profile, or a hub's root) taken out: `paths` (an empty folder is left, unsaid),
+    MCP servers started as a program (on a place's own, `own`, but the bridge's browser), hooks, exec quick commands,
+    plugins, skills' inline shell, programs named in settings, routines' scripts, goals' gates. Returns what was taken
+    out (`left_out_labels` says it in words)."""
     out: List[str] = []
     for name in paths:
         path = folder / name
-        if path.exists() or path.is_symlink():
-            _remove(path)
-            out.append(name)
+        if path.is_symlink() or path.exists():
+            if _holds_something(path):
+                out.append(name)
+                _remove(path)
+            elif path.is_symlink():
+                _remove(path)
     config = folder / "config.yaml"
     if config.is_file():
         data = _read_yaml(config)
         before = json.dumps(data, sort_keys=True, default=str)
-        _code_settings(data, out, keep_servers, own)
+        _code_settings(data, out, own, home)
         if json.dumps(data, sort_keys=True, default=str) != before:
             _write_yaml(config, data)
     _cron(folder, out)
+    _goal_gates(folder, out)
     return out
 
 
-def own_code(hermes_home: Path) -> Dict[str, List[str]]:
-    """A place's own Hermes home after its files came back (a restore, a planned move): what it never holds taken
-    out of its root and of each profile (BRIDGE_SERVERS stay). Returns what was taken out, by folder."""
-    found: Dict[str, List[str]] = {}
-    profiles = hermes_home / "profiles"
-    for folder in [hermes_home] + (sorted(p for p in profiles.iterdir() if p.is_dir()) if profiles.is_dir() else []):
-        out = strip_code(folder, BRIDGE_SERVERS, OWN_CODE_PATHS, own=True)
-        if out:
-            found[str(folder)] = out
-    return found
+def _env_lines(path: Path) -> List[str]:
+    return path.read_bytes().decode("utf-8", errors="replace").splitlines() if path.is_file() else []
+
+
+def _name(line: str) -> Optional[str]:
+    bare = line.strip()
+    if not bare or bare.startswith("#") or "=" not in bare:
+        return None
+    return bare.split("=", 1)[0].strip().removeprefix("export ").strip()
+
+
+def _value(line: str) -> str:
+    return line.split("=", 1)[1].strip().strip("\"'")
 
 
 def env_kept(name: str) -> bool:
-    """A `.env` name a foreign profile keeps: a key, token or setting of the person's, never one that says where or
-    how programs run."""
+    """A `.env` name a foreign profile keeps: one of its keys, nothing that says where or how programs run."""
     name = name.strip().removeprefix("export ").strip()
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+    return ENV_KEPT.fullmatch(name) is not None and not name.startswith(ENV_NEVER)
+
+
+def _wide(name: str, value: str) -> bool:
+    """Whether a TERMINAL_* line widens the sandbox (said to the person when it stays on the computer)."""
+    return name in SANDBOX_WIDE and value.strip().lower() not in ("", "[]", "{}", "false", "0", "no")
+
+
+def own_sandbox_value(name: str, value: str) -> bool:
+    """A TERMINAL_* line of a place's own profile as BipAgents writes it (installer `terminal.backend docker`, the
+    bridge's `hermes config set terminal.…`, sandbox.rs), by value."""
+    try:
+        parsed = json.loads(value) if value[:1] in "[{" else value
+    except ValueError:
         return False
-    upper = name.upper()
-    return not (upper in ENV_OUT_NAMES or upper.startswith(ENV_OUT_PREFIXES) or upper.endswith(ENV_OUT_SUFFIXES))
+    if name == "TERMINAL_ENV":
+        return value == "docker"
+    if name == "TERMINAL_DOCKER_NETWORK":
+        return value.lower() in ("true", "false")
+    if name == "TERMINAL_DOCKER_IMAGE":
+        return value in IMAGES or value.startswith("docker.io/nousresearch/hermes-sandbox:")
+    if name == "TERMINAL_DOCKER_EXTRA_ARGS":
+        return isinstance(parsed, list) and all(isinstance(a, str) and BRIDGE_ARGS.fullmatch(a) for a in parsed)
+    if name == "TERMINAL_DOCKER_ENV":
+        return isinstance(parsed, dict) and set(parsed) <= PROXY_ENV
+    if name == "TERMINAL_DOCKER_VOLUMES":   # the bridge's named volumes only (bipagents-files-, -share-…)
+        return isinstance(parsed, list) and all(isinstance(v, str) and v.startswith("bipagents-") for v in parsed)
+    return False
 
 
-def _env(folder: Path, out: List[str]) -> None:
+def _env(folder: Path, out: List[str], own: bool) -> None:
     path = folder / ".env"
-    if not path.is_file():
+    lines = _env_lines(path)
+    if not lines:
         return
-    lines = path.read_text(encoding="utf-8").splitlines()
     kept = []
     for line in lines:
-        bare = line.strip()
-        if not bare or bare.startswith("#") or "=" not in bare:
+        name = _name(line)
+        if name is None:
             kept.append(line)
             continue
-        name = bare.split("=", 1)[0]
-        if env_kept(name):
+        value = _value(line)
+        if own:
+            if name.startswith("TERMINAL_"):
+                keep = own_sandbox_value(name, value)
+            elif name == "HERMES_DOCKER_BINARY":   # the installer's (hermes.py setup_hub): the system's engine
+                keep = value in ("/usr/bin/podman", "/usr/bin/docker", "/usr/local/bin/podman", "/usr/local/bin/docker")
+            else:
+                keep = OWN_ENV_NEVER.match(name) is None and not re.search(
+                    r"_(PATH|BIN|BINARY|COMMAND|CMD|EXECUTABLE|LAUNCHER|ARGS)$", name)
+        else:
+            keep = env_kept(name)
+        if keep:
             kept.append(line)
-        elif name.strip().removeprefix("export ").strip().upper().startswith("TERMINAL_"):
-            if "sandbox" not in out:
+            continue
+        if name.startswith("TERMINAL_"):
+            if (own or _wide(name, value)) and "sandbox" not in out:
                 out.append("sandbox")
+        elif own or re.search(r"_(TOKEN|SECRET|PASSWORD|KEY)$", name):
+            out.append(f"env:{name}")
     if kept != lines:
         path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
         os.chmod(path, 0o600)
 
 
+def own_code(hermes_home: Path, home: Optional[Path] = None) -> Dict[str, List[str]]:
+    """A place's own Hermes home after its files came back (a restore, a planned move): what it never holds taken
+    out of its root and of each profile; what the bridge writes stays (its browser server, compared with what it
+    writes; its sandbox settings, by value). `home`: the place's home (where its bridge's programs are). Returns
+    what was taken out, by folder."""
+    found: Dict[str, List[str]] = {}
+    home = home or hermes_home.parent
+    profiles = hermes_home / "profiles"
+    for folder in [hermes_home] + (sorted(p for p in profiles.iterdir() if p.is_dir() and not p.is_symlink())
+                                   if profiles.is_dir() else []):
+        out = strip_code(folder, OWN_CODE_PATHS, own=True, home=home)
+        _env(folder, out, own=True)
+        if out:
+            found[str(folder)] = out
+    return found
+
+
 def foreign(folder: Path) -> List[str]:
-    """A profile that comes from elsewhere, cut down to what a place's agent has (module docstring). The caller then
-    sets the place's model and sandbox (to_place.place_profile)."""
+    """A profile that comes from elsewhere, cut down to what a place's agent has (module docstring): its code out,
+    its settings to KEPT (the caller lays them over the hub's: to_place.place_profile), its `.env` to its keys."""
     out = strip_code(folder)
     config = folder / "config.yaml"
     if config.is_file():
         data = _read_yaml(config)
         kept = {key: value for key, value in data.items() if key in KEPT}
         if isinstance(kept.get("mcp_servers"), dict):
-            for name, entry in list(kept["mcp_servers"].items()):
+            for entry in kept["mcp_servers"].values():
                 if isinstance(entry, dict):   # an address only: no program, no environment of its own
                     for key in ("env", "cwd", "args"):
                         entry.pop(key, None)
@@ -258,8 +435,25 @@ def foreign(folder: Path) -> List[str]:
             kept["platforms"] = {"api_server": {"extra": api["extra"]}}
         if kept != data:
             _write_yaml(config, kept)
-    _env(folder, out)
+    _env(folder, out, own=False)
     return out
+
+
+def over_hub(hub: Dict[str, Any], imported: Dict[str, Any]) -> Dict[str, Any]:
+    """The hub's settings (as the place's own agents are cloned from it) with a foreign profile's KEPT sections laid
+    over them, section by section (a key of the profile's wins inside a section)."""
+    def merge(base: Any, over: Any) -> Any:
+        if isinstance(base, dict) and isinstance(over, dict):
+            merged = dict(base)
+            for key, value in over.items():
+                merged[key] = merge(base.get(key), value)
+            return merged
+        return copy.deepcopy(over)
+    data = copy.deepcopy(hub)
+    for key in KEPT:
+        if key in imported:
+            data[key] = merge(data.get(key), imported[key])
+    return data
 
 
 # What the person reads about what stayed on their computer (to be validated before the apps say it).
@@ -286,6 +480,10 @@ KINDS = {   # label kind → words, per language
             "Plugins, Skripte)", "es": "las extensiones y automatismos de Hermes (hooks, plugins, scripts)"},
     "sandbox": {"fr": "les réglages de bac à sable de l'ordinateur", "en": "the computer's sandbox settings",
                 "de": "die Sandbox-Einstellungen des Computers", "es": "los ajustes de entorno aislado del ordenador"},
+    "env": {"fr": "les jetons de messageries et d'outils de l'ordinateur (seules les clés d'API viennent)",
+            "en": "the computer's messaging and tool tokens (only API keys come along)",
+            "de": "die Messenger- und Tool-Tokens des Computers (nur API-Schlüssel kommen mit)",
+            "es": "los tokens de mensajería y de herramientas del ordenador (solo vienen las claves de API)"},
 }
 
 
@@ -296,10 +494,12 @@ def left_out_labels(labels: List[str], language: str = "en") -> Optional[str]:
     parts = []
     if servers:
         parts.append(KINDS["mcp"][lang].format(names=", ".join(servers)))
-    if any(not label.startswith("mcp:") and label != "sandbox" for label in labels):
+    if any(not label.startswith(("mcp:", "env:")) and label != "sandbox" for label in labels):
         parts.append(KINDS["ext"][lang])
     if "sandbox" in labels:
         parts.append(KINDS["sandbox"][lang])
+    if any(label.startswith("env:") for label in labels):
+        parts.append(KINDS["env"][lang])
     return LEFT_OUT[lang].format(what="; ".join(parts)) if parts else None
 
 
@@ -307,13 +507,13 @@ def scan(folder: Path) -> List[str]:
     """What `foreign` would take out of this Hermes home, without changing it (the computer's side of a send)."""
     import tempfile
     with tempfile.TemporaryDirectory() as scratch:
-        copy = Path(scratch) / "p"
-        copy.mkdir()
+        copy_ = Path(scratch) / "p"
+        copy_.mkdir()
         for name in ("config.yaml", ".env"):
-            if (folder / name).is_file():
-                shutil.copy2(folder / name, copy / name)
+            if (folder / name).is_file() and not (folder / name).is_symlink():
+                shutil.copy2(folder / name, copy_ / name)
         if (folder / "cron" / "jobs.json").is_file():
-            (copy / "cron").mkdir()
-            shutil.copy2(folder / "cron" / "jobs.json", copy / "cron" / "jobs.json")
-        found = [name for name in CODE_PATHS if (folder / name).exists() or (folder / name).is_symlink()]
-        return found + foreign(copy)
+            (copy_ / "cron").mkdir()
+            shutil.copy2(folder / "cron" / "jobs.json", copy_ / "cron" / "jobs.json")
+        found = [name for name in CODE_PATHS if _holds_something(folder / name)]
+        return found + foreign(copy_)

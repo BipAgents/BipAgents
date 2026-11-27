@@ -911,7 +911,7 @@ def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Di
     # Nothing that would run outside the sandbox comes back (an import made before 27/11 kept a profile's code:
     # profile_guard.py); said in the journal.
     from . import profile_guard
-    for folder, out in profile_guard.own_code(moving.read_inventory(config, base).hermes_home).items():
+    for folder, out in profile_guard.own_code(moving.read_inventory(config, base).hermes_home, base).items():
         print(f"bipinstall: taken out of {folder}: {', '.join(out)}", file=sys.stderr)
 
     stuck = []

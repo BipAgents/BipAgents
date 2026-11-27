@@ -253,7 +253,7 @@ def stays_here(inv: moving.Inventory) -> Optional[str]:
         for folder in [home] + (sorted(p for p in profiles.iterdir() if p.is_dir()) if profiles.is_dir() else []):
             try:
                 labels += profile_guard.scan(folder)
-            except OSError:
+            except (OSError, ValueError):   # unreadable: said nothing of it (the import reads it again)
                 continue
     return profile_guard.left_out_labels(labels, "en")
 
@@ -405,13 +405,18 @@ def _move_children(source: Path, target: Path, skip: Tuple[str, ...] = ()) -> No
         entry.rename(dest)
 
 
+# A table's header, as TOML allows it: `[a.b]`, `[[a]]`, spaces and a comment after it (`[agents.coach] # x`).
+HEADER = re.compile(r"^\s*(\[\[?)\s*([^\[\]#]*?)\s*\]\]?\s*(#.*)?$")
+
+
 def _sections(text: str) -> List[Tuple[str, List[str]]]:
-    """A TOML file as (table, lines): what comes before any table under "", then each table with its lines."""
+    """A TOML file as (table, lines): what comes before any table under "", then each table with its lines. Only for
+    the place's own config: an export's is read with tomllib and written again (merged_config), never by lines."""
     pieces: List[Tuple[str, List[str]]] = [("", [])]
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            pieces.append((stripped.strip("[]").strip(), [line]))
+        found = HEADER.match(line)
+        if found:
+            pieces.append((found.group(2).strip(), [line]))
         else:
             pieces[-1][1].append(line)
     return pieces
@@ -419,15 +424,6 @@ def _sections(text: str) -> List[Tuple[str, List[str]]]:
 
 def _join(pieces: List[Tuple[str, List[str]]]) -> str:
     return "\n".join(line for _, lines in pieces for line in lines).rstrip("\n") + "\n"
-
-
-def _set_line(lines: List[str], key: str, value: Optional[str]) -> List[str]:
-    """`key = value` in a table's lines (replaced, added after its header, or removed with None)."""
-    pattern = re.compile(rf"\s*{re.escape(key)}\s*=")
-    kept = [line for line in lines if not pattern.match(line)]
-    if value is not None:
-        kept.insert(1, f"{key} = {json.dumps(value, ensure_ascii=False)}")
-    return kept
 
 
 def _person(table: str) -> bool:
@@ -443,11 +439,20 @@ AGENT_KEYS = ("display_name", "hermes_key", "voice", "server_voice", "category",
               "answer_style", "answer_style_custom")
 
 
+def _toml_string(text: str) -> str:
+    """A TOML basic string: JSON's, with U+007F escaped too (TOML refuses it raw)."""
+    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_string(key)
+
+
 def _toml_value(value: Any) -> Optional[str]:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)   # a TOML basic string is a JSON string for these values
+        return _toml_string(value)
     return None
 
 
@@ -457,9 +462,25 @@ def _agent_lines(table: str, values: Dict[str, Any], hermes_url: str, uploads: s
         shown = _toml_value(values.get(key))
         if shown is not None:
             lines.append(f"{key} = {shown}")
-    lines += [f"hermes_url = {json.dumps(hermes_url)}", f"upload_dir_host = {json.dumps(uploads)}",
-              f"upload_dir_container = {json.dumps(uploads)}"]
+    lines += [f"hermes_url = {_toml_string(hermes_url)}", f"upload_dir_host = {_toml_string(uploads)}",
+              f"upload_dir_container = {_toml_string(uploads)}"]
     return lines
+
+
+def _pronunciation_pieces(data: Any) -> List[Tuple[str, List[str]]]:
+    """An export's pronunciations written again: words and how to say them (strings), per language or not."""
+    if not isinstance(data, dict):
+        return []
+    flat = [f"{_toml_key(k)} = {_toml_string(v)}" for k, v in data.items() if isinstance(k, str) and isinstance(v, str)]
+    pieces = [("pronunciations", ["", "[pronunciations]"] + flat)] if flat else []
+    for lang, words in data.items():
+        if isinstance(lang, str) and isinstance(words, dict):
+            lines = [f"{_toml_key(k)} = {_toml_string(v)}" for k, v in words.items()
+                     if isinstance(k, str) and isinstance(v, str)]
+            if lines:
+                table = f"pronunciations.{_toml_key(lang)}"
+                pieces.append((table, ["", f"[{table}]"] + lines))
+    return pieces
 
 
 def merged_config(place_text: str, imported_text: str, keep: List[str], main: Optional[str], root: Optional[str],
@@ -472,38 +493,41 @@ def merged_config(place_text: str, imported_text: str, keep: List[str], main: Op
     import tomllib
     pieces = [piece for piece in _sections(place_text) if not _person(piece[0])]
     hub = hub_local.rstrip("/")
-    agents = (tomllib.loads(imported_text).get("agents") or {}) if imported_text else {}
-    for table, lines in _sections(imported_text)[1:] if imported_text else []:
-        if not _person(table):
+    # the export's config read for real and written again: no line of it is copied (a header TOML allows but a
+    # line splitter misses, `[agents.coach] # x`, would carry the programs the bridge starts)
+    imported = tomllib.loads(imported_text) if imported_text else {}
+    agents = imported.get("agents") if isinstance(imported.get("agents"), dict) else {}
+    for name in keep:
+        values = agents.get(name)
+        if not isinstance(values, dict):
             continue
-        parts = table.split(".")
-        if parts[0] == "agents":
-            name = parts[1] if len(parts) > 1 else ""
-            if name not in keep or len(parts) != 2 or not isinstance(agents.get(name), dict):
-                continue   # sub-tables: nothing of the bridge's reads them
-            values = agents[name]
-            if name == main and root:
-                profile, table = root, f"agents.{root}"
-            else:
-                url = str(values.get("hermes_url") or "").rstrip("/")
-                profile = url[len(hub) + 3:].split("/", 1)[0] if url.startswith(hub + "/p/") else name
-                profile = profile if profile_ok(profile) else name
-            uploads = (root_uploads if name == main and root and root_uploads is not None
-                       else (profiles / profile / "uploads" if profiles is not None else None))
-            lines = _agent_lines(table, values, f"{hub}/p/{profile}",
-                                 str(uploads) if uploads is not None else str(values.get("upload_dir_host") or ""))
-        pieces.append((table, [""] + lines))
+        if name == main and root:
+            profile = root
+        else:
+            url = str(values.get("hermes_url") or "").rstrip("/")
+            profile = url[len(hub) + 3:].split("/", 1)[0] if url.startswith(hub + "/p/") else name
+            profile = profile if profile_ok(profile) else name
+        if not profile_ok(profile):
+            continue
+        uploads = (root_uploads if name == main and root and root_uploads is not None
+                   else (profiles / profile / "uploads" if profiles is not None else None))
+        table = f"agents.{profile if name == main and root else _toml_key(name)}"
+        pieces.append((table, [""] + _agent_lines(table, values, f"{hub}/p/{profile}",
+                                                  str(uploads) if uploads is not None
+                                                  else str(values.get("upload_dir_host") or ""))))
+    pieces += _pronunciation_pieces(imported.get("pronunciations"))
     roots_at = next((i for i, (table, _) in enumerate(pieces) if table == "media.roots"), None)
     if roots_at is None and media:
         pieces.append(("media.roots", ["", "[media.roots]"]))
         roots_at = len(pieces) - 1
     if roots_at is not None:
         lines = pieces[roots_at][1]
-        header = next(i for i, line in enumerate(lines) if line.strip() == "[media.roots]")
+        header = next(i for i, line in enumerate(lines)
+                      if (found := HEADER.match(line)) and found.group(2).strip() == "media.roots")
         for prefix, folder in media.items():
-            key = json.dumps(prefix, ensure_ascii=False)
+            key = _toml_string(prefix)
             if not any(line.strip().startswith(f"{key} =") for line in lines):
-                lines.insert(header + 1, f"{key} = {json.dumps(folder, ensure_ascii=False)}")
+                lines.insert(header + 1, f"{key} = {_toml_string(folder)}")
     return _join(pieces)
 
 
@@ -518,17 +542,19 @@ def _write_env(path: Path, values: Dict[str, Optional[str]]) -> None:
 
 def place_profile(folder: Path, hub: Dict[str, Any], hub_env: Dict[str, str]) -> List[str]:
     """One profile brought in, set as the place's agents are: nothing of it that would run outside the sandbox
-    (profile_guard.foreign: its programs, hooks, plugins, scripts and sandbox settings stay out), the offer's model
-    (and nothing else answering for it), the place's sandbox, risky commands asked. Returns what stayed out."""
+    (profile_guard.foreign: its programs, hooks, plugins, scripts and sandbox settings stay out), the hub's settings
+    with its own ways over them, the offer's model (and nothing else answering for it), the place's sandbox, risky
+    commands asked. Returns what stayed out."""
     import yaml
     from . import profile_guard
     left_out = profile_guard.foreign(folder)
     path = folder / "config.yaml"
-    data = read_yaml(path)
+    # the hub's settings, as the place's own agents are cloned from it (its sandbox, model, media rule
+    # `gateway.strict`…), with the profile's own ways over them (profile_guard.KEPT)
+    data = profile_guard.over_hub({k: v for k, v in hub.items() if k not in ("mcp_servers", "bot_peers")},
+                                  read_yaml(path))
     for key in ("model", "terminal"):
-        if isinstance(hub.get(key), dict):
-            data[key] = hub[key]
-        else:
+        if not isinstance(hub.get(key), dict):
             data.pop(key, None)   # never the computer's (a terminal of its own would run on the server)
     data.setdefault("approvals", {})
     if isinstance(data["approvals"], dict):
@@ -626,7 +652,7 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         _remove(scratch)
         unpacked = {**info, "roots": {name: str(scratch / name) for name in info["roots"]}}
         target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=None)
-        summary = moving.restore(tar, unpacked, target)
+        summary = moving.restore(tar, unpacked, target, untrusted=True)   # someone else's archive: no link
         exported_keys = summary.pop(moving.VAULT_KEYS, None)   # a sealed place's export: its stores' keys
         imported_config = scratch / "config" / "bridge.toml"
         imported_before = imported_config.read_text(encoding="utf-8") if imported_config.is_file() else ""

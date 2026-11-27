@@ -20,7 +20,9 @@ layout). An import over a place whose vault is sealed is refused (`bipagents sen
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
+import errno
 import getpass
 import io
 import json
@@ -30,6 +32,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -618,52 +621,141 @@ def rehome(path: str, info: Dict[str, Any], target: Target) -> Path:
     return Path(path)
 
 
-def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target) -> Dict[str, Any]:
-    """The archive's files in their places here. Returns the archive's summary."""
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+class NotBeneath(OSError):
+    """A path whose folder is a link (or not a folder): nothing is written there."""
+
+
+def _open_dir(parts: Tuple[str, ...], top: int, make: bool, mode: int = 0o700) -> int:
+    """The folder `parts` under the folder open as `top`, each one opened without following a link (made when
+    `make`): a link already there, or one an archive put, is never gone through. Returns a new descriptor."""
+    fd = os.dup(top)
+    try:
+        for part in parts:
+            if part in ("", ".", "..") or "/" in part:
+                raise OSError(f"not a plain name: {part!r}")
+            if make:
+                try:
+                    os.mkdir(part, mode, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            try:
+                nxt = os.open(part, DIR_FLAGS, dir_fd=fd)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise NotBeneath(exc.errno, f"{part!r} is a link or not a folder") from None
+                raise
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _base_fd(base: Path, target: Target, untrusted: bool) -> int:
+    """A root of the archive, open. From someone else (`untrusted`: a place's import) it must be under this home and
+    is reached from it without following a link; else it is this account's own path, made as it is."""
+    if untrusted:
+        parts = _relative(base, target.home)
+        if parts is None:
+            raise OSError(f"{base} is not under {target.home}")
+        top = os.open(target.home, DIR_FLAGS)
+        try:
+            return _open_dir(parts, top, make=True)
+        finally:
+            os.close(top)
+    base.mkdir(parents=True, exist_ok=True)
+    return os.open(base, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+
+
+def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, untrusted: bool = False) -> Dict[str, Any]:
+    """The archive's files in their places here. Returns the archive's summary.
+
+    Every file and folder is written under its root by descriptors, never through a link (the archive's own or one
+    already there): a link member followed by `link/file` lands nowhere but under the root. `untrusted` (an export
+    someone else made, `bipagents send` into a place: to_place.py): its links are not made at all, nor moved to this
+    home (a link left there would let a later write, the agent's memory, the bridge's files, go anywhere in the
+    account); its roots are reached from the home without following a link either."""
     roots = {name: rehome(path, info, target) for name, path in info["roots"].items()}
     roots[VOLUMES] = target.home / VOLUMES_STAGE
     summary: Dict[str, Any] = {}
-    while (member := tar.next()) is not None:
-        tar.members = []   # a stream: nothing to go back to, nothing kept
-        if member.name == SUMMARY:
-            summary = {**json.loads(tar.extractfile(member).read()), **summary}   # type: ignore[union-attr]
-            continue
-        if member.name == vault_keys.EXPORT_MEMBER:   # a sealed place's keys: unpack() puts them beside their stores
+    opened: Dict[str, int] = {}
+    binaries = own_binaries(target.home)
+    try:
+        while (member := tar.next()) is not None:
+            tar.members = []   # a stream: nothing to go back to, nothing kept
+            if member.name == SUMMARY:
+                summary = {**json.loads(tar.extractfile(member).read()), **summary}   # type: ignore[union-attr]
+                continue
+            if member.name == vault_keys.EXPORT_MEMBER:   # a sealed place's keys: unpack() puts them beside their stores
+                try:
+                    summary[VAULT_KEYS] = json.loads(tar.extractfile(member).read()).get("keys")   # type: ignore
+                except (ValueError, AttributeError):
+                    raise SealedError("this export's vault keys can't be read") from None
+                continue
+            name, _, rel = member.name.partition("/")
+            if name not in roots:
+                continue
+            base = roots[name]
+            parts = tuple(x for x in Path(rel).parts if x not in ("", ".")) if rel else ()
+            if rel and (".." in parts or Path(rel).is_absolute()):
+                continue
+            dest = base.joinpath(*parts)
+            if _relative(dest, binaries) is not None:
+                continue   # an export from before 19/11 carries the source machine's: this one has its own
+            if member.issym() and untrusted:
+                continue
+            if not (member.isdir() or member.issym() or member.isfile()):
+                continue
+            if name not in opened:
+                opened[name] = _base_fd(base, target, untrusted)
+            top = opened[name]
             try:
-                summary[VAULT_KEYS] = json.loads(tar.extractfile(member).read()).get("keys")   # type: ignore
-            except (ValueError, AttributeError):
-                raise SealedError("this export's vault keys can't be read") from None
-            continue
-        name, _, rel = member.name.partition("/")
-        if name not in roots:
-            continue
-        base = roots[name]
-        dest = base / rel if rel else base
-        if rel and (".." in Path(rel).parts or Path(rel).is_absolute()):
-            continue
-        if _relative(dest, own_binaries(target.home)) is not None:
-            continue   # an export from before 19/11 carries the source machine's: this one has its own
-        if member.isdir():
-            dest.mkdir(parents=True, exist_ok=True)
-            os.chmod(dest, member.mode & 0o777 | 0o700)
-        elif member.issym():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.is_symlink() or dest.exists():
-                dest.unlink()
-            link = member.linkname
-            if os.path.isabs(link):
-                link = str(rehome(link, info, target))
-            os.symlink(link, dest)
-        elif member.isfile():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            source = tar.extractfile(member)
-            assert source is not None
-            partial = dest.with_name(dest.name + PARTIAL_SUFFIX)
-            with open(partial, "wb") as out:
-                shutil.copyfileobj(source, out, 1 << 20)
-            os.chmod(partial, member.mode & 0o777 | 0o600)
-            os.replace(partial, dest)
-            os.utime(dest, (member.mtime, member.mtime))
+                if member.isdir():
+                    fd = _open_dir(parts, top, make=True)
+                    try:
+                        os.fchmod(fd, member.mode & 0o777 | 0o700)
+                    finally:
+                        os.close(fd)
+                    continue
+                if not parts:
+                    continue   # a root is a folder
+                parent = _open_dir(parts[:-1], top, make=True)
+            except NotBeneath:
+                continue   # under a link: never written (our exports never put a file under one)
+            try:
+                leaf = parts[-1]
+                with contextlib.suppress(FileNotFoundError):
+                    if stat.S_ISDIR(os.stat(leaf, dir_fd=parent, follow_symlinks=False).st_mode):
+                        continue   # a folder already there stays one
+                if member.issym():
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(leaf, dir_fd=parent)
+                    link = member.linkname
+                    if os.path.isabs(link):
+                        link = str(rehome(link, info, target))
+                    os.symlink(link, leaf, dir_fd=parent)
+                    continue
+                source = tar.extractfile(member)
+                assert source is not None
+                partial = leaf + PARTIAL_SUFFIX
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(partial, dir_fd=parent)
+                fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                             0o600, dir_fd=parent)
+                with os.fdopen(fd, "wb") as out:
+                    shutil.copyfileobj(source, out, 1 << 20)
+                    os.fchmod(out.fileno(), member.mode & 0o777 | 0o600)
+                os.replace(partial, leaf, src_dir_fd=parent, dst_dir_fd=parent)
+                os.utime(leaf, (member.mtime, member.mtime), dir_fd=parent, follow_symlinks=False)
+            finally:
+                os.close(parent)
+    finally:
+        for fd in opened.values():
+            os.close(fd)
     return summary
 
 

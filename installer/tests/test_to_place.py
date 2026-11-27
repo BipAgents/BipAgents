@@ -590,8 +590,9 @@ def assert_nothing_runs(folder, kept_server="notes"):
     assert set(cfg["mcp_servers"]) >= {kept_server} and "temoin" not in cfg["mcp_servers"]
     assert "env" not in cfg["mcp_servers"][kept_server]
     for key in ("hooks", "hooks_auto_accept", "plugins", "quick_commands", "browser", "lsp", "tts", "delegation",
-                "vault", "gateway", "prefill_messages_file"):
+                "vault", "prefill_messages_file"):
         assert key not in cfg, key
+    assert "media_delivery_allow_dirs" not in (cfg.get("gateway") or {})      # the hub's gateway rule, not theirs
     assert cfg["skills"] == {"disabled": ["old"]}
     assert "provider" not in cfg["memory"]
     assert cfg["platforms"] == {"api_server": {"extra": {"keep": 1}}}
@@ -620,7 +621,7 @@ def test_a_hermes_alone_sent_to_a_place_brings_nothing_that_runs_outside_the_san
         assert cfg["agent"] == {"reasoning_effort": "medium"} and cfg["display"] == {"personality": "kawaii"}
         env = (folder / ".env").read_text()
         assert "API_SERVER_KEY=own-key-0123456789" in env and "OPENROUTER_API_KEY=sam-own" in env
-        assert "EMAIL_ADDRESS=sam@example.com" in env and "HERMES_DOCKER_BINARY=/usr/bin/podman" in env
+        assert "EMAIL_ADDRESS" not in env and "HERMES_DOCKER_BINARY=/usr/bin/podman" in env
         assert (folder / "SOUL.md").read_text() == "Tu es Sam."
         assert (folder / "memories" / "MEMORY.md").read_text() == "Sam a deux chats."
         assert (folder / "skills" / "cuisine" / "SKILL.md").exists()

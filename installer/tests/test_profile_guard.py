@@ -13,7 +13,7 @@ def test_a_place_s_own_profiles_lose_only_code_nothing_of_the_bridge(tmp_path):
     hub = tmp_path / ".hermes"
     traps(hub / "profiles" / "coach")
     cfg = yaml.safe_load((hub / "profiles" / "coach" / "config.yaml").read_text())
-    cfg["mcp_servers"]["stealth"] = {"command": "/usr/bin/podman", "args": ["exec", "-i", "bip-browser-coach",
+    cfg["mcp_servers"]["stealth"] = {"command": "/usr/bin/podman", "args": ["exec", "-i", "bipagents-browser-coach",
                                                                            "/opt/stealth/mcp.sh"]}
     cfg["mcp_servers"]["bipagents"] = {"url": "http://127.0.0.1:8673/v1/agent-tools/mcp"}
     cfg["plugins"] = {"enabled": ["disk-cleanup"]}
@@ -29,8 +29,15 @@ def test_a_place_s_own_profiles_lose_only_code_nothing_of_the_bridge(tmp_path):
     assert "hooks" not in after and "hooks_auto_accept" not in after and "inline_shell" not in after["skills"]
     assert after["quick_commands"] == {"s": {"type": "alias", "target": "/status"}}
     assert after["plugins"] == {"enabled": ["disk-cleanup"]}       # only Hermes' own plugins can load now
-    assert after["browser"] == cfg["browser"] and after["terminal"] == cfg["terminal"]   # the place's settings stay
-    assert (coach / ".env").read_text().startswith("API_SERVER_KEY=")                   # its .env untouched
+    assert after["terminal"] == cfg["terminal"] and after["memory"] == cfg["memory"]    # the place's settings stay
+    # programs named in settings go, the rest of their sections stays
+    assert after["browser"] == {} and after["lsp"] == {} and after["tts"] == {}
+    assert after["delegation"] == {} and after["vault"] == {"onepassword": {}}
+    env = (coach / ".env").read_text()                       # the bridge's own names stay, by value
+    assert env.startswith("API_SERVER_KEY=") and "OPENROUTER_API_KEY=sam-own" in env and "EMAIL_ADDRESS" in env
+    for gone in ("TERMINAL_DOCKER_VOLUMES", "TERMINAL_DOCKER_EXTRA_ARGS", "TERMINAL_ENV=local", "HERMES_ACCEPT_HOOKS",
+                 "LD_PRELOAD", "PATH=", "BROWSER_EXECUTABLE_PATH"):
+        assert gone not in env, gone
     assert yaml.safe_load((hub / "config.yaml").read_text()) == {"terminal": {"backend": "docker"},
                                                                  "gateway": {"strict": True}}
     assert profile_guard.own_code(hub) == {}                                            # once is enough
@@ -59,8 +66,8 @@ def test_the_computer_says_before_sending_and_changes_nothing(tmp_path):
     assert to_place.stays_here(to_place.LoneHermes(tmp_path / "x" / ".hermes", tmp_path / "x")) is None
 
 
-@pytest.mark.parametrize("name,kept", [("API_SERVER_KEY", True), ("OPENROUTER_API_KEY", True), ("EMAIL_IMAP_HOST", True),
-                                       ("TELEGRAM_BOT_TOKEN", True), ("TERMINAL_DOCKER_VOLUMES", False),
+@pytest.mark.parametrize("name,kept", [("API_SERVER_KEY", True), ("OPENROUTER_API_KEY", True), ("EMAIL_IMAP_HOST", False),
+                                       ("TELEGRAM_BOT_TOKEN", False), ("TERMINAL_DOCKER_VOLUMES", False),
                                        ("HERMES_DOCKER_BINARY", False), ("LD_PRELOAD", False), ("PATH", False),
                                        ("PYTHONPATH", False), ("NODE_OPTIONS", False), ("CUA_DRIVER_PATH", False),
                                        ("export TERMINAL_ENV", False), ("https_proxy", False), ("bad name", False)])
@@ -79,7 +86,8 @@ def test_a_backup_put_back_brings_no_code_back_and_keeps_the_bridge_s(tmp_path, 
     coach = old / ".hermes" / "profiles" / "coach"
     traps(coach)
     cfg = yaml.safe_load((coach / "config.yaml").read_text())
-    cfg["mcp_servers"]["stealth"] = {"command": "/usr/bin/podman", "args": ["exec", "-i", "bip-browser-coach", "x"]}
+    cfg["mcp_servers"]["stealth"] = {"command": "/usr/bin/podman", "args": ["exec", "-i", "bipagents-browser-coach",
+                                                                                "/opt/stealth/mcp.sh"]}
     write(coach / "config.yaml", yaml.safe_dump(cfg))
     inv = moving.read_inventory(old / ".config" / "bipagents" / "bridge.toml", old)
     manifest = moving.manifest(inv, SimpleNamespace(system="linux", tailscale=None, tailnet_name=None))
@@ -97,3 +105,84 @@ def test_a_backup_put_back_brings_no_code_back_and_keeps_the_bridge_s(tmp_path, 
         assert not (back / name).exists(), name
     after = yaml.safe_load((back / "config.yaml").read_text())
     assert set(after["mcp_servers"]) == {"stealth", "notes"} and "hooks" not in after
+
+
+def test_an_untrusted_archive_makes_no_link_and_writes_nothing_through_one(tmp_path):
+    """bring_in unpacks with untrusted=True: a link member is not made at all (a later write, the agent's memory, the
+    bridge's files, would go through it); a folder already swapped for a link is never written through."""
+    import io
+    import os
+    import tarfile
+    from bipinstall import moving
+    place = tmp_path / "place"
+    scratch = place / ".local" / "state" / "bipagents" / "import" / "in"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (scratch / "hermes" / "profiles").mkdir(parents=True)
+    os.symlink(outside, scratch / "hermes" / "profiles" / "old")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, link, data in (("hermes/profiles/coach/memories", "/Users/sam/.config", None),
+                                 ("hermes/profiles/coach/memories/MEMORY.md", None, b"x"),
+                                 ("hermes/profiles/old/handler.py", None, b"x"),
+                                 ("hermes/profiles/coach/SOUL.md", None, "Tu es Coach.".encode())):
+            info = tarfile.TarInfo(name)
+            if link:
+                info.type, info.linkname = tarfile.SYMTYPE, link
+                tar.addfile(info)
+            else:
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    buf.seek(0)
+    info = {"roots": {"hermes": str(scratch / "hermes")}, "source": {"repo": "/Users/sam/b", "home": "/Users/sam"}}
+    target = moving.Target(home=place, repo=tmp_path / "repo", tailnet_name=None, lan_address=None)
+    moving.restore(tarfile.open(fileobj=buf, mode="r|"), info, target, untrusted=True)
+    coach = scratch / "hermes" / "profiles" / "coach"
+    assert (coach / "SOUL.md").read_text() == "Tu es Coach."
+    assert not (coach / "memories").is_symlink() and (coach / "memories" / "MEMORY.md").read_text() == "x"
+    assert list(outside.iterdir()) == []
+
+
+def test_goals_keep_their_text_but_not_their_gates(tmp_path):
+    """A goal's quality gates are shell commands Hermes runs on the host after a messaging turn (an agent's e-mail on
+    a place): emptied in an imported profile's state.db (and a restored one's)."""
+    import sqlite3
+    folder = tmp_path / "coach"
+    folder.mkdir()
+    db = sqlite3.connect(folder / "state.db")
+    db.execute("CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("INSERT INTO state_meta VALUES (?, ?)", ("goal:s1", json.dumps({"goal": "Finir", "gates": [
+        {"command": "id > /tmp/temoin"}]})))
+    db.execute("INSERT INTO state_meta VALUES ('other', 'x')")
+    db.commit()
+    db.close()
+    assert "goal_gates" in profile_guard.foreign(folder)
+    rows = dict(sqlite3.connect(folder / "state.db").execute("SELECT key, value FROM state_meta").fetchall())
+    assert json.loads(rows["goal:s1"]) == {"goal": "Finir", "gates": []} and rows["other"] == "x"
+    assert profile_guard.foreign(folder) == []
+
+
+def test_a_routine_list_with_a_bom_loses_its_scripts_too(tmp_path):
+    folder = tmp_path / "coach"
+    write(folder / "cron" / "jobs.json", "﻿" + json.dumps({"jobs": [{"name": "w", "script": "x.sh", "no_agent": True}]}))
+    assert profile_guard.foreign(folder) == ["routine:w"]
+    assert json.loads((folder / "cron" / "jobs.json").read_text())["jobs"] == []
+
+
+def test_a_latin1_env_neither_breaks_a_send_nor_comes_in(tmp_path):
+    hub = tmp_path / "sam" / ".hermes"
+    write(hub / "config.yaml", "model:\n  default: claude\n")
+    (hub / ".env").write_bytes("NOTE=caf\xe9\nOPENAI_API_KEY=k\n".encode("latin-1"))
+    assert to_place.stays_here(to_place.LoneHermes(hub, tmp_path / "sam")) is None
+    profile_guard.foreign(hub)
+    assert (hub / ".env").read_text() == "OPENAI_API_KEY=k\n"
+
+
+def test_a_name_with_u007f_keeps_the_place_s_config_valid(tmp_path):
+    import tomllib
+    imported = ('[hermes]\nhub_url = "http://127.0.0.1:8672"\n[agents.coach]\ndisplay_name = "Co\\u007fach"\n'
+                'hermes_url = "http://127.0.0.1:8672/p/coach"\nhermes_key = "c"\n[pronunciations.fr]\n"K\\u007f" = "k"\n')
+    merged = to_place.merged_config('bridge_key = "k"\n', imported, ["coach"], None, None, "http://127.0.0.1:8672",
+                                    None, {}, tmp_path / "profiles")
+    data = tomllib.loads(merged)
+    assert data["agents"]["coach"]["display_name"] == "Co\x7fach" and data["pronunciations"]["fr"] == {"K\x7f": "k"}
