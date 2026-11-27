@@ -592,3 +592,33 @@ def scan(folder: Path) -> List[str]:
             shutil.copy2(folder / "cron" / "jobs.json", copy_ / "cron" / "jobs.json")
         found = [name for name in CODE_PATHS if _holds_something(folder / name)]
         return found + foreign(copy_)
+
+
+STATE = Path(".local") / "state" / "bipagents" / "profile-guard.json"   # what was taken out, for the person (the app)
+
+
+def clean_main(argv: List[str]) -> int:
+    """`bipinstall clean-imports`, run as the place by its server's seat agent when the guichet's `clean_imports` is
+    on: own_code() over the place's Hermes (an import before 27/11 kept a profile's code), its gateway restarted when
+    anything went (what a gateway loaded stays in it until then). What went is kept for the person in STATE (its
+    left_out labels); the seat agent reads only the last JSON line: numbers."""
+    import time
+    from . import hermes, moving, update
+    base = Path(os.environ.get("HOME") or Path.home())
+    try:
+        inv = moving.read_inventory(base / ".config" / "bipagents" / "bridge.toml", base)
+        found = own_code(inv.hermes_home, base)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"error": type(exc).__name__}))
+        return 1
+    labels = sorted({label for out in found.values() for label in out})
+    if found:
+        state = base / STATE
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"at": time.time(), "left_out": labels}), encoding="utf-8")
+        runner = hermes.Runner()
+        for how, name in update.gateway_units():
+            if how == "systemd":
+                runner.run(["systemctl", "--user", "try-restart", name], check=False)
+    print(json.dumps({"profiles": len(found), "labels": len(labels)}))
+    return 0

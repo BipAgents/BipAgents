@@ -295,7 +295,7 @@ def prepare_shared(commit, repo=None):
     log("shared images for %s: %s" % (commit[:12], "ready" if done.returncode == 0 else "not all pulled"))
 
 
-TOOLS = ("seat-agent.py", "add-seat.sh", "place-move.py")
+TOOLS = ("seat-agent.py", "add-seat.sh", "place-move.py", "place_check.py")
 
 
 def refresh_tools(repo=SHARED_REPO, lib=LIB):
@@ -1492,6 +1492,8 @@ def keep_settings(answer, path=None):
         changed["memory_high_share"] = float(settings["memory_high_share"])
     if "place_disk_gib" in settings and disk_gib(settings) == settings["place_disk_gib"]:
         changed["place_disk_gib"] = settings["place_disk_gib"]
+    if isinstance(settings.get("clean_imports"), bool):   # an import's leftovers taken out (clean_imports_round)
+        changed["clean_imports"] = settings["clean_imports"]
     if changed != kept:
         write_json(path, changed)
 
@@ -2862,6 +2864,160 @@ def _account_exists(user):
         return False
 
 
+# -- what a place may have left to run outside its sandbox (27/11, security triage section 0, lot A0) ---------------------
+# place_check.py (beside this agent, taken from root's checkout with it: TOOLS) looks at every place READ ONLY, as root,
+# following no link, at most 1 MiB a file. It runs in a process of its own (--place-check), detached from the round,
+# niced, bounded in time (PLACE_CHECK_SECONDS) and in memory (PLACE_CHECK_MEMORY): nothing of it can stop or slow the
+# round. Once a day, and as soon as a new place_check.py comes with an update wave. Its numbers per category (never a
+# name nor a content) go to the guichet with each place in the beat ("check"), which keeps them and alerts Kerfy
+# Studio when a place has any. Nothing is cleaned: Alex decides. Only an import's leftovers in a place's Hermes profiles
+# (profile_guard.py own_code, the restore's rule) may be taken out, as the place, when the guichet's setting
+# `clean_imports` says so (off by default).
+PLACE_CHECK = os.path.join(LIB, "place_check.py")
+PLACE_CHECK_STATE = "/var/lib/bipagents/place-check.json"
+PLACE_CHECK_EVERY = 24 * 3600
+PLACE_CHECK_SECONDS = 900
+PLACE_CHECK_MEMORY = 512 * 1024 * 1024
+PLACE_CHECK_FRESH = 3 * 24 * 3600   # older numbers are not sent (a check that stopped running is not a clean place)
+
+
+class PlaceCheckTooLong(BaseException):
+    pass
+
+
+def place_check_version(path=PLACE_CHECK):
+    import hashlib
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def place_check_due(state, version, now):
+    return bool(version) and (state.get("version") != version or now - float(state.get("at") or 0) >= PLACE_CHECK_EVERY)
+
+
+def place_check_start(now=None, state_path=PLACE_CHECK_STATE, check=PLACE_CHECK, popen=None):
+    """The check started in the background when it is due (none already running: its lock). Returns whether."""
+    import fcntl
+    now = time.time() if now is None else now
+    version = place_check_version(check)
+    if not place_check_due(read_json(state_path), version, now):
+        return False
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    with open(state_path + ".lock", "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False   # one under way
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    (popen or subprocess.Popen)([sys.executable, "-I", os.path.abspath(__file__), "--place-check"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True, close_fds=True)
+    return True
+
+
+def place_check_run(state_path=PLACE_CHECK_STATE, check=PLACE_CHECK, now=None, limits=True):
+    """--place-check: the check of every place, its numbers written for the next beats. Any failure is written as the
+    check's error, the numbers of the last check that worked dropped (never sent as a clean place)."""
+    import fcntl
+    import importlib.util
+    import signal
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    with open(state_path + ".lock", "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0
+        started = time.time() if now is None else now
+        version = place_check_version(check)
+        state = {"at": started, "version": version}
+        try:
+            if limits:
+                import resource
+                resource.setrlimit(resource.RLIMIT_AS, (PLACE_CHECK_MEMORY, PLACE_CHECK_MEMORY))
+                os.nice(19)
+
+                def stop(*_):
+                    raise PlaceCheckTooLong()   # past a place's own `except Exception`: the whole check stops
+                signal.signal(signal.SIGALRM, stop)
+                signal.alarm(PLACE_CHECK_SECONDS)
+            spec = importlib.util.spec_from_file_location("place_check", check)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _, rows, _, _ = module.collect([])
+            numbers = {}
+            for user, found in module.counts(rows).items():
+                number = "1" if user == "bip" else user[3:]
+                if number.isdigit() and 1 <= int(number) <= MAX_SEATS:
+                    numbers[str(int(number))] = {k: int(v) for k, v in found.items()}
+            state["places"] = numbers
+            state["seconds"] = round(time.time() - started, 1) if now is None else 0
+        except BaseException as exc:   # its own process: whatever happens is written, never raised further
+            state["error"] = type(exc).__name__
+        finally:
+            if limits:
+                signal.alarm(0)
+        try:
+            write_json(state_path, state)
+        except OSError as exc:
+            log("place check not kept: %s" % exc)
+        if state.get("error"):
+            log("place check failed: %s" % state["error"])
+        else:
+            flagged = sorted(n for n, found in state["places"].items() if any(found.values()))
+            log("place check: %d places, %s" % (len(state["places"]),
+                                                 "findings on " + ", ".join(flagged) if flagged else "nothing found"))
+    return 0
+
+
+def place_check_beat(places_now, now=None, state_path=PLACE_CHECK_STATE):
+    """The beat's places with each one's last check (`check`: {"at", "found": {category: number}} or {"at", "error"}),
+    when it is recent."""
+    now = time.time() if now is None else now
+    state = read_json(state_path)
+    at = state.get("at")
+    if not isinstance(at, (int, float)) or now - at > PLACE_CHECK_FRESH:
+        return places_now
+    if state.get("error"):
+        for number in place_homes():
+            places_now.setdefault(number, {})["check"] = {"at": int(at), "error": str(state["error"])[:40]}
+        return places_now
+    for number, found in (state.get("places") or {}).items():
+        if isinstance(found, dict):
+            places_now.setdefault(str(number), {})["check"] = {"at": int(at), "found": found}
+    return places_now
+
+
+def clean_imports_round(settings, state_path=PLACE_CHECK_STATE, homes=None, command=None):
+    """The guichet's `clean_imports` on: each place whose last check found an import's leftovers
+    (`hermes_import`) has them taken out by its own installer, as the place (`bipinstall clean-imports`: profile_guard
+    own_code, the restore's rule and its left_out note), once per check. Numbers only in the journal."""
+    if settings.get("clean_imports") is not True:
+        return 0
+    state = read_json(state_path)
+    if state.get("error") or state.get("cleaned") == state.get("at"):
+        return 0
+    done = 0
+    for number, found in sorted((state.get("places") or {}).items()):
+        if not (isinstance(found, dict) and found.get("hermes_import")):
+            continue
+        try:
+            entry = pwd.getpwnam(account(int(number)))
+            result = (command or place_command)(entry, ["clean-imports"], 600)
+            log("place %s: an import's leftovers taken out of %s profile(s)" % (number, int(result.get("profiles") or 0)))
+            done += 1
+        except (KeyError, ValueError, SeatError, OSError) as exc:
+            log("place %s: an import's leftovers not taken out: %s" % (number, str(exc)[:200]))
+    state["cleaned"] = state.get("at")
+    try:
+        write_json(state_path, state)
+    except OSError:
+        pass
+    return done
+
+
 def beat_of(server, disk, moves=True):
     """The beat's body: each place's health (and whether 443 reaches its door), the server's vitals, each place's
     memory, disk and what its bridge's files say, and (`moves`) the planned moves' phases."""
@@ -2870,6 +3026,10 @@ def beat_of(server, disk, moves=True):
         if str(number) in seats:
             seats[str(number)]["door443"] = True
     beat = {"seats": seats, "server": server, "places": with_disk(places_activity(places_memory()), disk)}
+    try:
+        place_check_beat(beat["places"])
+    except Exception as exc:   # never the beat's loss
+        log("place check not joined to the beat: %s" % exc)
     if moves:
         add_moves(beat)
     return beat
@@ -2939,6 +3099,8 @@ def main(argv=()):
         except (OSError, subprocess.SubprocessError) as exc:
             log("views of the shared images not mounted: %s" % exc)
         return 0
+    if "--place-check" in argv:   # its own process, started by a round (place_check_start)
+        return place_check_run()
     if "--bootstrap" in argv:   # the first-boot script, before any place is installed
         return bootstrap()
     with open(CONF) as fh:
@@ -3028,6 +3190,14 @@ def main(argv=()):
                 call(conf, "POST", "/v1/server/orders/%d/done" % int(order["id"]), vault_outcome(order["id"]))
             except (OSError, ValueError) as exc:
                 log("done not told yet (next round): %s" % exc)
+    try:
+        clean_imports_round(read_json(SETTINGS))
+    except Exception as exc:   # never the round's loss
+        log("import leftovers not looked at: %s" % exc)
+    try:
+        place_check_start()
+    except Exception as exc:   # never the round's loss
+        log("place check not started: %s" % exc)
     zram()   # last: installing it may take a minute, once
     return 0
 
