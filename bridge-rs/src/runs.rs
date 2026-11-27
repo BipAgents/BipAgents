@@ -663,6 +663,9 @@ pub struct SubscriptionState {
     pub loop_rescue: Option<(crate::loop_brake::Over, String)>,
     /// This run is the rescue turn of that run (its limits: `rescue_limits`; never rescued itself).
     pub rescue_of: Option<String>,
+    /// A rescue turn its brake would have stopped was told instead to answer now (`stop_looping`): its next limit
+    /// stops it.
+    pub rescue_told: bool,
     /// This run is the continuation of that run, which ended on a promise (`go_on`; never continued itself).
     pub go_on_of: Option<String>,
     /// This run's end waits for that run, its continuation (`go_on`) or the brake's rescue turn (`loop_rescue`), whose
@@ -771,6 +774,7 @@ impl Default for SubscriptionState {
             braked: false,
             brake_said: None,
             loop_rescue: None,
+            rescue_told: false,
             rescue_of: None,
             go_on_of: None,
             continued_by: None,
@@ -2380,6 +2384,21 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         settings: &crate::loop_brake::Settings,
     ) {
         let config = self.config.as_ref().map(|shared| shared.get());
+        // A rescue turn stopped says nothing at all (27/11, Alex's aibox: 4 of 9 « did not answer », the model calling
+        // the stopped tool again or its few calls used): told once to stop calling tools and answer now, after its
+        // current call; stopped only at its next limit.
+        if rescuing && !st.rescue_told {
+            st.rescue_told = true;
+            tracing::info!(agent = %sub.agent.name, run_id = %sub.run_id, reason = %crate::loop_brake::reason(&over),
+                "rescue turn at its limit: told to answer now");
+            let (hermes, agent, run_id) = (self.hermes.clone(), sub.agent.clone(), sub.run_id.clone());
+            self.spawn(async move {
+                if let Err(err) = hermes.steer_run(&agent, &run_id, crate::loop_brake::RESCUE_ANSWER_NOW).await {
+                    tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "rescue turn: answer-now steer refused");
+                }
+            });
+            return;
+        }
         st.braked = true;
         // The safety net's rescue would start the same work again in a background task.
         st.rescued = true;

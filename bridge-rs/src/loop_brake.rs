@@ -73,6 +73,11 @@
 //! out of sight (`rescue_input`, its row hidden by the apps: `[bipagents:loop_rescue]`) why it was stopped, not to
 //! call that tool again, and to answer with what it has: what it tried, what it found, what blocked it, one or two
 //! ways forward. That turn has tight limits (`rescue_limits`: `rescue_tool_calls` calls, the stopped tool refused at
+//! the bridge's MCP and stopping the turn at its second call) and is never rescued itself. At its first limit it is
+//! told once to stop calling tools and answer (`RESCUE_ANSWER_NOW`, 27/11: 4 rescue turns of 9 said nothing, stopped
+//! for calling the tool again), and stopped only at the next. The person reads the brake's short line
+//! (`notice_head`), then the agent's own reply; when the rescue fails too, the full plain line (in the conversation
+//! too: `RESCUE_THEN`). Words the person added meanwhile are told to it and taken up right after it (runs.rs
 //! `loop_rescue`, msg_queue.rs `carry`); a stopped `give_file` or page's answer is given to it (`rescue_answer_note`).
 //!
 //! Checking what is done is no loop (27/11: a preference noted, then « je vérifie… » stopped as « la même étape »):
@@ -1203,6 +1208,11 @@ pub fn notice_text(over: &Over, lang: &str) -> String {
 /// Android Hermes.kt); `person_request` skips it (`[bipagents:`).
 pub const RESCUE_MARK: &str = "[bipagents:loop_rescue]";
 
+/// A rescue turn at its limits (runs.rs `stop_looping`), told once instead of being stopped: a turn stopped says nothing.
+pub const RESCUE_ANSWER_NOW: &str = "[bipagents:brake] A note from the app, not from your person: stop calling tools \
+now. Answer your person in their language, in a few plain sentences, with what you already have: what you tried, what \
+blocked you, and one or two ways forward.";
+
 /// The tool a rescue turn may not call again (bare name): the one the turn kept calling.
 pub fn stopped_tool(over: &Over) -> Option<String> {
     match over {
@@ -1267,13 +1277,18 @@ uncertain, and offer to carry the research on as a background task (propose_task
         Over::Offline(_) => "Don't call any tool that needs the internet again in this turn.".to_string(),
     };
     format!(
-        "{RESCUE_MARK} {head}\n\n(A note from the app, not from your person.) You were stopped because you {what}. \
+        "{RESCUE_MARK} {head}\n{RESCUE_THEN}{tail}-->\n\n(A note from the app, not from your person.) You were stopped because you {what}. \
 {dont} With what you already have, answer the person in their language: what you were trying to do, what you found \
 so far, what blocked you, and propose one or two concrete ways forward (or ask one precise question). Use another \
 tool only if it is really needed, two at most.",
-        head = notice_head(over, lang)
+        head = notice_head(over, lang),
+        tail = notice_tail(over, lang)
     )
 }
+
+/// Before the line's second sentence in the rescue turn's input (`notice_tail`): the conversation adds it under the
+/// brake's line when the rescue turn said nothing (threads/timeline.rs), as the stream does (`loop_rescue_failed`).
+pub const RESCUE_THEN: &str = "<!--bip:then ";
 
 /// For the logs.
 pub fn reason(over: &Over) -> String {
@@ -2433,7 +2448,8 @@ réessaie autrement."
         // its input: the mark, the person's line, then the agent's instruction (out of sight)
         let input = rescue_input(&over, "fr");
         assert!(input.starts_with(
-            "[bipagents:loop_rescue] Je me suis arrêté : je relançais la même recherche dans nos anciennes discussions.\n\n"
+            "[bipagents:loop_rescue] Je me suis arrêté : je relançais la même recherche dans nos anciennes discussions.\n\
+<!--bip:then Dis-moi si tu veux que je réessaie autrement.-->\n\n"
         ));
         assert!(input.contains("Don't call session_search again in this turn."));
         assert!(input.contains("answer the person in their language"));

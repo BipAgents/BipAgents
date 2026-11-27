@@ -322,6 +322,26 @@ def test_a_rescue_turn_that_loops_is_not_rescued_again(bridges, fakes):
     assert wait_until(lambda: fakes.hermes.seen("/v1/runs/r1/stop", "POST"))
     assert list(fakes.hermes.started) == ["r1"], "never a rescue of the rescue"
     assert bridge.logged("going round in circles: the rescue turn did not answer")
+    # 27/11: told once to answer now before it is stopped (a rescue turn stopped says nothing)
+    told = [s for s in fakes.hermes.steers if s["run_id"] == "r1" and "stop calling tools" in s["body"]["input"]]
+    assert len(told) == 1, fakes.hermes.steers
+
+
+def test_a_rescue_turn_at_its_limit_is_told_to_answer_and_answers(bridges, fakes):
+    """27/11, Alex's aibox: 4 rescue turns of 9 « did not answer » — the model called the tool it was stopped for again
+    (give_file, ask_secret), the brake stopped the rescue turn too, and the person read no word of the agent. At its
+    limit, a rescue turn is told once to answer now: its reply comes."""
+    bridge = bridges.new().start()
+    fakes.hermes.runs["run_vie"] = diagnosis("run_vie", 5)
+    reply = "Je n'ai pas retrouvé l'erreur du job de nuit. Veux-tu que je regarde les journaux du serveur ?"
+    fakes.hermes.runs["r1"] = ([sse("tool.started", run_id="r1", tool=SEARCH, preview=f"{NIGHT} {i}") for i in range(2)]
+                               + [sse("message.delta", run_id="r1", delta=reply),
+                                  sse("run.completed", run_id="r1", output=reply)])
+    events = follow(bridge, "run_vie")
+    assert [n["code"] for n in notices(events)] == ["loop_stopped", "loop_rescue_started"]
+    assert events[-1][0] == "run.completed" and events[-1][1]["output"] == reply
+    assert not fakes.hermes.seen("/v1/runs/r1/stop", "POST")
+    assert bridge.logged("going round in circles: the rescue turn answered")
 
 
 def test_the_rescue_turn_of_a_page_it_couldnt_read_gets_no_page_from_the_browser(bridges, fakes):

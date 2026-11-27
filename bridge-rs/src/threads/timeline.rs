@@ -586,6 +586,9 @@ pub fn segment_items(
     let mut opened = Vec::new();
     // in the brake's rescue turn (after its row, until the person's next words): the bridge stopped the turn before
     let mut rescuing = false;
+    // the rescue's notice not answered yet by the agent: its id, and what the person can do (`RESCUE_THEN`), said
+    // under the brake's line when the rescue turn says nothing (27/11: 4 of 9 said nothing)
+    let mut unanswered: Option<(String, String)> = None;
     for (place, shown) in in_place_compaction(rows) {
         let (row, place) = (&rows[shown], &rows[place]);
         let id = message_id(agent, session, row);
@@ -628,7 +631,14 @@ pub fn segment_items(
                             items.pop();
                         }
                         rescuing = true;
+                        if let Some((at, then)) = unanswered.take() {
+                            said_then(&mut items, &at, &then);
+                        }
                         if !line.is_empty() {
+                            let then = RESCUE_THEN_NOTE.captures(&raw).map(|c| c[1].trim().to_string()).unwrap_or_default();
+                            if !then.is_empty() {
+                                unanswered = Some((id.clone(), then));
+                            }
                             items.push(item(
                                 id,
                                 0,
@@ -656,6 +666,9 @@ pub fn segment_items(
                     continue;
                 }
                 rescuing = false;
+                if let Some((at, then)) = unanswered.take() {
+                    said_then(&mut items, &at, &then);
+                }
                 if raw.contains(crate::msg_queue::CARRIED_OPEN) {
                     // words the turn the brake stopped took and never got to, started again (msg_queue.rs `carry`):
                     // shown here once, their row « Ajouté pendant la réponse » (its check « Pris en compte ») out
@@ -707,6 +720,8 @@ pub fn segment_items(
                 let text = if rescuing && calls.is_empty() { crate::background_turn::without_hermes_lines(&text) } else { text };
                 let renamed = renamed_in(&raw);
                 if !text.is_empty() || !attachments.is_empty() || !renamed.is_empty() {
+                    // the rescue turn answered: its words say the rest
+                    unanswered = None;
                     let mut body =
                         json!({"kind": "message", "role": "agent", "text": text, "attachments": attachments});
                     if !renamed.is_empty() {
@@ -764,6 +779,13 @@ pub fn segment_items(
             item.body.insert(OPENS.into(), json!(true));
         }
     }
+    // the rescue turn said nothing (stopped too, failed, silent), or is still to come: what the person can do. A rescue
+    // turn going on gets it too until its words are stored; then they replace it.
+    if let Some((at, then)) = unanswered.take() {
+        if rows.last().is_some_and(|r| r.role != "user") {
+            said_then(&mut items, &at, &then);
+        }
+    }
     if turn.is_empty() {
         if let Some(first) = items.first().map(|f| f.id.clone()) {
             for i in items.iter_mut().filter(|i| i.turn.is_empty()) {
@@ -773,6 +795,17 @@ pub fn segment_items(
         }
     }
     items
+}
+
+/// The second sentence of the brake's line in its rescue row (loop_brake.rs `RESCUE_THEN`).
+static RESCUE_THEN_NOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--bip:then ([^\n]*?)-->").expect("valid regex"));
+
+/// The rescue's notice `at` with the line's second sentence: its turn said nothing.
+fn said_then(items: &mut [Item], at: &str, then: &str) {
+    if let Some(notice) = items.iter_mut().find(|i| i.id == at).and_then(|i| i.body.get_mut("notice")) {
+        let head = notice.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        notice["text"] = json!(format!("{head} {then}"));
+    }
 }
 
 /// An agent's message made only of Hermes' own lines closing a turn it stopped (`background_turn::hermes_line`).
@@ -1583,6 +1616,27 @@ mod tests {
         // the person's own Stop: as it was
         let own = items(&[row(1, "user", json!("Cherche")), row(2, "assistant", json!(interrupted))]);
         assert_eq!(own[1].text(), interrupted);
+    }
+
+    /// 27/11, Alex's aibox: 4 rescue turns of 9 said nothing; the conversation kept the brake's first sentence alone
+    /// (« Je me suis arrêté : … »). When the rescue turn says nothing, the line's second sentence follows it, as in the
+    /// stream (`loop_rescue_failed`); when it answers, its words say the rest.
+    #[test]
+    fn a_rescue_turn_that_said_nothing_leaves_the_whole_line() {
+        let over = crate::loop_brake::Over::Failing("web_search".into());
+        let input = crate::loop_brake::rescue_input(&over, "fr");
+        let said = |rows: &[Row]| -> Vec<String> {
+            items(rows).iter().filter(|i| i.kind() == "notice").map(|i| i.body.get("notice").unwrap()["text"].as_str().unwrap().to_string()).collect()
+        };
+        let silent = [row(1, "user", json!("Cherche")), row(2, "user", json!(format!("<!--bip:now 9 h-->\n{input}"))),
+                      row(3, "assistant", json!("Operation interrupted: waiting for model response (2.0s elapsed)."))];
+        assert_eq!(said(&silent), [crate::loop_brake::notice_text(&over, "fr")]);
+        let answered = [row(1, "user", json!("Cherche")), row(2, "user", json!(input.clone())),
+                        row(3, "assistant", json!("Le web ne répond pas, je réessaie dans un moment ?"))];
+        assert_eq!(said(&answered), [crate::loop_brake::notice_head(&over, "fr")]);
+        // still to come: the first sentence for now
+        assert_eq!(said(&answered[..2]), [crate::loop_brake::notice_head(&over, "fr")]);
+        assert!(items(&silent).iter().all(|i| !i.text().contains("bip:")));
     }
 
     /// 27/11 (Famille): words added during a turn the brake stopped are started again as the next message
