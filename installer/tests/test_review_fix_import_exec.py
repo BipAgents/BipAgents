@@ -206,3 +206,56 @@ def test_an_imported_profile_gets_the_place_s_media_rule(tmp_path):
     to_place.place_profile(folder, hub, {})
     after = yaml.safe_load((folder / "config.yaml").read_text())
     assert (after.get("gateway") or {}).get("strict") is True
+
+
+# -- Relecture 2 -------------------------------------------------------------------------------------------------------
+
+# The .env lines Hermes 0.23.1 writes for the bridge's `hermes -p <agent> config set terminal.…` (sandbox.rs):
+# `_terminal_env_value` (JSON) then `_quote_env_value` (hermes_cli/config.py:2590), produced with Hermes' own two
+# functions on the build server: a value holding `"` or a space is wrapped in double quotes, the inner ones escaped.
+HERMES_WRITTEN = ('TERMINAL_ENV=docker\n'
+                  'TERMINAL_DOCKER_EXTRA_ARGS="[\\"--network=bipagents-sandbox\\", \\"--dns=127.0.0.1\\"]"\n'
+                  'TERMINAL_DOCKER_VOLUMES="[\\"bipagents-files-coach:/fichiers:ro\\", \\"bipagents-envoi-coach:/envoi\\"]"\n'
+                  'TERMINAL_DOCKER_ENV="{\\"HTTP_PROXY\\": \\"http://10.233.80.2:3128\\"}"\n'
+                  'TERMINAL_DOCKER_NETWORK=True\nTERMINAL_DOCKER_IMAGE=localhost/bipagents-sandbox:latest\n'
+                  'TERMINAL_LIFETIME_SECONDS=300\n')
+
+
+def test_a_restore_keeps_the_bridge_s_sandbox_lines_as_hermes_writes_them(tmp_path):
+    """Relecture 2. own_code()'s `.env` (C1) reads a value with `.strip("\\"'")` only: Hermes' quoted JSON keeps its
+    backslashes, json.loads fails, and every restore or move of an isolated place takes the bridge's own sandbox lines
+    out of each profile's .env and writes « sandbox » in the journal. (config.yaml keeps the same keys and wins in
+    tools/terminal_scope.py, so the sandbox itself stays; the .env and the journal are wrong.)"""
+    hub = tmp_path / ".hermes"
+    coach = hub / "profiles" / "coach"
+    write(coach / "config.yaml", yaml.safe_dump({"terminal": {"backend": "docker"}}))
+    env = "API_SERVER_KEY=k\nCUSTOM_MODEL_API_KEY=m\nEMAIL_ADDRESS=coach@a.bipagents.com\n" + HERMES_WRITTEN
+    write(coach / ".env", env, 0o600)
+    found = profile_guard.own_code(hub)
+    assert (coach / ".env").read_text() == env, found
+    assert found == {}
+
+
+def test_a_restore_keeps_no_bridge_browser_server_with_an_environment_of_its_own(tmp_path):
+    """Relecture 2. own_code() keeps `stealth` when its command and args are the bridge's (bridge_browser), whatever
+    else the entry holds: an `env` (LD_PRELOAD for the podman Hermes starts on the host) or a `cwd` stays."""
+    hub = tmp_path / ".hermes"
+    coach = hub / "profiles" / "coach"
+    write(coach / "config.yaml", yaml.safe_dump({"mcp_servers": {"stealth": {
+        "command": "/usr/bin/podman", "args": ["exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"],
+        "env": {"LD_PRELOAD": "/home/bip3/.cache/x.so"}}}}))
+    profile_guard.own_code(hub, tmp_path)
+    entry = ((yaml.safe_load((coach / "config.yaml").read_text()) or {}).get("mcp_servers") or {}).get("stealth")
+    assert entry is None or "env" not in entry
+
+
+def test_a_restore_takes_out_a_host_folder_mounted_by_config_yaml(tmp_path):
+    """Relecture 2. own_code() judges the .env's TERMINAL_* by value but not config.yaml's `terminal:`, which wins
+    over it: a host folder in `terminal.docker_volumes` stays (and the bridge keeps « the person's own » volumes)."""
+    hub = tmp_path / ".hermes"
+    coach = hub / "profiles" / "coach"
+    write(coach / "config.yaml", yaml.safe_dump({"terminal": {"backend": "docker",
+                                                              "docker_volumes": ["/home/bip3:/h"]}}))
+    profile_guard.own_code(hub, tmp_path)
+    after = yaml.safe_load((coach / "config.yaml").read_text())
+    assert "/home/bip3:/h" not in (after.get("terminal") or {}).get("docker_volumes", [])
