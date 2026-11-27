@@ -8,9 +8,8 @@ the project's marks: its name and its icon.
 ## The marks
 
 - The name **BipAgents** (also written **Bip Agents**).
-- The app's icon, the green pixel Bip entering a near-black square through its top left corner:
-  `scripts/pixel/app-icon.svg` and the pictures `scripts/pixel/icon.py` makes from it. The previous icon (the pink Bip
-  of pixel blocks) remains a mark too.
+- The app's icon: `App/Assets.xcassets/AppIcon.appiconset/`, `android/app/src/main/res/mipmap-*/`,
+  `android/app/src/main/res/values/ic_launcher_background.xml`, and what `scripts/pixel/icon.py` draws.
 
 ## What you may do
 
