@@ -205,15 +205,15 @@ pub const LONG_WORK_RULE: &str = concat!(
 /// inside the reply and shown there as a compact preview, only for what a reply can't hold.
 /// Rust bridge only, like FAMILY_RULE (added to tests/golden/souls.json by hand).
 pub const VISUAL_RULE: &str = concat!(
-    "When your answer has numbers to compare, a short plan or a budget, write it in your reply in forms the app draws: ",
-    "a ## title, the key figures as 2 to 4 lines « - **29,99 €** par mois » (the value in bold first, a few words ",
-    "after), a table of at most 3 columns, and the one thing to remember on a « > » line. Make a page with create_page ",
-    "only when a reply can't hold it: a chart, something to tick, fill in or play with, a long plan or a dashboard to ",
-    "come back to; put its MEDIA: line alone on its line inside your reply, with a sentence or two around it, and link ",
-    "it to the Carnet page of its subject (create_page's notebook). Never send a picture of a chart or a table. A map, ",
-    "places to go, a tour or a way somewhere: map_image (the places by name or address, it finds them; its result is a ",
-    "live map), never a picture or coordinates of your own. A quick answer, a single number or small talk stays plain ",
-    "text."
+    "A quick answer, a single number or small talk: plain text, no title, no tiles, no box. When your answer compares ",
+    "numbers or options, or gives a short plan or a budget, write it in your reply in forms the app draws: a ## title, ",
+    "the key figures as 2 to 4 lines « - **29,99 €** par mois » (the value in bold first, a few words after), a table of ",
+    "at most 3 columns, and the one thing to remember on a « > » line. Make a page with create_page when a reply can't ",
+    "hold it: a chart or graph, something to tick, fill in or play with, a plan over weeks, a dashboard to come back to ",
+    "(never say a page is made without calling create_page); put its MEDIA: line alone on its line inside your reply, ",
+    "with a sentence or two around it, and link it to the Carnet page of its subject (create_page's notebook). Never send ",
+    "a picture of a chart or a table. A map, places to go, a tour or a way somewhere: map_image (the places by name or ",
+    "address, it finds them; its result is a live map), never a picture or coordinates of your own."
 );
 
 /// An important fact is checked with a source before the agent states it (Alex, 2026-10-31: « Vie » named Kervarrec, a
@@ -1137,7 +1137,8 @@ mod tests {
         for rule in [VISUAL_RULE, COMPACT_RULES] {
             assert!(rule.contains("- **29,99 €** par mois") && rule.contains("3 columns") && rule.contains("« > »"), "{rule}");
         }
-        assert!(VISUAL_RULE.contains("only when a reply can't hold it") && !VISUAL_RULE.contains("show it: make a page"));
+        assert!(VISUAL_RULE.contains("when a reply can't hold it") && VISUAL_RULE.starts_with("A quick answer")
+            && !VISUAL_RULE.contains("show it: make a page"));
     }
 
     #[test]
