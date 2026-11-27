@@ -259,3 +259,23 @@ def test_a_restore_takes_out_a_host_folder_mounted_by_config_yaml(tmp_path):
     profile_guard.own_code(hub, tmp_path)
     after = yaml.safe_load((coach / "config.yaml").read_text())
     assert "/home/bip3:/h" not in (after.get("terminal") or {}).get("docker_volumes", [])
+
+
+# -- Relecture 3 -------------------------------------------------------------------------------------------------------
+
+def test_a_restore_takes_out_a_docker_env_that_is_not_the_bridge_s(tmp_path):
+    """Relecture 3 (cfd910c82). Hermes 0.23.1 puts `terminal.docker_env`'s values in the environment of the podman
+    client it starts on the host (tools/environments/docker.py `_egress_and_env_args`: `_run_env_values`, then
+    remote_common.py `client_env_with` = os.environ + values), not only in the container. `LD_PRELOAD` there is a
+    program of the place run by podman, outside the sandbox. The bridge writes only its proxy variables
+    (sandbox.rs PROXY_ENV) and keeps « the person's own » (wanted_terminal). _own_terminal() judges docker_volumes and
+    docker_extra_args, not docker_env; the .env's TERMINAL_DOCKER_ENV is judged, config.yaml's (which wins) is not."""
+    hub = tmp_path / ".hermes"
+    coach = hub / "profiles" / "coach"
+    write(hub / "config.yaml", yaml.safe_dump({"terminal": {"backend": "docker"}}))
+    write(coach / "config.yaml", yaml.safe_dump({"terminal": {"backend": "docker", "docker_env": {
+        "HTTP_PROXY": "http://10.233.80.2:3128", "LD_PRELOAD": "/home/bip3/.cache/x.so"}}}))
+    profile_guard.own_code(hub, tmp_path)
+    env = (yaml.safe_load((coach / "config.yaml").read_text())["terminal"]).get("docker_env") or {}
+    assert env.get("HTTP_PROXY") == "http://10.233.80.2:3128"     # the bridge's own stays
+    assert "LD_PRELOAD" not in env
