@@ -150,6 +150,12 @@ def _own_terminal(data: Dict[str, Any], out: List[str], hub_backend: Optional[st
         if kept != args:
             terminal["docker_extra_args"] = kept
             changed = True
+    env = terminal.get("docker_env")
+    if env is not None:   # Hermes puts it in the environment of the podman it starts on the host (docker.py)
+        kept = {k: v for k, v in env.items() if k in PROXY_ENV and isinstance(v, str)} if isinstance(env, dict) else {}
+        if kept != env:
+            terminal["docker_env"] = kept
+            changed = True
     for key in ("docker_mount_cwd_to_workspace", "docker_run_as_host_user", "docker_forward_env"):
         if terminal.get(key) not in (None, False, [], "", "false"):
             terminal.pop(key)
