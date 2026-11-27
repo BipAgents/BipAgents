@@ -586,9 +586,10 @@ def _proc_look():
         if "/libpod-" in cgroup and "libpod-conmon-" not in cgroup:
             continue   # in one of its containers (the sandbox, a browser, a connector)
         try:
-            start = open(f"{base}/stat", encoding="utf-8", errors="replace").read().rsplit(")", 1)[1].split()[19]
+            fields = open(f"{base}/stat", encoding="utf-8", errors="replace").read().rsplit(")", 1)[1].split()
+            start, ppid = fields[19], fields[1]
         except (OSError, IndexError):
-            start = ""
+            start, ppid = "", ""
         try:
             exe = os.readlink(f"{base}/exe")
         except OSError:
@@ -600,7 +601,8 @@ def _proc_look():
             cmdline = None
         except OSError:
             cmdline = []
-        seen[pid] = (uid, start, comm, cgroup.rsplit("/", 1)[-1], exe, cmdline)
+        path = cgroup.split("::", 1)[-1] if "::" in cgroup else cgroup.split(":", 2)[-1]
+        seen[pid] = (uid, start, comm, cgroup.rsplit("/", 1)[-1], exe, cmdline, path, ppid)
     return seen
 
 
@@ -657,7 +659,7 @@ def scope_of_ours(unit, uid):
     found = [i for i in lasting().values() if i[0] == uid and i[3] == unit]
     if not found:
         return False
-    if not all(comm in SCOPE_OK and program_is(comm, exe) for _, _, comm, _, exe, _ in found):
+    if not all(i[2] in SCOPE_OK and program_is(i[2], i[4]) for i in found):
         return False
     commands = [i[5] for i in found]
     if all(cmd is None for cmd in commands):
@@ -673,14 +675,64 @@ def unit_of_ours(unit, uid, own_units):
         or (RUN_SCOPE.fullmatch(unit) is not None and scope_of_ours(unit, uid))
 
 
-def processes(uid, own_units=frozenset()):
+# Root's units that run work as a place (seat-agent.py: its round, the check, the clean-up, the planned moves), by
+# their exact cgroup: a place can make no process there.
+ROOT_UNITS = re.compile(r"/system\.slice/(bipagents-seats|bipagents-place-check|bipagents-clean-imports|"
+                        r"bipagents-move-[A-Za-z0-9_-]+)\.service")
+
+
+def run_by_root(path, ppid, uid, everything):
+    """A process of the place's uid that root's seat agent started (an update: `sudo -iu <place> ... install.sh
+    update`): in one of ROOT_UNITS itself, or in a login session of the place (logind's session-*.scope, under its
+    user-<uid>.slice, never under its own manager) whose chain of parents reaches a process in ROOT_UNITS."""
+    if ROOT_UNITS.fullmatch(path):
+        return True
+    if not re.fullmatch(r"/user\.slice/user-%d\.slice/session-[A-Za-z0-9]+\.scope" % uid, path):
+        return False
+    seen = set()
+    while ppid and ppid.isdigit() and ppid not in seen and len(seen) < 32:
+        seen.add(ppid)
+        parent = everything.get(ppid)
+        if parent is None:
+            return False
+        if ROOT_UNITS.fullmatch(parent[6]):
+            return True
+        ppid = parent[7]
+    return False
+
+
+SHELLS = ("/usr/bin/dash", "/bin/dash", "/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh")
+
+
+def hermes_supervisor(comm, exe, cmdline, unit, own_units, home):
+    """Hermes' resident `/bin/sh <its hermes_cli>/process_supervisor.sh <pgid>` (hermes_cli/process_identity.py
+    _spawn_supervisor) in the place's gateway unit, exactly."""
+    if comm != "sh" or exe not in SHELLS or unit not in own_units \
+            or not re.fullmatch(r"hermes-gateway[A-Za-z0-9@._-]*\.service|bipagents-hermes\.service", unit):
+        return False
+    if cmdline is None:
+        return True   # a /proc without command lines (the tests' fakes)
+    args = [a for a in cmdline if a != ""]
+    if len(args) != 3 or args[0] not in ("/bin/sh", "/system/bin/sh") or not args[2].isdigit():
+        return False
+    script = args[1]
+    return script.endswith("/hermes_cli/process_supervisor.sh") and "/.." not in script and \
+        (script.startswith(home.rstrip("/") + "/.hermes/") or script.startswith("/opt/bipagents/hermes/"))
+
+
+def processes(uid, own_units=frozenset(), home=""):
     """The account's processes outside its containers that are not expected: in a unit not ours, a program not ours,
     a binary that is not what its name says or not from the system or the place's Hermes. A process seen once only is
     left out only in a unit of ours (a helper of its ExecStartPre); anywhere else a passing one counts."""
     first, second, last = looks()
     odd = []
-    for pid, (uid_, start, comm, unit, exe, cmdline) in {**first, **second}.items():
+    everything = {**first, **second}
+    for pid, (uid_, start, comm, unit, exe, cmdline, path, ppid) in everything.items():
         if uid_ != uid:
+            continue
+        if run_by_root(path, ppid, uid, everything):
+            continue   # the seat agent's work as the place (an update by sudo -iu), not the place's
+        if hermes_supervisor(comm, exe, cmdline, unit, own_units, home):
             continue
         ours = unit_of_ours(unit, uid, own_units)
         if pid not in last and ours:
@@ -700,7 +752,8 @@ def processes(uid, own_units=frozenset()):
 # Read only, never run (no git as root in a place's checkout: its config could run code). What a .pth or a
 # sitecustomize in a venv the place's processes use would run, the names in ~/.local/bin, the launchers' text. Only
 # these: a file of the checkout changed by the place is not seen (see the status: « rien » proves nothing of that).
-VENVS = (".hermes/hermes-agent/venv", ".hermes/hermes-agent/.venv", "BipAgents/installer/.venv", "BipAgents/bridge/.venv")
+VENVS = (".hermes/hermes-agent/venv", ".hermes/hermes-agent/.venv", ".hermes/venv", "BipAgents/installer/.venv",
+         "BipAgents/bridge/.venv")
 LOCAL_BIN = {"hermes", "hermes-acp", "hermes-agent", "uv", "uvx", "env", "env.fish", "bipagents"}
 PTH_OK = re.compile(r"import __editable___[A-Za-z0-9_]+_finder; __editable___[A-Za-z0-9_]+_finder\.install\(\)\s*"
                     r"|import _virtualenv\s*"
@@ -730,9 +783,39 @@ def pth_ok(data, home):
     return True
 
 
+def hermes_launcher(name, text, home):
+    """~/.local/bin/<name> as Hermes 0.23.1 writes it (hermes_cli/_launchers.py `_write_shell`:
+    `exec {shlex.join(command)} "$@"`, hermes-agent with `--run-module run_agent`) or as shared_hermes.py does
+    (`exec "<home>/.hermes/shared/hermes-agent/.hermes/bin/<name>" "$@"`, hermes and hermes-acp), on the place's own
+    checkout, the shared one or root's shared versions (/opt/bipagents/hermes/<version>). Exactly these."""
+    import shlex
+    found = re.fullmatch(r'#!/bin/sh\nexec (.+) "\$@"\n', text, re.S)
+    if not found or "\n" in found.group(1):
+        return False
+    try:
+        argv = shlex.split(found.group(1))
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    tail = ["--run-module", "run_agent"] if name == "hermes-agent" else []
+    program = "hermes" if name == "hermes-agent" else name
+    if argv[1:] != tail or not argv[0].endswith(f"/hermes-agent/.hermes/bin/{program}"):
+        return False
+    root = argv[0][:-len(f"/hermes-agent/.hermes/bin/{program}")]
+    ours = root in (home.rstrip("/") + "/.hermes", home.rstrip("/") + "/.hermes/shared") or \
+        re.fullmatch(r"/opt/bipagents/hermes/[A-Za-z0-9._-]+", root) is not None
+    rendered = (f'#!/bin/sh\nexec {shlex.join(argv)} "$@"\n',
+                f'#!/bin/sh\nexec "{argv[0]}" "$@"\n' if name in ("hermes", "hermes-acp") and not tail else None)
+    return ours and text in rendered
+
+
 def owned_code(home_fd, home):
     out = []
     venvs = list(VENVS)
+    for tool in listdir(home_fd, ".hermes/tools"):   # a Python Hermes keeps of its own (its gateway may run on it)
+        if tool.startswith("python"):
+            venvs.append(f".hermes/tools/{tool}")
     for install in listdir(home_fd, ".hermes/installs"):   # Hermes' package manager's environments
         for env in listdir(home_fd, f".hermes/installs/{install}/environments"):
             venvs.append(f".hermes/installs/{install}/environments/{env}/venv")
@@ -748,8 +831,7 @@ def owned_code(home_fd, home):
                 elif name.endswith(".pth"):
                     if kind(home_fd, f"{site}/{name}") != "file" or not pth_ok(read(home_fd, f"{site}/{name}") or b"", home):
                         out.append(f"code {venv.split('/')[0]}: .pth inattendu")
-    launcher = re.compile(r'#!/bin/sh\nexec "' + re.escape(home.rstrip("/")) +
-                          r'/\.hermes(/shared)?/hermes-agent/\.hermes/bin/(hermes|hermes-acp|hermes-agent)" "\$@"\n')
+    launcher = lambda name, text: hermes_launcher(name, text, home)   # noqa: E731
     for name in listdir(home_fd, ".local/bin"):
         rel = f".local/bin/{name}"
         k = kind(home_fd, rel)
@@ -768,7 +850,7 @@ def owned_code(home_fd, home):
                         os.close(bindir)
                 if not target.startswith(home.rstrip("/") + "/.hermes/"):
                     out.append(f"code .local/bin: {name} (lien)")
-            elif k != "file" or not launcher.fullmatch((read(home_fd, rel) or b"").decode("utf-8", "replace")):
+            elif k != "file" or not launcher(name, (read(home_fd, rel) or b"").decode("utf-8", "replace")):
                 out.append(f"code .local/bin: {name} (pas le lanceur)")
         elif name == "bipagents":
             text = (read(home_fd, rel) or b"").decode("utf-8", "replace")
@@ -934,7 +1016,7 @@ def place(user, uid, home, skel_prints, prints_seen):
             out.append(f"tâches at: {len(jobs)}")
     if os.path.exists(p("/var/lib/systemd/linger/" + user)):
         info.append(("linger", "oui"))
-    for line in processes(uid, frozenset(own_units)):
+    for line in processes(uid, frozenset(own_units), home):
         out.append(f"processus {line}")
     return out, info
 
