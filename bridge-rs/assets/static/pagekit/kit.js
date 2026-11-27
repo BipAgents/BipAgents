@@ -324,6 +324,8 @@
   function set(target, text) { var el = $(target); if (el) el.textContent = text; }
   // a KPI value shrinks to its tile, never breaks in a number; again at each change of the page
   function fit() { doc.querySelectorAll(".kpi .v").forEach(function (v) { v.style.fontSize = ""; for (var s = 28; v.scrollWidth > v.clientWidth + 1 && s > 13; s -= 3) v.style.fontSize = s + "px"; }); }
+  // a table of 4 columns or more is one card per row on a phone (kit.css), its header's words labelling each cell
+  function wide() { doc.querySelectorAll("table").forEach(function (t) { var h = t.rows[0] && t.rows[0].cells; if (!h || h.length < 4) return; t.classList.add("bip-cards"); [].forEach.call(t.rows, function (r) { [].forEach.call(r.cells, function (c, i) { if (h[i] && c !== h[i]) c.dataset.l = h[i].textContent; }); }); }); }
 
   // What people typed, drawn as TEXT only (never a script in everyone's page): rows(target, list, cells), cells(item,
   // i) its cells; a <table>/<tbody> gets one <tr> per item (numbers right-aligned), else one <li> or <div>.
@@ -585,8 +587,9 @@
     doc.querySelectorAll(".tabs").forEach(tabs);
     doc.querySelectorAll("pre.diagram,div.diagram[data-src]").forEach(function (el) { diagram(el, el.dataset.src || null); });
     fit();
+    wide();
     addEventListener("resize", fit);
-    new MutationObserver(fit).observe(doc.body, { childList: true, subtree: true, characterData: true });
+    new MutationObserver(function () { fit(); wide(); }).observe(doc.body, { childList: true, subtree: true, characterData: true });
   }
   doc.readyState === "loading" ? doc.addEventListener("DOMContentLoaded", enhance) : enhance();
 
