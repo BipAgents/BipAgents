@@ -426,9 +426,24 @@ pub fn append_to_backlog(backlog: &mut VecDeque<SSEEvent>, event: &SSEEvent) {
 #[derive(Default)]
 pub struct WholeWords {
     held: VecDeque<SSEEvent>,
+    /// The run it reads (`of_run`): its code word is left out only when it is a turn without the person.
+    run: Option<Arc<RunSubscription>>,
 }
 
 impl WholeWords {
+    /// For the run `sub` (`pass` reads whether it is a turn without the person: a routine's, a task's, a hand-back's).
+    pub fn of_run(sub: &Arc<RunSubscription>) -> WholeWords {
+        WholeWords { held: VecDeque::new(), run: Some(sub.clone()) }
+    }
+
+    /// A turn without the person (background_turn.rs marks it `unattended`; a background task's run).
+    fn without_the_person(&self) -> bool {
+        self.run.as_ref().is_some_and(|sub| {
+            let st = lock(&sub.state);
+            st.unattended || st.background
+        })
+    }
+
     /// The events to write now for `event` (none while a text is being written).
     pub fn pass(&mut self, event: SSEEvent) -> Vec<SSEEvent> {
         if in_text(&event.r#type) {
@@ -440,9 +455,11 @@ impl WholeWords {
         }
         let mut out: Vec<SSEEvent> = self.held.drain(..).collect();
         // a text that is the background turns' code word and nothing to tell (« [SILENT] » as a second message, 27/11):
-        // never drawn, as the conversation never keeps it (threads/timeline.rs `quiet`)
+        // never drawn, as the conversation never keeps it (threads/timeline.rs `quiet`); a turn of the person's: as
+        // written (review 2, 27/11: « [SILENT] est le mot de code… »)
         let said: String = out.iter().filter(|e| is_delta(&e.r#type)).map(SSEEvent::text).collect();
         if !out.iter().any(|e| e.r#type == crate::media::FILE)
+            && self.without_the_person()
             && crate::background_turn::code_word_in(&said)
             && crate::background_turn::is_silent(&said)
         {
@@ -4294,11 +4311,17 @@ mod tests {
         assert!(whole.pass(delta("message.delta", "Fini.")).is_empty());
         let end = whole.pass(other("run.completed"));
         assert_eq!((end[0].data["delta"].as_str(), end[1].r#type.as_str()), (Some("Fini."), "run.completed"));
-        // the code word as a text of its own (27/11): never drawn; beside real words, they pass
-        assert!(whole.pass(delta("message.delta", "[SIL")).is_empty() && whole.pass(delta("message.delta", "ENT]")).is_empty());
-        assert_eq!(whole.pass(other("tool.started")).iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), ["tool.started"]);
-        assert!(whole.pass(delta("message.delta", "Le Mac est à 899 €. [SILENT]")).is_empty());
-        assert_eq!(whole.pass(other("run.completed")).len(), 2);
+        // the code word as a text of its own (27/11), in a turn without the person: never drawn; beside real words,
+        // they pass; in the person's own turn, as written (review 2)
+        let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, "run_w"));
+        lock(&sub.state).unattended = true;
+        let mut quiet = WholeWords::of_run(&sub);
+        assert!(quiet.pass(delta("message.delta", "[SIL")).is_empty() && quiet.pass(delta("message.delta", "ENT]")).is_empty());
+        assert_eq!(quiet.pass(other("tool.started")).iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), ["tool.started"]);
+        assert!(quiet.pass(delta("message.delta", "Le Mac est à 899 €. [SILENT]")).is_empty());
+        assert_eq!(quiet.pass(other("run.completed")).len(), 2);
+        assert!(whole.pass(delta("message.delta", "[SILENT] est le mot de code que j'utilise.")).is_empty());
+        assert_eq!(whole.pass(other("run.completed")).len(), 2, "the person's turn: as written");
         assert!(whole.pass(delta("message.delta", "Cou")).is_empty());
         assert_eq!(whole.rest().iter().map(|e| e.text()).collect::<String>(), "Cou");
         assert!(whole.rest().is_empty());

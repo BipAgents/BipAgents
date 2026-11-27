@@ -37,8 +37,11 @@ def test_typing_a_kept_secret_again_keeps_its_site(bridges, fakes):
                                         "reason": "Garmin a refusé le mot de passe"})
     assert not_done(other) and "another site" in text(other) and EMAIL not in json.dumps(other), text(other)
     assert cards(bridge, "bip-secret-") == []
-    _, card = ask(bridge, {"name": "garmin", "kind": "password", "reason": "Garmin a refusé le mot de passe"},
-                  {"value": NEW})
+    # its kind kept too, whatever the agent says (review 2)
+    _, card = ask(bridge, {"name": "garmin", "kind": "token", "reason": "Garmin a refusé le mot de passe"},
+                  {"value": NEW, "identifier": EMAIL})
     assert "connect.garmin.example" in card["description"], card["description"]
+    assert card["bip_secret_kind"] == "password", card
     [kept] = [r for r in vault_records(bridge) if r["label"] == "garmin"]
     assert kept["origin"] == "https://connect.garmin.example", (kept["origin"], card["description"])
+    assert kept["secret_info"]["kind"] == "password", kept["secret_info"]

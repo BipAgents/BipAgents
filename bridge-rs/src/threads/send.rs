@@ -214,6 +214,33 @@ impl Threads {
                 std::collections::hash_map::Entry::Occupied(e) => joined.entry(e.key().clone()).or_default().push(s(r, "client_id")),
             }
         }
+        // a carried message (threads/timeline.rs `REPLACES`: the row of the stopped turn it replaces is gone): that
+        // row's sends are its own now, their app id on it (review 2, 27/11: a phone drew the words twice)
+        let moved: Vec<(String, String)> = items
+            .iter()
+            .flat_map(|i| {
+                i.body
+                    .get(super::timeline::REPLACES)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|old| (old.to_string(), i.id.clone()))
+            })
+            .collect();
+        for (old, new) in moved {
+            let Some(client_id) = claimed.remove(&old) else { continue };
+            claimed.insert(new.clone(), client_id);
+            if let Some(others) = joined.remove(&old) {
+                joined.insert(new.clone(), others);
+            }
+            self.store
+                .run(
+                    "UPDATE thread_sends SET message_id = ? WHERE agent = ? AND thread_id = ? AND message_id = ?",
+                    vec![text(&new), text(&agent.name), text(&thread.id), text(&old)],
+                )
+                .await?;
+        }
         let since = |row: &crate::store::Row| {
             crate::store::parse_since(&s(row, "created_at")).map(|d| d.timestamp_micros() as f64 / 1e6).unwrap_or(0.0)
         };

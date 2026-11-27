@@ -674,14 +674,18 @@ pub fn segment_items(
                 if let Some((at, then)) = unanswered.take() {
                     said_then(&mut items, &at, &then);
                 }
+                let mut carried_from = None;
                 if raw.contains(crate::msg_queue::CARRIED_OPEN) {
                     // words the turn the brake stopped took and never got to, started again (msg_queue.rs `carry`):
                     // shown here once, their row « Ajouté pendant la réponse » (its check « Pris en compte ») out
-                    // (that turn's, the same words exactly: never an earlier message the words happen to contain)
+                    // (that turn's, the same words exactly: never an earlier message the words happen to contain).
+                    // A phone holds it already: named as replaced by this one (`Page::replaced`, `REPLACES`), its
+                    // send's app id moved here (send.rs `with_sends`) — review 2, 27/11
                     let same = |i: &Item| stopped_added.contains(&i.id) && i.text() == text;
                     if let Some(at) = items.iter().rposition(same) {
                         let gone = items.remove(at);
                         stopped_added.retain(|id| *id != gone.id);
+                        carried_from = Some(gone.id);
                     }
                 }
                 if crate::turn_restart::restarted(&raw) {
@@ -704,6 +708,9 @@ pub fn segment_items(
                     body["from"] = json!(from);
                     body["from_name"] = json!(name);
                     body["text"] = json!(words);
+                }
+                if let Some(old) = carried_from {
+                    body[REPLACES] = json!([old]);
                 }
                 items.push(item(id, 0, turn, body));
             }
@@ -1029,15 +1036,25 @@ impl Page {
     /// days (an `s_` item lives two days at most, `SENDS_KEPT_SECONDS`), or without a time (an older store).
     fn replaced(&self) -> Vec<String> {
         let since = chrono::Utc::now().timestamp() as f64 - REPLACED_SECONDS;
-        self.items
+        let recent = |i: &&Item| i.kind() == "message" && !i.body.contains_key("sending") && (i.at >= since || i.at == 0.0);
+        let sent = self
+            .items
             .iter()
-            .filter(|i| i.kind() == "message" && !i.body.contains_key("sending") && (i.at >= since || i.at == 0.0))
+            .filter(recent)
             .flat_map(|i| {
                 let joined = i.body.get("joined").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
                 i.body.get("client_id").and_then(Value::as_str).into_iter().chain(joined)
             })
-            .map(|c| format!("s_{c}"))
-            .collect()
+            .map(|c| format!("s_{c}"));
+        // a carried message's row of the stopped turn (`REPLACES`): the apps 1.0 and 1.1 drop what this names by its id
+        // (whatever its age: a phone may hold it as long as its window)
+        let carried = self
+            .items
+            .iter()
+            .filter(|i| i.kind() == "message")
+            .flat_map(|i| i.body.get(REPLACES).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str))
+            .map(str::to_string);
+        sent.chain(carried).collect()
     }
 
     /// Its `s_` items lost (send.rs `lost`): `not_sent` instead of `sending` (the apps draw « Pas envoyé », a tap sends
@@ -1088,6 +1105,10 @@ pub fn draws(item: &Item) -> bool {
 /// the one before it for the waiting cards (`place_waiting`; 22/11 relecture 2, R5: a card went under the words of a
 /// task's hand-back hours later, under another day).
 pub const OPENS: &str = "_opens";
+
+/// The items a phone may hold that this one replaces (never served: `Page::replaced` names them): a carried message's
+/// row « Ajouté pendant la réponse » of the turn the brake stopped.
+pub const REPLACES: &str = "_replaces";
 
 /// A row of the person's role with nothing of theirs that opens a turn: the input of a run Hermes or the bridge
 /// started (notes only, Hermes' process notice). Never a steer within a turn (the bridge's, wrapped by Hermes), nor
@@ -2447,5 +2468,43 @@ mod review_fix_brake_network {
             let after: Vec<String> = got.iter().map(|i| i.text().to_string()).collect();
             assert_eq!(after, before, "{said:?}");
         }
+    }
+
+    /// R2-1 (relecture 2, 901176782). The apps merge an `after=` page after the item it `joins`, keeping what they
+    /// hold before it (iPhone `ThreadTimeline.apply`, Android `TimelineWindow.merge`, as in the 1.1 apps); they drop
+    /// only what `replaced` names. A phone that read the conversation once the rescue turn answered holds the row
+    /// « Ajouté pendant la réponse » of the stopped turn; its catch-up then brings the carried message, the old row
+    /// never named as gone: the person's words drawn twice (the first still with its check « Pris en compte »).
+    #[test]
+    fn a_phone_that_followed_the_turn_draws_the_carried_words_once() {
+        let words = "Réserve sur Booking";
+        let mut rows = vec![
+            row(1, "user", json!("Écris à Léa")),
+            row(2, "user", json!(steer(words))),
+            row(3, "assistant", json!("Operation interrupted: waiting for model response (0.0s elapsed).")),
+            row(4, "user", json!(format!("{RESCUE_MARK} Je me suis arrêté.\n\nnote"))),
+            row(5, "assistant", json!("Je n'ai pas pu écrire à Léa. Je m'occupe de la réservation juste après.")),
+        ];
+        // what the phone holds: the conversation read after the rescue turn's answer
+        let held = page(items(&rows), &Want { chosen: true, ..Default::default() });
+        assert_eq!(held.items.iter().filter(|i| i.text() == words).count(), 1);
+        let last = held.items.last().unwrap().cursor();
+        // then the carried message and its answer: the phone's catch-up after what it holds
+        rows.push(row(6, "user", json!(format!("<!--bip:now 9 h-->\n{}\n{words}", crate::msg_queue::CARRIED_NOTE))));
+        rows.push(row(7, "assistant", json!("C'est réservé.")));
+        let caught = page(items(&rows), &Want { after: Some(last), chosen: true, ..Default::default() });
+        // the apps' merge
+        let gone: HashSet<String> = caught.replaced().into_iter().collect();
+        let kept: Vec<&Item> = held.items.iter().filter(|i| !gone.contains(&i.id)).collect();
+        let shown: Vec<String> = match (caught.reset, caught.joins.as_ref()) {
+            (false, Some(joins)) => {
+                let at = kept.iter().position(|i| &i.cursor() == joins).expect("joins a held item");
+                let ids: HashSet<&str> = caught.items.iter().map(|i| i.id.as_str()).collect();
+                kept[..=at].iter().filter(|i| !ids.contains(i.id.as_str())).map(|i| i.text().to_string())
+                    .chain(caught.items.iter().map(|i| i.text().to_string())).collect()
+            }
+            _ => caught.items.iter().map(|i| i.text().to_string()).collect(),
+        };
+        assert_eq!(shown.iter().filter(|t| *t == words).count(), 1, "{shown:?}");
     }
 }

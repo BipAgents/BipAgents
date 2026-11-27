@@ -68,3 +68,44 @@ def test_words_the_stopped_turn_never_took_come_back_too(bridges, fakes):
     # once only
     assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None, timeout=20)
     assert [r for r in fakes.hermes.started if r not in ("r1", "r2", "r3")] == []
+
+
+def test_a_phone_that_followed_the_turn_draws_the_carried_words_once(bridges, fakes):
+    """Review 2 (27/11), R2-1: the apps 1.0 and 1.1 merge an `after=` page after what they hold and drop only what
+    `replaced` names. The row « Ajouté pendant la réponse » of the stopped turn, held by a phone that read the
+    conversation, leaves when the carried message comes: named in `replaced`, and the carried row has its app id."""
+    bridge, thread, app = run_it(bridges, fakes)
+    assert wait_until(lambda: "r3" in fakes.hermes.started, timeout=20), list(fakes.hermes.started)
+    steer = f"[OUT-OF-BAND USER MESSAGE from the user]\n{GLOVES}\n[/OUT-OF-BAND USER MESSAGE]"
+    rescue = fakes.hermes.started["r2"]["input"]
+    def stored(rows):
+        # Hermes keeps them: the session's counters move (the bridge reads a session again when they do)
+        fakes.hermes.messages[("", SESSION)] += rows
+        meta = fakes.hermes.sessions[""][SESSION]
+        meta["message_count"] = len(fakes.hermes.messages[("", SESSION)])
+        meta["last_active"] = meta.get("last_active", 0) + 100
+
+    stored([
+        {"role": "user", "content": "<!--bip:now lundi 9 h-->\nÉcris à Léa puis regarde ma semaine"},
+        {"role": "user", "content": steer},
+        {"role": "assistant", "content": "Je n'arrive pas à lire ton agenda."},
+        {"role": "user", "content": rescue},
+        {"role": "assistant", "content": "Je m'occupe des gants juste après."}])
+    assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None, timeout=20)
+    # the conversation's tip is read again after its cache's 30 s at most (threads/source.rs `TIP_TTL`)
+    stored_row = lambda p: [i for i in p["items"] if i.get("text") == GLOVES and not i["id"].startswith("s_")]
+    assert wait_until(lambda: stored_row(page(bridge, thread)), timeout=45)
+    held = page(bridge, thread)
+    [added] = [i for i in held["items"] if i.get("text") == GLOVES]
+    assert added.get("added_during_run") is True and added.get("client_id") == P1, added
+    stored([
+        {"role": "user", "content": fakes.hermes.started["r3"]["input"]},
+        {"role": "assistant", "content": "Voici trois paires de gants en mérinos."}])
+    catch_up = lambda: bridge.get(f"/v1/threads/{thread}/timeline", headers=AUTH,
+                                  params={"agent": "wellness", "after": held["last"]}).json()
+    assert wait_until(lambda: [i for i in catch_up()["items"] if i.get("text") == GLOVES], timeout=45)
+    caught = catch_up()
+    assert added["id"] in (caught.get("replaced") or []), caught
+    [carried] = [i for i in caught["items"] if i.get("text") == GLOVES]
+    assert carried.get("client_id") == P1 and not carried.get("added_during_run"), carried
+    assert "bip:" not in str(caught["items"])
