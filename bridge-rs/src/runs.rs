@@ -2668,6 +2668,13 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
         if let Some(session) = session.as_ref().filter(|_| !behind) {
             let mut input = crate::loop_brake::rescue_input_with(&over, &lang, added);
+            // the stopped tool's answer when it worked (a file given, a page made: 27/11, `give_file` 3 times): the
+            // rescue turn, which may not call it again, still has what the person needs
+            if let crate::loop_brake::Over::SameCall(tool) = &over {
+                if let Some(answer) = crate::loop_brake::TURNS.answer_of(&agent.name, &sub.run_id, tool) {
+                    input = format!("{input}\n\n{}", crate::loop_brake::rescue_answer_note(tool, &answer));
+                }
+            }
             if let Some(config) = &self.config {
                 input = crate::dates::now::stamped(&config.get(), &agent, &input);
             }

@@ -73,6 +73,9 @@
 //! out of sight (`rescue_input`, its row hidden by the apps: `[bipagents:loop_rescue]`) why it was stopped, not to
 //! call that tool again, and to answer with what it has: what it tried, what it found, what blocked it, one or two
 //! ways forward. That turn has tight limits (`rescue_limits`: `rescue_tool_calls` calls, the stopped tool refused at
+//! `loop_rescue`, msg_queue.rs `carry`); a stopped `give_file` or page's answer is given to it (`rescue_answer_note`).
+//!
+//! Checking what is done is no loop (27/11: a preference noted, then « je vérifie… » stopped as « la même étape »):
 //! Hermes' `memory` again with the same words is held to `same_lookup`, an answer « already there » is not counted and
 //! tells the agent it is done (`Warning::Saved`); the bridge's write asked again answers « Already done », what it
 //! answered, and is stopped at `same_lookup` (a refused one at `same_call`).
@@ -1504,6 +1507,11 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
             let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(1);
             *calls += 1;
             tracing::info!(agent = %agent, tool = %tool, calls = *calls, "the same write again in this turn: refused");
+            // a file given (27/11, Alex's aibox: `give_file` 3 times, stopped): « not done again » read as a failure,
+            // « call that one now » as an invitation; the file is given, the reply is what is left to do
+            if let (true, Some(answer)) = (bare(tool) == crate::give_file::TOOL_NAME, entry.answers.get(&signature_of(tool, arguments))) {
+                return Some(tool_text(&given_again(answer), false));
+            }
             // done: what it answered then, and what to do now (27/11: a note written, then « asked again to check »
             // until the brake stopped the turn; « not done again » read as a failure)
             let name = bare(tool);
@@ -1525,6 +1533,14 @@ changes nothing. Don't call {name} again for it: tell your person it is done."
             return Some(tool_text(&writes_refused(entry.writes, scheduled), true));
         }
         None
+    }
+
+    /// What `tool` answered `agent` when it worked in the turn of run `run_id` (its first such answer).
+    pub fn answer_of(&self, agent: &str, run_id: &str, tool: &str) -> Option<String> {
+        let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        let turn = Turn { run_id: run_id.to_string(), background: false, banned: None };
+        let prefix = format!("{}\u{1f}", bare(tool));
+        turns.get(&turn_key(agent, Some(&turn)))?.answers.iter().find(|(sig, _)| sig.starts_with(&prefix)).map(|(_, a)| a.clone())
     }
 
     /// The note a routine's call gets with its result (its limits getting close), once.
@@ -1619,6 +1635,23 @@ changes nothing. Don't call {name} again for it: tell your person it is done."
             entry.answers.insert(signature_of(tool, arguments), crate::tools_knowledge::head(&text, 1500).to_string());
         }
     }
+}
+
+/// What `give_file` asked again for the same file in a turn answers: given already, and what to put in the reply.
+pub fn given_again(answer: &str) -> String {
+    format!(
+        "Already given: this file is your person's already, nothing failed. Don't call give_file again for it: write \
+your reply now, with what give_file answered you:\n{answer}"
+    )
+}
+
+/// What the stopped turn's tool answered when it worked (its first answer, by `Turns::record_answer`), for its rescue
+/// turn (runs.rs `loop_rescue`): a file given or a page made the person still needs from its answer.
+pub fn rescue_answer_note(tool: &str, answer: &str) -> String {
+    format!(
+        "{tool} worked the first time in that turn; what it answered you is still good (put it in your answer when it \
+is for your person, a MEDIA: line alone on its line):\n{answer}"
+    )
 }
 
 /// What a write past the turn's writes gets. The model words its message from it, so it carries what the person must
@@ -1849,6 +1882,34 @@ mod tests {
         turns.record_answer("daily", turn.as_ref(), "create_page", &page, &made);
         // and deleted again later in the same turn: allowed too
         assert!(turns.check(&settings, "daily", turn.as_ref(), "delete_page", &gone, 5.0).is_none());
+    }
+
+    /// 27/11, Alex's aibox: `same call repeated (give_file)` 5 times in a week (Vie, Bip). Asked again for the same file,
+    /// the bridge answered « Already done … not done again. If you meant another tool, call that one now. », read as a
+    /// failure and an invitation: the model asked again, and the brake stopped the turn; its rescue turn, told not to
+    /// call give_file, had no file to give. Now: given already, what to put in the reply; the rescue gets the answer.
+    #[test]
+    fn a_file_given_twice_is_said_given_and_its_rescue_has_it() {
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let turn = Some(Turn { run_id: "run_g".into(), background: false, banned: None });
+        let file = json!({"path": "/envoi/devis.pdf"}).as_object().cloned().unwrap();
+        let given = tool_text("MEDIA:/envoi/devis.pdf\nPut the line above alone on its own line in your reply.", false);
+        assert!(turns.check(&settings, "vie", turn.as_ref(), "mcp__bipagents__give_file", &file, 1.0).is_none());
+        turns.record_answer("vie", turn.as_ref(), "mcp__bipagents__give_file", &file, &given);
+        let again = turns.check(&settings, "vie", turn.as_ref(), "give_file", &file, 2.0).expect("given once");
+        let said = again["content"][0]["text"].as_str().unwrap();
+        assert!(said.starts_with("Already given") && said.contains("nothing failed"), "{said}");
+        assert!(said.contains("Don't call give_file again") && said.contains("MEDIA:/envoi/devis.pdf"), "{said}");
+        assert!(!said.contains("not done") && !said.contains("call that one now"), "{said}");
+        assert_eq!(again["isError"], json!(false));
+        // the hub still stops a third ask (`same_call`)
+        assert_eq!(turns.same_write_calls("vie", turn.as_ref(), "give_file", &file), 2);
+        // its rescue turn gets the first answer
+        let answer = turns.answer_of("vie", "run_g", "mcp__bipagents__give_file").expect("kept");
+        assert!(answer.starts_with("MEDIA:/envoi/devis.pdf"));
+        assert!(rescue_answer_note("give_file", &answer).contains("MEDIA:/envoi/devis.pdf"));
+        assert_eq!(turns.answer_of("vie", "run_other", "give_file"), None);
     }
 
     #[test]
