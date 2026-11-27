@@ -46,7 +46,13 @@ def test_the_check_a_round_starts_outlives_the_round(tmp_path):
     unit = f"review-place-check-{os.getpid()}"
     subprocess.run(["systemd-run", "--user", "--quiet", "--collect", "--wait", f"--unit={unit}", "-p", "Type=oneshot",
                     sys.executable, str(driver)], check=True, env=env, timeout=60)
-    deadline = time.time() + 20
-    while time.time() < deadline and not state.is_file():
+    # relecture 5: place_check_start now writes its attempt (`tried`) at once; only a finished look writes `places`
+    import json
+    deadline = time.time() + 30
+    done = {}
+    while time.time() < deadline:
+        done = json.loads(state.read_text()) if state.is_file() else {}
+        if "places" in done or "error" in done:
+            break
         time.sleep(0.5)
-    assert state.is_file(), "the check started by the round was killed with it: no state written"
+    assert "places" in done, f"the check started by the round never finished: {done}"
