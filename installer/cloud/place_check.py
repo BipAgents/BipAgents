@@ -34,9 +34,6 @@ PROC_OK = {"systemd", "(sd-pam)", "sd-pam", "bipbridge", "bip-browser-mcp", "her
            "slirp4netns", "rootlessport", "rootlessport-ch", "dbus-daemon", "dbus-broker", "dbus-broker-lau",
            "restic", "systemctl", "journalctl", "uv", "git", "aardvark-dns", "netavark", "crun", "runc",
            "fuse-overlayfs"}
-PROC_UNIT = re.compile(r"(init\.scope|(bipagents|hermes)-[A-Za-z0-9@._-]+\.(service|scope)|dbus(-broker)?\.service|"
-                       r"podman-[A-Za-z0-9@._-]+\.scope|libpod-conmon-[0-9a-f]+\.scope)$")
-
 
 def p(path):
     return ROOT + path
@@ -572,7 +569,8 @@ _LOOKS = {}
 
 
 def _proc_look():
-    """{pid: (uid, start, comm, unit, exe)} of every process outside a container."""
+    """{pid: (uid, start, comm, unit, exe, cmdline)} of every process outside a container. `cmdline` None when /proc
+    has none (the tests' fakes); its arguments are only matched here, never shown."""
     seen = {}
     proc = p("/proc")
     for pid in os.listdir(proc) if os.path.isdir(proc) else []:
@@ -595,46 +593,205 @@ def _proc_look():
             exe = os.readlink(f"{base}/exe")
         except OSError:
             exe = ""
-        seen[pid] = (uid, start, comm, cgroup.rsplit("/", 1)[-1], exe)
+        try:
+            with open(f"{base}/cmdline", "rb") as fh:
+                cmdline = fh.read(65536).decode("utf-8", "replace").split("\0")
+        except FileNotFoundError:
+            cmdline = None
+        except OSError:
+            cmdline = []
+        seen[pid] = (uid, start, comm, cgroup.rsplit("/", 1)[-1], exe, cmdline)
     return seen
 
 
-def lasting():
-    """The processes seen in two looks SETTLE apart (the same pid and start): what passes (a unit's ExecStartPre, a
-    helper) is left out. Looked once for all the places of the server."""
+def looks():
+    """(first, second, lasting) of every process, two looks SETTLE apart; once for all the places of the server."""
     if "procs" not in _LOOKS:
         first = _proc_look()
         if SETTLE > 0:
             time.sleep(SETTLE)
         second = _proc_look()
+        _LOOKS["first"], _LOOKS["second"] = first, second
         _LOOKS["procs"] = {pid: info for pid, info in second.items() if first.get(pid) == info}
-    return _LOOKS["procs"]
+    return _LOOKS["first"], _LOOKS["second"], _LOOKS["procs"]
+
+
+def lasting():
+    return looks()[2]
+
+
+def program_is(comm, exe):
+    """The process's binary is what its name says (a name is the process's to choose: prctl), a system one."""
+    if not exe.startswith(SYSTEM_BIN) or exe.endswith(" (deleted)"):
+        return False
+    base = os.path.basename(exe)
+    if comm.startswith("python"):
+        return re.fullmatch(r"python3(\.\d+)?", base) is not None and re.fullmatch(r"python3?(\.\d+)?", comm) is not None
+    return base[:15] == comm
+
+
+# The units a place's account runs that BipAgents and Hermes make without a file in ~/.config/systemd/user: name ->
+# the programs they hold (installer and bridge: bridge-rs/src/space.rs, place_import.rs, cloud_setup.rs; Hermes:
+# tools/process_registry.py hermes-worker-*; podman's own scopes).
+TRANSIENT_OURS = (
+    (re.compile(r"bipagents-space-open\.service"), {"gocryptfs", "fusermount3", "fusermount"}),
+    (re.compile(r"bipagents-(import|restore)\.service"), {"python3", "python", "systemctl", "podman", "conmon"}),
+    (re.compile(r"hermes-worker-[A-Za-z0-9_-]+\.scope"), {"python3", "python", "podman", "conmon"}),
+    (re.compile(r"libpod-conmon-[0-9a-f]+\.scope|podman-[0-9]+\.scope|podman-pause-[0-9a-f]+\.scope"),
+     {"conmon", "podman", "catatonit", "pasta", "pasta.avx2", "slirp4netns", "rootlessport", "rootlessport-ch"}),
+)
+OWN_SYSTEM_UNITS = {"init.scope", "dbus.service", "dbus-broker.service"}
+
+
+def transient_programs(unit):
+    for pattern, programs in TRANSIENT_OURS:
+        if pattern.fullmatch(unit):
+            return programs
+    return None
 
 
 def scope_of_ours(unit, uid):
-    """A transient run-*.scope whose processes are all system programs a scope of ours holds."""
+    """A nameless run-*.scope is the bridge's registries' proxy (sandbox.rs in_own_scope) only when it holds, lasting,
+    podman's programs from the system's folders (each binary what its name says) and one of them names the proxy's
+    container (bipagents-egress) in its command line. An empty one, or one whose processes don't last, is not."""
     found = [i for i in lasting().values() if i[0] == uid and i[3] == unit]
-    return all(comm in SCOPE_OK and exe.startswith(SYSTEM_BIN) and not exe.endswith(" (deleted)")
-               for _, _, comm, _, exe in found)
+    if not found:
+        return False
+    if not all(comm in SCOPE_OK and program_is(comm, exe) for _, _, comm, _, exe, _ in found):
+        return False
+    commands = [i[5] for i in found]
+    if all(cmd is None for cmd in commands):
+        return True   # a /proc without command lines (the tests' fakes): the programs alone
+    return any("bipagents-egress" in arg or "BipAgents registries' proxy" in arg
+               for cmd in commands if cmd for arg in cmd)
 
 
-def processes(uid):
-    """The account's lasting processes outside its containers: (comm, unit, exe folder) for those not expected."""
+def unit_of_ours(unit, uid, own_units):
+    """A unit of the place's manager BipAgents or Hermes made: a file of ours in ~/.config/systemd/user (checked
+    above), the user manager's own, or one of TRANSIENT_OURS by its exact name."""
+    return unit in own_units or unit in OWN_SYSTEM_UNITS or unit in SYSTEMD_OWN or transient_programs(unit) is not None \
+        or (RUN_SCOPE.fullmatch(unit) is not None and scope_of_ours(unit, uid))
+
+
+def processes(uid, own_units=frozenset()):
+    """The account's processes outside its containers that are not expected: in a unit not ours, a program not ours,
+    a binary that is not what its name says or not from the system or the place's Hermes. A process seen once only is
+    left out only in a unit of ours (a helper of its ExecStartPre); anywhere else a passing one counts."""
+    first, second, last = looks()
     odd = []
-    for uid_, _, comm, unit, exe in lasting().values():
+    for pid, (uid_, start, comm, unit, exe, cmdline) in {**first, **second}.items():
         if uid_ != uid:
+            continue
+        ours = unit_of_ours(unit, uid, own_units)
+        if pid not in last and ours:
             continue
         exe_dir = os.path.dirname(exe.replace(" (deleted)", ""))
         bad_dir = exe.endswith(" (deleted)") or re.match(r"/(tmp|var/tmp|dev/shm|run/user)/", exe or "")
-        if RUN_SCOPE.fullmatch(unit) and scope_of_ours(unit, uid):
-            continue
-        if comm not in PROC_OK or not PROC_UNIT.search(unit) or bad_dir:
+        programs = transient_programs(unit)
+        expected = (programs is not None and comm in programs) or (programs is None and comm in PROC_OK)
+        if RUN_SCOPE.fullmatch(unit):
+            expected = ours
+        if not ours or not expected or bad_dir:
             odd.append(f"{comm} [{unit}] {exe_dir or '?'}{' (supprimé)' if exe.endswith(' (deleted)') else ''}")
     return sorted(set(odd))
 
 
+# -- the code the place owns (its Hermes when the server doesn't share one, its BipAgents, ~/.local/bin) -----------------
+# Read only, never run (no git as root in a place's checkout: its config could run code). What a .pth or a
+# sitecustomize in a venv the place's processes use would run, the names in ~/.local/bin, the launchers' text. Only
+# these: a file of the checkout changed by the place is not seen (see the status: « rien » proves nothing of that).
+VENVS = (".hermes/hermes-agent/venv", ".hermes/hermes-agent/.venv", "BipAgents/installer/.venv", "BipAgents/bridge/.venv")
+LOCAL_BIN = {"hermes", "hermes-acp", "hermes-agent", "uv", "uvx", "env", "env.fish", "bipagents"}
+PTH_OK = re.compile(r"import __editable___[A-Za-z0-9_]+_finder; __editable___[A-Za-z0-9_]+_finder\.install\(\)\s*"
+                    r"|import _virtualenv\s*"
+                    r"|import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os\.environ\.get\(var, 'local'\) == 'local'; "
+                    r"enabled and __import__\('_distutils_hack'\)\.add_shim\(\); \s*")
+
+
+def _site_packages(home_fd, venv):
+    found = []
+    for lib in ("lib", "lib64"):
+        for py in listdir(home_fd, f"{venv}/{lib}"):
+            if re.fullmatch(r"python3(\.\d+)?", py) and kind(home_fd, f"{venv}/{lib}/{py}/site-packages") == "dir":
+                found.append(f"{venv}/{lib}/{py}/site-packages")
+    return found
+
+
+def pth_ok(data, home):
+    """A .pth as installers write them: an editable install's finder, virtualenv's, setuptools' distutils shim, or
+    folders (of the place's home or the system) only."""
+    for line in data.decode("utf-8", "replace").splitlines():
+        if not line.strip() or line.startswith("#") or PTH_OK.fullmatch(line):
+            continue
+        if line.startswith(("import ", "import\t")):
+            return False
+        if not (line.startswith(home.rstrip("/") + "/") or line.startswith(("/usr/", "/opt/"))) or "\n" in line:
+            return False
+    return True
+
+
+def owned_code(home_fd, home):
+    out = []
+    venvs = list(VENVS)
+    for install in listdir(home_fd, ".hermes/installs"):   # Hermes' package manager's environments
+        for env in listdir(home_fd, f".hermes/installs/{install}/environments"):
+            venvs.append(f".hermes/installs/{install}/environments/{env}/venv")
+        for gen in listdir(home_fd, f".hermes/installs/{install}/pm-runtime/generations"):
+            venvs.append(f".hermes/installs/{install}/pm-runtime/generations/{gen}")
+    for venv in venvs:
+        if kind(home_fd, venv) != "dir":
+            continue
+        for site in _site_packages(home_fd, venv):
+            for name in listdir(home_fd, site):
+                if name in ("sitecustomize.py", "usercustomize.py"):
+                    out.append(f"code {venv.split('/')[0]}: {name}")
+                elif name.endswith(".pth"):
+                    if kind(home_fd, f"{site}/{name}") != "file" or not pth_ok(read(home_fd, f"{site}/{name}") or b"", home):
+                        out.append(f"code {venv.split('/')[0]}: .pth inattendu")
+    launcher = re.compile(r'#!/bin/sh\nexec "' + re.escape(home.rstrip("/")) +
+                          r'/\.hermes(/shared)?/hermes-agent/\.hermes/bin/(hermes|hermes-acp|hermes-agent)" "\$@"\n')
+    for name in listdir(home_fd, ".local/bin"):
+        rel = f".local/bin/{name}"
+        k = kind(home_fd, rel)
+        if name not in LOCAL_BIN:
+            out.append(f"code .local/bin: {name}")
+        elif name.startswith("hermes"):
+            if k == "link":
+                target = ""
+                bindir = walk_open(home_fd, ".local/bin/.", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                if bindir is not None:
+                    try:
+                        target = os.readlink(name, dir_fd=bindir)
+                    except OSError:
+                        pass
+                    finally:
+                        os.close(bindir)
+                if not target.startswith(home.rstrip("/") + "/.hermes/"):
+                    out.append(f"code .local/bin: {name} (lien)")
+            elif k != "file" or not launcher.fullmatch((read(home_fd, rel) or b"").decode("utf-8", "replace")):
+                out.append(f"code .local/bin: {name} (pas le lanceur)")
+        elif name == "bipagents":
+            text = (read(home_fd, rel) or b"").decode("utf-8", "replace")
+            if k != "file" or not text.startswith("#!/bin/sh\n# BipAgents' commands (") or not re.search(
+                    r'\nexec bash "' + re.escape(home.rstrip("/")) + r'/BipAgents/install\.sh" "\$@"\n$', text):
+                out.append("code .local/bin: bipagents (pas celui de BipAgents)")
+    return out
+
+
+def transient_units(uid):
+    """The names in /run/user/<uid>/systemd/transient (the place's own folder: opened without following a link)."""
+    try:
+        fd = os.open(p("/run/user"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return []
+    try:
+        return listdir(fd, f"{uid}/systemd/transient")
+    finally:
+        os.close(fd)
+
+
 def place(user, uid, home, skel_prints, prints_seen):
-    out, info = [], []
+    out, info, own_units = [], [], set()
     try:
         home_fd = os.open(p(home), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
@@ -697,6 +854,8 @@ def place(user, uid, home, skel_prints, prints_seen):
                 if not (k == "file" and UNIT.fullmatch(name)):
                     out.append(f"systemd {name}" + ("" if k == "file" else f" ({k})"))
                     continue
+                if folder == ".config/systemd/user":
+                    own_units.add(name)
                 text = (read(home_fd, rel) or b"").decode("utf-8", "replace")
                 for line in text.splitlines():
                     m = re.match(r"\s*Exec[A-Za-z]*\s*=\s*[-@:+!]*\s*(\S+)", line)
@@ -706,14 +865,22 @@ def place(user, uid, home, skel_prints, prints_seen):
         # their [Service] runs on the host; BipAgents writes none)
         for found in podman_findings(home_fd, home):
             out.append(found)
+        # the code the place owns: its venvs' start-up files, ~/.local/bin
+        out.extend(owned_code(home_fd, home))
         # running units and scopes of its manager (cgroupfs, read as root)
         slice_ = p(f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service")
         for group in ("app.slice", ""):
             folder = os.path.join(slice_, group) if group else slice_
             for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
-                if re.search(r"\.(service|scope)$", name) and not PROC_UNIT.search(name) and not name.startswith("libpod-") \
-                        and name not in SYSTEMD_OWN and not (RUN_SCOPE.fullmatch(name) and scope_of_ours(name, uid)):
+                if re.search(r"\.(service|scope)$", name) and not re.fullmatch(r"libpod-[0-9a-f]+\.scope", name) \
+                        and not unit_of_ours(name, uid, own_units):
                     out.append(f"unité en marche {name}")
+        # transient units and timers its manager keeps until the server reboots (systemd-run): ours by their name
+        for name in transient_units(uid):
+            if re.search(r"\.(timer|path|socket)$", name) or not (transient_programs(name) is not None
+                                                                   or RUN_SCOPE.fullmatch(name)
+                                                                   or re.fullmatch(r"libpod-[0-9a-f]+\.scope", name)):
+                out.append(f"systemd transitoire {name}")
         # autostart
         for name in listdir(home_fd, ".config/autostart"):
             out.append(f"autostart {name}")
@@ -767,7 +934,7 @@ def place(user, uid, home, skel_prints, prints_seen):
             out.append(f"tâches at: {len(jobs)}")
     if os.path.exists(p("/var/lib/systemd/linger/" + user)):
         info.append(("linger", "oui"))
-    for line in processes(uid):
+    for line in processes(uid, frozenset(own_units)):
         out.append(f"processus {line}")
     return out, info
 
@@ -781,7 +948,7 @@ def shown(text):
 
 # What the seat agent tells the guichet of each place: categories and numbers only, never a name or a content.
 CATEGORIES = ("systemd_user", "crontab", "login_file", "ssh_key", "session", "hermes_import", "bridge_config",
-              "podman", "quadlet", "process", "link", "error")
+              "podman", "quadlet", "process", "owned_code", "link", "error")
 LOGIN_NAMES = LOGIN_FILES + (".local/bin/env",)
 MAX_COUNT = 10000   # a number past it is told as it (the guichet takes 0..10 000)
 
@@ -793,7 +960,7 @@ def category(finding):
                         (".pam_environment", "session"), (".ssh/rc", "session"), (".ssh/environment", "session"),
                         (".config/environment.d", "session"), ("profil ", "hermes_import"), ("hub:", "hermes_import"),
                         ("bridge.toml", "bridge_config"), ("quadlet ", "quadlet"), ("podman ", "podman"),
-                        ("processus ", "process"), ("erreur", "error"), ("dossier personnel", "link")):
+                        ("processus ", "process"), ("erreur", "error"), ("dossier personnel", "link"), ("code ", "owned_code")):
         if finding.startswith(prefix):
             return cat
     if finding.endswith(" : non suivi)"):
