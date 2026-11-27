@@ -118,7 +118,7 @@ async fn the_page_runs_only_its_own_scripts() {
     let csp = page.header("content-security-policy").unwrap();
     assert!(csp.contains("script-src 'self'") && csp.contains("frame-ancestors 'none'") && !csp.contains("unsafe"));
     assert_eq!(page.header("cache-control").as_deref(), Some("no-store"));
-    for name in ["app.js", "api.js", "markdown.js", "bips.js", "style.css"] {
+    for name in ["app.js", "api.js", "markdown.js", "bips.js", "pixel.js", "pixel-data.js", "style.css"] {
         assert_eq!(app.get(&format!("/console/static/{name}"), &[]).await.status, 200, "{name}");
     }
     // a card's detail (a routine's whole prompt, a proposal's before / after) is drawn, as text, before its buttons
