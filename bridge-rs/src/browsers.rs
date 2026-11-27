@@ -452,8 +452,41 @@ pub fn with_policy_mounts(text: &str, place: &Path) -> Option<String> {
     Some(format!("{}{insert}{}", &text[..at], &text[at..]))
 }
 
-/// An agent's browser set up before the downloads policy: the policy written, its unit (and the one its MCP proxy
-/// writes at first use) given the mounts. The running container keeps its own until it stops (unused); the next
+/// A unit's text with `SuccessExitStatus=143` (a unit written before it); None when it has it already or has no
+/// `[Service]` section.
+pub fn with_success_status(text: &str) -> Option<String> {
+    if text.lines().any(|l| l.trim_start().starts_with("SuccessExitStatus=")) {
+        return None;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|l| l.trim() == "[Service]")?;
+    // the section's end: the next section, else the last line
+    let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
+    // after the section's last line that says something
+    let at = (start + 1..end).rev().find(|&i| !lines[i].trim().is_empty()).map_or(start + 1, |i| i + 1);
+    let mut out: Vec<&str> = lines[..at].to_vec();
+    out.push(SUCCESS_EXIT);
+    out.extend_from_slice(&lines[at..]);
+    let mut text_out = out.join("\n");
+    if text.ends_with('\n') {
+        text_out.push('\n');
+    }
+    Some(text_out)
+}
+
+/// The SIGTERM of `podman stop` (the bridge stopping a browser nobody uses, `ExecStop`): the container's 143 is a
+/// success, not « failed » (27/11, Alex's aibox: every browser unit failed with `ExecMainStatus=143`).
+const SUCCESS_EXIT: &str = "SuccessExitStatus=143";
+
+/// A unit written before: the downloads policy's mounts and `SuccessExitStatus` (None: nothing to change).
+fn unit_refreshed(text: &str, place: &Path) -> Option<String> {
+    let mounted = with_policy_mounts(text, place);
+    let base = mounted.as_deref().unwrap_or(text);
+    with_success_status(base).or(mounted)
+}
+
+/// An agent's browser set up before the downloads policy (or before `SuccessExitStatus`): the policy written, its unit
+/// (and the one its MCP proxy writes at first use) given the mounts and the line. The running container keeps its own until it stops (unused); the next
 /// start has them. Whether a unit file changed (systemd must reload).
 pub fn refresh_downloads(config: &Config, agent: &str) -> bool {
     let place = folder(config, agent);
@@ -466,13 +499,13 @@ pub fn refresh_downloads(config: &Config, agent: &str) -> bool {
     }
     let mut changed = false;
     let unit = Host::real(config).unit_path(agent);
-    if let Some(text) = std::fs::read_to_string(&unit).ok().and_then(|t| with_policy_mounts(&t, &place)) {
+    if let Some(text) = std::fs::read_to_string(&unit).ok().and_then(|t| unit_refreshed(&t, &place)) {
         changed = std::fs::write(&unit, text).is_ok();
     }
     // one writer of mcp.json at a time (`edit_proxy_settings`: the phone exit's and the guard's keys are written too)
     let _ = edit_proxy_settings(config, agent, |settings| {
         let text = settings.get("unit").and_then(|u| u.get("text")).and_then(Value::as_str).map(str::to_string);
-        let Some(patched) = text.and_then(|t| with_policy_mounts(&t, &place)) else { return false };
+        let Some(patched) = text.and_then(|t| unit_refreshed(&t, &place)) else { return false };
         match settings.get_mut("unit") {
             Some(Value::Object(unit)) => {
                 unit.insert("text".into(), json!(patched));
@@ -1440,6 +1473,7 @@ pub fn systemd_unit(agent: &str, engine: &str, args: &[String]) -> String {
         format!("ExecStop={}", pyx::shlex_join(&[engine, "stop", "-t", "10", &name])),
         "Restart=always".to_string(),
         "RestartSec=10".to_string(),
+        SUCCESS_EXIT.to_string(),
         String::new(),
         "[Install]".to_string(),
         "WantedBy=default.target".to_string(),

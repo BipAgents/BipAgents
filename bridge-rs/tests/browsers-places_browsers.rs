@@ -433,6 +433,22 @@ fn a_unit_written_before_the_policy_gets_its_mounts_once() {
     assert_eq!(browsers::with_policy_mounts("ExecStart=/usr/bin/podman run img\n", place), None);
 }
 
+/// 27/11, Alex's aibox: every `bipagents-browser-*.service` « failed » with `ExecMainStatus=143`, the SIGTERM of the
+/// bridge stopping a browser nobody uses. A stop of ours is a success; a unit written before is given the line once.
+#[test]
+fn a_browser_stopped_by_the_bridge_is_no_failure_and_older_units_are_told_once() {
+    let unit = browsers::systemd_unit("budget", "/usr/bin/podman", &["/usr/bin/podman".into(), "run".into(), "img".into()]);
+    let service: Vec<&str> = unit.lines().skip_while(|l| *l != "[Service]").take_while(|l| !l.is_empty()).collect();
+    assert!(service.contains(&"SuccessExitStatus=143"), "{unit}");
+    let old = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/usr/bin/podman run img\nRestart=always\nRestartSec=10\n\n\
+               [Install]\nWantedBy=default.target\n";
+    let new = browsers::with_success_status(old).unwrap();
+    assert!(new.contains("RestartSec=10\nSuccessExitStatus=143\n\n[Install]"), "{new}");
+    assert_eq!(browsers::with_success_status(&new), None, "once");
+    assert_eq!(browsers::with_success_status(&unit), None, "a new unit has it");
+    assert_eq!(browsers::with_success_status("[Unit]\nDescription=x\n"), None, "no [Service]: left alone");
+}
+
 #[test]
 fn with_a_gpu_and_docker() {
     let s = setup();
