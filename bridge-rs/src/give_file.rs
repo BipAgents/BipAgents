@@ -128,7 +128,6 @@ fn find(config: &Config, agent: &AgentConfig, path: &str, for_drive: bool) -> Re
                 Err(e) => return Err(NotFound::Missing(e.to_string())),
             },
             Err(why) if why.starts_with("too large") => return Err(NotFound::TooBig),
-            Err(why) if why.contains(crate::sent_files::NEVER_SENT) => return Err(NotFound::Never),
             Err(why) => return Err(NotFound::Missing(format!("{here}; {why}"))),
         },
     };
@@ -518,7 +517,14 @@ mod tests {
     /// for; a routine changed with routine_schedule when the call looks like one (and the agent has it).
     #[tokio::test]
     async fn a_hidden_file_is_refused_for_good_and_a_routine_change_named() {
-        let (_dir, config, agent) = setup();
+        let (dir, mut config, mut agent) = setup();
+        // its received files where its sandbox sees them under Hermes' hidden folder (the place's own prefix)
+        let uploads = dir.path().join("uploads");
+        std::fs::create_dir_all(uploads.join("2026-11")).unwrap();
+        std::fs::write(uploads.join("2026-11/0123456789ab-plan.pdf"), b"%PDF plan").unwrap();
+        agent.upload_dir_host = Some(uploads.to_string_lossy().into_owned());
+        agent.upload_dir_container = Some("/home/hermes/.hermes/profiles/wellness/uploads".into());
+        config.agents.insert(agent.name.clone(), agent.clone());
         let outbox = crate::agent_files::external_outbox(&config, "wellness");
         std::fs::create_dir_all(outbox.join(".routines")).unwrap();
         std::fs::write(outbox.join(".routines/scan-nocturne.md"), b"Chaque nuit, trie mes mails").unwrap();
@@ -557,6 +563,13 @@ mod tests {
         // a file it may give still goes
         let given = call_with(&config, &agent, &args(json!({"path": "/envoi/devis.pdf"})), &[]).await;
         assert_eq!(given["isError"], false, "{}", text(&given));
+        // under a place whose own prefix is hidden (review): given when there, only missing (never final) when not
+        let received = "/home/hermes/.hermes/profiles/wellness/uploads/2026-11/0123456789ab-plan.pdf";
+        let given = call_with(&config, &agent, &args(json!({"path": received})), &[]).await;
+        assert_eq!(given["isError"], false, "{}", text(&given));
+        let gone = call_with(&config, &agent, &args(json!({"path": received.replace("plan", "autre")})), &[]).await;
+        assert!(!gone.contains_key(crate::tool_answers::FINAL_MARK), "{gone:?}");
+        assert!(text(&gone).contains("no file I can give"), "{}", text(&gone));
     }
 
     fn drive_catalog() -> Vec<Service> {

@@ -678,7 +678,7 @@ pub fn current(config: &Config, agent: &AgentConfig) -> Option<Diet> {
         }
     }
     // its routines' tool while it has one (routines.rs `in_view`): behind the search, a model whose tool names are held
-    // to the request's changed a routine through give_file (27/11). ≈ 400 tokens, in the cache
+    // to the request's changed a routine through give_file (27/11). ≈ 520 tokens (measured), in the cache
     if tools.iter().any(|t| t == crate::routines::TOOL_NAME) && crate::routines::in_view(config, &agent.name) {
         let entry = format!("!{BRIDGE_PREFIX}{}", crate::routines::TOOL_NAME);
         if !out.defer.contains(&entry) {

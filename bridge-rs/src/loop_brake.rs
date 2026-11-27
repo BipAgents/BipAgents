@@ -664,6 +664,12 @@ pub struct TurnCount {
     refusals: Vec<(String, String)>,
 }
 
+/// One tool by two of its names (bare, or a call's full name ending with the other's: runs.rs `same_tool`).
+fn same_name(a: &str, b: &str) -> bool {
+    let (a, b) = (bare(a), bare(b));
+    a == b || a.ends_with(&format!("_{b}")) || b.ends_with(&format!("_{a}"))
+}
+
 /// About two thirds of a hard limit: where the agent is told it gets close (same call 3 of 5 for a lookup, 2 of 3
 /// for a write, 40 of 60 calls, 7 of 10 for one tool).
 pub fn soft_limit(hard: u32) -> u32 {
@@ -932,6 +938,8 @@ impl TurnCount {
             // (review 20/11: Hermes' own guard resets on its progress tools; here on any success, Live included)
             self.failures.clear();
             self.offline = 0;
+            // and a refusal of this tool is no longer why it stops (the rescue turn's reason, `refusal_of`)
+            self.refusals.retain(|(t, _)| !same_name(t, &name));
             return None;
         }
         if !failure_counted(&name) {
@@ -986,14 +994,10 @@ impl TurnCount {
         self.refusals.truncate(10);
     }
 
-    /// The last refusal of `tool` in this turn (by its bare name, or the call's full name ending with it).
+    /// The last refusal of `tool` in this turn since it last worked (by its bare name, or the call's full name ending
+    /// with it).
     pub fn refusal_of(&self, tool: &str) -> Option<String> {
-        let wanted = bare(tool);
-        let same = |a: &str| {
-            let a = bare(a);
-            a == wanted || a.ends_with(&format!("_{wanted}")) || wanted.ends_with(&format!("_{a}"))
-        };
-        self.refusals.iter().find(|(t, _)| same(t)).map(|(_, said)| said.clone())
+        self.refusals.iter().find(|(t, _)| same_name(t, tool)).map(|(_, said)| said.clone())
     }
 
     /// The turn's call of `tool` failed on the network (`transient_failure`) at `now`: neither counted as the tool
@@ -1319,7 +1323,8 @@ pub fn rescue_input_said(over: &Over, lang: &str, added: &[String], refusal: Opt
         let tool = stopped_tool(over).unwrap_or_default();
         base = format!(
             "{base}\n\nWhat {tool} answered the last time it refused (the only reason you know of; say it in plain \
-words, never its text nor the tool's name): « {} »",
+words, never its text nor the tool's name; if it says what to do instead, offer that to your person rather than doing \
+it now): « {} »",
             crate::tools_knowledge::head(said, 800)
         );
     }
@@ -2008,10 +2013,6 @@ mod tests {
         assert!(turns.check(&settings, "daily", turn.as_ref(), "delete_page", &gone, 5.0).is_none());
     }
 
-    /// 27/11, Alex's aibox: `same call repeated (give_file)` 5 times in a week (Vie, Bip). Asked again for the same file,
-    /// the bridge answered « Already done … not done again. If you meant another tool, call that one now. », read as a
-    /// failure and an invitation: the model asked again, and the brake stopped the turn; its rescue turn, told not to
-    /// call give_file, had no file to give. Now: given already, what to put in the reply; the rescue gets the answer.
     /// 27/11 16:22, Alex's aibox: give_file refused a hidden file (« a hidden or secret-looking file (never sent) »),
     /// the model asked again, the brake stopped the turn as « the same tool failing again and again (give_file) », and
     /// the rescue turn, told the tool « looks unavailable », made up « le pointeur est momentanément bloqué » and promised
@@ -2069,8 +2070,16 @@ mod tests {
         let bare_input = rescue_input_said(&Over::Failing("web_search".into()), "fr", &[], None);
         assert!(bare_input.contains("no cause you don't know") && !bare_input.contains("« »"), "{bare_input}");
         assert_eq!(count.refusal_of("web_search"), None);
+        // the tool worked since: its refusal is no longer why the turn stops (review); another tool's stays
+        assert_eq!(count.completed("mcp__bipagents__give_file", false, &limits), None);
+        assert_eq!(count.refusal_of("give_file"), None);
+        assert!(count.refusal_of("mcp__bipagents__calendar_add").is_some());
     }
 
+    /// 27/11, Alex's aibox: `same call repeated (give_file)` 5 times in a week (Vie, Bip). Asked again for the same file,
+    /// the bridge answered « Already done … not done again. If you meant another tool, call that one now. », read as a
+    /// failure and an invitation: the model asked again, and the brake stopped the turn; its rescue turn, told not to
+    /// call give_file, had no file to give. Now: given already, what to put in the reply; the rescue gets the answer.
     #[test]
     fn a_file_given_twice_is_said_given_and_its_rescue_has_it() {
         let turns = Turns::default();

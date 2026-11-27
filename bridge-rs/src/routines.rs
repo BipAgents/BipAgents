@@ -276,9 +276,15 @@ pub fn in_view(config: &Config, agent: &str) -> bool {
     with_routines(&load(config)).contains(agent)
 }
 
-/// These agents' profiles brought up to date (profile_files.rs `reconcile`): `routine_schedule` in view or not.
+/// These agents' profiles brought up to date (profile_files.rs `reconcile`): `routine_schedule` in view or not. Only
+/// an agent whose Hermes profile this bridge serves (`shares::profile_dir`, as tool_diet.rs `current`): never a folder
+/// guessed under `~/.hermes` (review: a test's agent named like a real one).
 fn follow_diet(config: &Config, names: Vec<String>) {
-    let agents: Vec<AgentConfig> = names.iter().filter_map(|n| config.agent(Some(n.as_str())).cloned()).collect();
+    let agents: Vec<AgentConfig> = names
+        .iter()
+        .filter_map(|n| config.agent(Some(n.as_str())).cloned())
+        .filter(|a| crate::shares::profile_dir(config, a).is_some())
+        .collect();
     if agents.is_empty() {
         return;
     }

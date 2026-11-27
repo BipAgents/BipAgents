@@ -40,14 +40,16 @@ def follow_in_background(bridge, run_id, events):
     return follower
 
 
-def ask(bridge, gates, paths):
+def ask(bridge, fakes, run_id, gates, paths):
     """Each path given as Hermes would call it, once its call started; the answers."""
     answers = []
-    time.sleep(1.5)   # the run's first call started, as Hermes calls the bridge's tool
+    # the bridge follows the run (its events asked of Hermes), and the run's first call started
+    assert wait_until(lambda: [s for s in fakes.hermes.event_requests if s.path == f"/v1/runs/{run_id}/events"], timeout=10)
+    time.sleep(0.5)
     for gate, path in zip(gates, paths):
         answers.append(text_of(call(bridge, "give_file", {"path": path, "title": "Consigne du scan nocturne"})))
         gate.set()
-        time.sleep(0.8)   # its completion relayed, the next call started
+        time.sleep(0.5)   # its completion relayed, the next call started
     return answers
 
 
@@ -68,8 +70,9 @@ def test_a_hidden_file_is_refused_for_good_and_asking_again_is_no_broken_tool(br
     fakes.hermes.runs["run_hid"] = script
     events = []
     follower = follow_in_background(bridge, "run_hid", events)
-    first, again, other = ask(bridge, gates, [HIDDEN, HIDDEN, OTHER])
+    first, again, other = ask(bridge, fakes, "run_hid", gates, [HIDDEN, HIDDEN, OTHER])
     follower.join(30)
+    assert not follower.is_alive(), "the run's stream ended"
     # final and plain: never sent, under any name; not again; what give_file is for; what to do instead
     for said in (first, other):
         assert said.startswith("Not done, and it never will be: ") and "never handed to anyone" in said, said
@@ -100,8 +103,9 @@ def test_the_rescue_turn_gets_what_was_refused_and_makes_up_nothing(bridges, fak
                                sse("run.completed", run_id="r1", output=reply)]
     events = []
     follower = follow_in_background(bridge, "run_vie", events)
-    answers = ask(bridge, gates, [HIDDEN, COPY, OTHER])
+    answers = ask(bridge, fakes, "run_vie", gates, [HIDDEN, COPY, OTHER])
     follower.join(40)
+    assert not follower.is_alive(), "the run's stream ended"
     said = notices(events)
     assert [n["code"] for n in said] == ["loop_stopped", "loop_rescue_started"], said
     assert said[0]["reason"] == "the same tool failing again and again (give_file)"
