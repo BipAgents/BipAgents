@@ -768,16 +768,16 @@ impl Threads {
                   reports: &HashSet<String>) -> Vec<timeline::Item> {
         let sessions: HashSet<&str> = segments.iter().map(|s| s.session_id.as_str()).collect();
         let config = self.config.get();
-        let mut out: Vec<timeline::Item> = crate::jobs::tasks(&config)
+        let mut out: Vec<timeline::Item> = bips::tasks_of(&config)
             .iter()
             .filter_map(|job| bips::task_line(job, &agent.name, &sessions))
             .map(|(started, line)| {
-                let at = bips::task_at(items, started);
+                let at = bips::task_at(items, started, line["title"].as_str().unwrap_or_default());
                 let id = format!("b_{}", line["id"].as_str().unwrap_or_default());
                 bips::item(id, at, String::new(), String::new(), line)
             })
             .collect();
-        out.extend(bips::helper_lines(items, reports).into_iter().map(|(at, segment, turn, line)| {
+        out.extend(bips::helper_lines(items, reports, crate::py::time_time()).into_iter().map(|(at, segment, turn, line)| {
             let id = format!("b_{}", line["id"].as_str().unwrap_or_default());
             bips::item(id, at, segment, turn, line)
         }));
@@ -1355,6 +1355,8 @@ async fn timeline_route(
         q.get("tz").and_then(crate::dates::parse_zone).unwrap_or_else(|| crate::dates::load(&state.config()).zone());
     let days = timeline::days(&items, zone);
     let Waiting { tip, approvals, questions, run } = waiting_here(&state, &agent, &thread, &segments, &items).await;
+    // the thread's small Bips as they are now (bips.rs): the phone patches those it holds
+    let bips_now = bips::now(&items);
     let (page, open) = conversation_page(items, &want, &days, run.is_some());
     let queue =
         tip.as_deref().map(|t| crate::msg_queue::queues_of(&state).get(&agent.name).snapshot_of(&agent.name, t));
@@ -1374,6 +1376,7 @@ async fn timeline_route(
     }
     let mut answer = page.answer(out_thread, thread.version, pending, q.get("debug").is_some_and(|d| d == "1"));
     answer["layout"] = json!({"open": open});
+    answer["bips_now"] = bips_now;
     if common {
         crate::family_thread::own_urls(&agent.name, &mut answer);
     }

@@ -8,13 +8,20 @@
 //!   back, unless it handed the work off asynchronously (its result names a `deleg_…` id): then done once Hermes'
 //!   report for that id (`[ASYNC DELEGATION …]`, a row the timeline never shows) is in the conversation.
 //!
-//! One `bips` item per place: the lines launched at the same place are one item (`coalesce`). The apps overlay a
-//! task's live state from `/v1/jobs`, which they follow already, by its id; the timeline's state is the one at reading
-//! time. Its answer says `"bips": true` (timeline.rs `Page::answer`): an app seeing it drops its « Tâche de fond »
-//! banner; with an older bridge it keeps it.
+//! One `bips` item per place: the lines launched at the same place are one item (`coalesce`), its id from its place
+//! (the row before it), so a line joining it later keeps it. The apps overlay a task's live state from `/v1/jobs`,
+//! which they follow already, by its id; and since a phone catches up only after its last item (`after=`), every
+//! answer also gives the thread's `bips` items as they are now (`now`, review of 27/11): the phone patches those it
+//! holds (a helper's report came back, a line joined). Its answer says `"bips": true` (timeline.rs `Page::answer`):
+//! an app seeing it drops its « Tâche de fond » banner; with an older bridge it keeps it.
+//!
+//! The tasks are read from their folder once per change of it (`tasks_of`: jobs.rs writes each by a rename), not at
+//! every read of the thread.
 
 use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -24,6 +31,26 @@ use super::timeline::Item;
 use crate::Dict;
 
 pub const KIND: &str = "bips";
+/// A helper still « working » after this long (its turn stopped, its report never came): stopped.
+pub const HELPER_MAX_SECONDS: f64 = 3.0 * 3600.0;
+
+type Cached = Option<(PathBuf, Option<SystemTime>, Arc<Vec<Dict>>)>;
+static TASKS: LazyLock<Mutex<Cached>> = LazyLock::new(|| Mutex::new(None));
+
+/// Every task (jobs.rs `tasks`), read again only when their folder changed (a task saved: a rename in it).
+pub fn tasks_of(config: &crate::config::Config) -> Arc<Vec<Dict>> {
+    let folder = crate::jobs::folder(config);
+    let changed = std::fs::metadata(&folder).and_then(|m| m.modified()).ok();
+    let mut cache = TASKS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((path, at, tasks)) = cache.as_ref() {
+        if *path == folder && *at == changed && changed.is_some() {
+            return tasks.clone();
+        }
+    }
+    let tasks = Arc::new(crate::jobs::tasks(config));
+    *cache = Some((folder, changed, tasks.clone()));
+    tasks
+}
 
 /// What a task's line says of its state: (state, what it waits for).
 pub fn task_state(job: &Dict) -> (&'static str, Option<&'static str>) {
@@ -92,9 +119,20 @@ fn is_delegate(name: &str) -> bool {
     name == "delegate_task" || name.ends_with("_delegate_task")
 }
 
-/// A helper's goals, from its call's arguments (`goal`, or `tasks[].goal` for a batch).
+static GOAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""goal"\s*:\s*"((?:[^"\\]|\\.)*)""#).expect("valid regex"));
+
+/// A helper's goals, from its call's arguments (`goal`, or `tasks[].goal` for a batch); arguments cut by the timeline
+/// (a long `context`: no longer JSON) read by their `"goal"` fields.
 fn goals(arguments: &str) -> Vec<String> {
-    let Ok(args) = serde_json::from_str::<Value>(arguments) else { return Vec::new() };
+    let Ok(args) = serde_json::from_str::<Value>(arguments) else {
+        return GOAL
+            .captures_iter(arguments)
+            .filter_map(|c| serde_json::from_str::<String>(&format!("\"{}\"", &c[1])).ok())
+            .map(|g| g.trim().to_string())
+            .filter(|g| !g.is_empty())
+            .collect();
+    };
     if let Some(tasks) = args.get("tasks").and_then(Value::as_array) {
         let found: Vec<String> = tasks
             .iter()
@@ -118,8 +156,9 @@ fn one_line(text: &str) -> String {
     out
 }
 
-/// One line per goal of each `delegate_task` call in `items`, placed right after its row (`at` just after it).
-pub fn helper_lines(items: &[Item], reports: &HashSet<String>) -> Vec<(f64, String, String, Value)> {
+/// One line per goal of each `delegate_task` call in `items`, placed right after its row (`at` just after it). `now`:
+/// a helper still « working » after `HELPER_MAX_SECONDS` is stopped (its turn stopped, its report never came).
+pub fn helper_lines(items: &[Item], reports: &HashSet<String>, now: f64) -> Vec<(f64, String, String, Value)> {
     let mut out = Vec::new();
     for item in items.iter().filter(|i| i.kind() == "tool") {
         let Some(tool) = item.body.get("tool") else { continue };
@@ -137,6 +176,7 @@ pub fn helper_lines(items: &[Item], reports: &HashSet<String>) -> Vec<(f64, Stri
                 _ => "done",
             },
         };
+        let state = if state == "working" && item.at > 0.0 && now - item.at > HELPER_MAX_SECONDS { "stopped" } else { state };
         for (n, goal) in goals(arguments).iter().enumerate() {
             let id = format!("{}/{n}", handed.clone().unwrap_or_else(|| item.id.clone()));
             out.push((item.at + 0.001, item.segment.clone(), item.turn.clone(),
@@ -147,15 +187,20 @@ pub fn helper_lines(items: &[Item], reports: &HashSet<String>) -> Vec<(f64, Stri
     out
 }
 
-/// Where a task's line goes: just after the `start_task` row that started it (the last one before its start), else
-/// just after its start.
-pub fn task_at(items: &[Item], started: f64) -> f64 {
+/// Where a task's line goes: just after the `start_task` row that started it (its title, within the 10 minutes before
+/// its start, or a minute after), else just after its start (« Lancer » on a card, the app, the rescue: never an older
+/// task's row).
+pub fn task_at(items: &[Item], started: f64, title: &str) -> f64 {
     items
         .iter()
-        .filter(|i| i.kind() == "tool" && i.at <= started + 1.0)
+        .filter(|i| i.kind() == "tool" && i.at <= started + 60.0 && i.at >= started - 600.0)
         .filter(|i| {
-            i.body.get("tool").and_then(|t| t.get("name")).and_then(Value::as_str)
-                .is_some_and(|n| n == "start_task" || n.ends_with("_start_task"))
+            let tool = i.body.get("tool");
+            tool.and_then(|t| t.get("name")).and_then(Value::as_str).is_some_and(|n| n == "start_task" || n.ends_with("_start_task"))
+                && tool.and_then(|t| t.get("arguments")).and_then(Value::as_str).is_some_and(|a| {
+                    serde_json::from_str::<Value>(a).ok().and_then(|v| v.get("title").and_then(Value::as_str).map(str::trim).map(str::to_string))
+                        .is_some_and(|t| !t.is_empty() && (t == title.trim() || title.trim().starts_with(&t)))
+                })
         })
         .map(|i| i.at + 0.001)
         .next_back()
@@ -170,10 +215,11 @@ pub fn item(id: String, at: f64, segment: String, turn: String, line: Value) -> 
     Item { id, pos: (0, 0, 0), at, turn, segment, row: 0, body }
 }
 
-/// Lines launched at one place are one item: each `bips` item right after another takes its lines.
+/// Lines launched at one place are one item: each `bips` item right after another takes its lines. Its id comes from
+/// its place (`<the row before it>.b`): the same when a line joins it later, so the phone patches the item it holds.
 pub fn coalesce(items: Vec<Item>) -> Vec<Item> {
     let mut out: Vec<Item> = Vec::with_capacity(items.len());
-    for item in items {
+    for mut item in items {
         if item.kind() == KIND {
             if let Some(last) = out.last_mut().filter(|l| l.kind() == KIND) {
                 let more = item.body.get("bips").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -182,10 +228,23 @@ pub fn coalesce(items: Vec<Item>) -> Vec<Item> {
                 }
                 continue;
             }
+            if let Some(before) = out.last() {
+                item.id = format!("{}.b", before.id);
+            }
         }
         out.push(item);
     }
     out
+}
+
+/// The thread's `bips` items as they are now, by id (every answer: the phone patches those it holds).
+pub fn now(items: &[Item]) -> Value {
+    let map: Map<String, Value> = items
+        .iter()
+        .filter(|i| i.kind() == KIND)
+        .map(|i| (i.id.clone(), i.body.get("bips").cloned().unwrap_or_else(|| json!([]))))
+        .collect();
+    Value::Object(map)
 }
 
 #[cfg(test)]
@@ -245,7 +304,7 @@ mod tests {
         let running = tool("c3", 30.0, "delegate_task", json!({"goal": "Long\nsecond line"}), None, "running");
         let other = tool("c4", 40.0, "web_search", json!({"query": "x"}), Some("y"), "done");
         let items = [sync, batch, running, other];
-        let lines = helper_lines(&items, &HashSet::new());
+        let lines = helper_lines(&items, &HashSet::new(), 100.0);
         let states: Vec<(String, String)> =
             lines.iter().map(|l| (l.3["title"].as_str().unwrap().to_string(), l.3["state"].as_str().unwrap().to_string())).collect();
         assert_eq!(states, [("Chercher trois vestes".into(), "done".into()), ("Météo".into(), "working".into()),
@@ -254,8 +313,23 @@ mod tests {
         assert!((lines[0].0 - 10.001).abs() < 1e-9, "right after its row");
         // its report in the conversation: done
         let back: HashSet<String> = ["deleg_ab12".to_string()].into_iter().collect();
-        assert!(helper_lines(&items, &back).iter().filter(|l| l.3["id"].as_str().unwrap().starts_with("deleg_ab12"))
+        assert!(helper_lines(&items, &back, 100.0).iter().filter(|l| l.3["id"].as_str().unwrap().starts_with("deleg_ab12"))
             .all(|l| l.3["state"] == "done"));
+    }
+
+    /// Review of 27/11: a helper whose turn stopped or whose report never came is not « working » for ever; one whose
+    /// arguments the timeline cut (a long context) still has its line.
+    #[test]
+    fn a_helper_is_stopped_after_hours_and_read_from_cut_arguments() {
+        let running = tool("c1", 10.0, "delegate_task", json!({"goal": "Long"}), None, "running");
+        assert_eq!(helper_lines(std::slice::from_ref(&running), &HashSet::new(), 10.0 + HELPER_MAX_SECONDS + 1.0)[0].3["state"], "stopped");
+        assert_eq!(helper_lines(&[running], &HashSet::new(), 20.0)[0].3["state"], "working");
+        let mut cut = tool("c2", 10.0, "delegate_task", json!({}), Some("ok"), "done");
+        cut.body.get_mut("tool").unwrap()["arguments"] =
+            json!(r#"{"tasks": [{"goal": "Météo \"demain\""}, {"goal": "Trains", "context": "très long…"#);
+        let titles: Vec<String> = helper_lines(&[cut], &HashSet::new(), 20.0).iter()
+            .map(|l| l.3["title"].as_str().unwrap().to_string()).collect();
+        assert_eq!(titles, ["Météo \"demain\"", "Trains"]);
     }
 
     #[test]
@@ -272,12 +346,18 @@ mod tests {
     fn a_task_goes_after_the_start_task_row_and_lines_at_one_place_are_one_item() {
         let items = [message("m1", 5.0), tool("c1", 10.0, "start_task", json!({"title": "x"}), Some("Started"), "done"),
                      message("m2", 12.0)];
-        assert!((task_at(&items, 10.5) - 10.001).abs() < 1e-9);
-        assert_eq!(task_at(&items, 3.0), 3.0, "started from a card before any start_task");
+        assert!((task_at(&items, 10.5, "x") - 10.001).abs() < 1e-9);
+        assert_eq!(task_at(&items, -100.0, "x"), -100.0, "started from a card before any start_task");
+        // review of 27/11: another task's start_task row (another title, or days before) is not its place
+        assert_eq!(task_at(&items, 10.5, "y"), 10.5);
+        assert_eq!(task_at(&items, 10.0 + 86_400.0, "x"), 10.0 + 86_400.0);
         let a = item("b_1".into(), 10.001, "s1".into(), "m_1".into(), json!({"id": "t1"}));
         let b = item("b_2".into(), 10.002, "s1".into(), "m_1".into(), json!({"id": "deleg_x/0"}));
         let merged = coalesce(vec![message("m1", 5.0), a, b, message("m2", 12.0)]);
         assert_eq!(merged.iter().map(|i| i.kind().to_string()).collect::<Vec<_>>(), ["message", "bips", "message"]);
         assert_eq!(merged[1].body["bips"].as_array().unwrap().len(), 2);
+        // its id from its place: the same when a line joins it later
+        assert_eq!(merged[1].id, "m1.b");
+        assert_eq!(now(&merged)["m1.b"].as_array().unwrap().len(), 2);
     }
 }
