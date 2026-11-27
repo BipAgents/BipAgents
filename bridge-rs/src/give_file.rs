@@ -107,6 +107,8 @@ struct Found {
 enum NotFound {
     TooBig,
     Missing(String),
+    /// A hidden or secret-looking file (sent_files.rs `secret_looking`): never handed out, whatever its copy.
+    Never,
 }
 
 /// The agent's file behind `path` (blocking: files, and `podman cp` for a file only in its sandbox).
@@ -114,6 +116,11 @@ fn find(config: &Config, agent: &AgentConfig, path: &str, for_drive: bool) -> Re
     let limit = config.limits.upload_max_bytes;
     let (at, file) = match crate::sent_files::open_own(config, agent, path) {
         Ok(found) => found,
+        Err(here) if here == crate::sent_files::NEVER_SENT => return Err(NotFound::Never),
+        // outside its places: its sandbox gives no hidden or secret-looking file either (`from_sandbox`)
+        Err(here) if here == crate::sent_files::NOT_IN_PLACES && crate::sent_files::never_from_sandbox(path) => {
+            return Err(NotFound::Never)
+        }
         Err(here) => match crate::sent_files::capture(config, agent, path) {
             // only in its sandbox: copied out (at most the conversation's limit)
             Ok(copy) => match std::fs::File::open(&copy) {
@@ -121,6 +128,7 @@ fn find(config: &Config, agent: &AgentConfig, path: &str, for_drive: bool) -> Re
                 Err(e) => return Err(NotFound::Missing(e.to_string())),
             },
             Err(why) if why.starts_with("too large") => return Err(NotFound::TooBig),
+            Err(why) if why.contains(crate::sent_files::NEVER_SENT) => return Err(NotFound::Never),
             Err(why) => return Err(NotFound::Missing(format!("{here}; {why}"))),
         },
     };
@@ -163,6 +171,49 @@ pub fn no_path(tools: &[Value], arguments: &Dict) -> String {
         _ => "If you meant another tool, call it by its own name (from your list, or through tool_call).".into(),
     };
     format!("Not done: give_file only hands your person a file you made, and needs `path` (e.g. /envoi/devis.pdf). {meant} Don't call give_file for anything else.")
+}
+
+/// A call that looks like a routine's change rather than a file to give (27/11, Alex's aibox: Vie, on the Spark, meant
+/// to change its nightly routine's instruction and called give_file with a path in a hidden folder): its path or title
+/// names a routine or a cron job, and `agent` has `routine_schedule` (never a tool it lacks).
+fn routine_meant(tools: &[Value], path: &str, title: &str) -> bool {
+    let said = format!("{path} {title}").to_lowercase();
+    ["routine", "cron"].iter().any(|w| said.contains(w))
+        && tools.iter().any(|t| t.get("name").and_then(Value::as_str) == Some(crate::routines::TOOL_NAME))
+}
+
+/// What to do instead, after a refusal: change a routine with its own tool when the call looks like one.
+fn instead(routine: bool) -> String {
+    if routine {
+        format!(
+            "If you meant to change one of your routines (its instruction, its time), give_file can't: call {} (action \
+update, the routine's name and the new prompt; action list shows them).",
+            crate::routines::TOOL_NAME
+        )
+    } else {
+        "If you meant to save or change something (a routine, a note, a setting), call the tool that does that \
+instead."
+            .to_string()
+    }
+}
+
+/// The refusal of a hidden or secret-looking file (sent_files.rs `secret_looking`), final (27/11, Alex's aibox: « Save
+/// the file you made in /envoi and give that path » sent the model copying it and asking again, until the brake
+/// stopped the turn and its rescue made up « un pointeur bloqué »): never sent, under any name; don't ask again; what
+/// give_file is for, and what to do instead. Marked final: the same call again is answered « already refused »
+/// (loop_brake.rs `Turns::check`), no new failure of a broken tool.
+pub fn never_given(path: &str, routine: bool) -> Dict {
+    crate::tool_answers::final_refusal(tool_text(
+        &format!(
+            "Not done, and it never will be: {path} is a hidden or secret-looking file (a settings, key or password \
+file, or one in a hidden folder), and such a file is never handed to anyone, under this name or as a copy: asking \
+again changes nothing. Don't call give_file for it again. give_file only hands your person a finished file you made for \
+them (a document, a picture, a sound). {} Otherwise tell your person plainly, in their language, that you can't send \
+them this file.",
+            instead(routine)
+        ),
+        true,
+    ))
 }
 
 /// One call, for `agent`.
@@ -209,17 +260,26 @@ pub async fn call_with(config: &Config, agent: &AgentConfig, arguments: &Dict, c
         // a drive the person connects in the app lifts it: never counted by the brake (loop_brake.rs)
         if can_connect { crate::tool_answers::lifted_in_the_app(said) } else { said }
     };
+    let routine = || routine_meant(&crate::agent_tools::tools_for(config, agent), &path, &title);
     let found = match found {
         Ok(found) => found,
         Err(NotFound::TooBig) => return too_big(limit),
+        // a hidden file is never a file to give: an agent with routines more likely meant to change one
+        Err(NotFound::Never) => {
+            let tools = crate::agent_tools::tools_for(config, agent);
+            let routines = tools.iter().any(|t| t.get("name").and_then(Value::as_str) == Some(crate::routines::TOOL_NAME))
+                && crate::routines::in_view(config, &agent.name);
+            return never_given(&path, routines || routine_meant(&tools, &path, &title));
+        }
         Err(NotFound::Missing(why)) => {
+            let also = if routine() { format!(" {}", instead(true)) } else { String::new() };
             return tool_text(
                 &format!(
                     "{path}: no file I can give ({why}). Save the file you made in /envoi (or /workspace) and give \
-that path."
+that path.{also}"
                 ),
                 true,
-            )
+            );
         }
     };
     let media_line = format!("MEDIA:{}", found.at);
@@ -449,6 +509,54 @@ mod tests {
 
     fn text(d: &Dict) -> String {
         d["content"][0]["text"].as_str().unwrap().to_string()
+    }
+
+    /// 27/11 16:22, Alex's aibox: Vie (the Spark), meaning to change its nightly routine's instruction, called give_file
+    /// on a file in a hidden folder. « no file I can give (a hidden or secret-looking file (never sent)…). Save the file
+    /// you made in /envoi (or /workspace) and give that path. » sent it copying the file and asking again until the brake
+    /// stopped the turn. Now the refusal is final and says so: never sent, under any name; not again; what give_file is
+    /// for; a routine changed with routine_schedule when the call looks like one (and the agent has it).
+    #[tokio::test]
+    async fn a_hidden_file_is_refused_for_good_and_a_routine_change_named() {
+        let (_dir, config, agent) = setup();
+        let outbox = crate::agent_files::external_outbox(&config, "wellness");
+        std::fs::create_dir_all(outbox.join(".routines")).unwrap();
+        std::fs::write(outbox.join(".routines/scan-nocturne.md"), b"Chaque nuit, trie mes mails").unwrap();
+        std::fs::write(outbox.join("config.yaml"), b"a: 1").unwrap();
+        assert!(crate::agent_tools::tools_for(&config, &agent).iter().any(|t| t["name"] == crate::routines::TOOL_NAME));
+        let hidden = ["/envoi/.routines/scan-nocturne.md", "/envoi/config.yaml", "/root/.hermes/cron/jobs.json", ".env"];
+        for path in hidden {
+            let done = call_with(&config, &agent, &args(json!({"path": path, "title": "Consigne"})), &[]).await;
+            assert_eq!(done["isError"], true, "{path}");
+            assert!(done.contains_key(crate::tool_answers::FINAL_MARK), "{path}: {done:?}");
+            let said = text(&done);
+            assert!(said.starts_with("Not done, and it never will be: ") && said.contains("never handed to anyone"), "{said}");
+            assert!(said.contains("under this name or as a copy") && said.contains("Don't call give_file for it again"), "{said}");
+            assert!(!said.contains("Save the file you made"), "never an invitation to copy it and ask again: {said}");
+        }
+        // a routine's path or title: routine_schedule named, with what to give it
+        let routine = text(&call_with(&config, &agent, &args(json!({"path": hidden[0]})), &[]).await);
+        assert!(routine.contains("call routine_schedule (action update"), "{routine}");
+        let cron = text(&call_with(&config, &agent, &args(json!({"path": hidden[2]})), &[]).await);
+        assert!(cron.contains("routine_schedule"), "{cron}");
+        let other = text(&call_with(&config, &agent, &args(json!({"path": hidden[1]})), &[]).await);
+        assert!(!other.contains("routine_schedule") && other.contains("call the tool that does that"), "{other}");
+        // an agent with a routine: any hidden file it calls for names it (never a file to give anyway)
+        let maker = crate::routines::Maker::Person { muted: false };
+        crate::routines::create(&config, "wellness", "Scan des mails", "every day at 3:00", "Trie mes mails.", None, maker).unwrap();
+        let other = text(&call_with(&config, &agent, &args(json!({"path": hidden[1]})), &[]).await);
+        assert!(other.contains("call routine_schedule (action update"), "{other}");
+        // a missing file that looks like a routine: named too, the refusal not final (the file may still be made)
+        let missing = call_with(&config, &agent, &args(json!({"path": "/envoi/routine-nuit.md"})), &[]).await;
+        assert!(!missing.contains_key(crate::tool_answers::FINAL_MARK));
+        assert!(text(&missing).contains("no file I can give") && text(&missing).contains("routine_schedule"), "{}", text(&missing));
+        // never a tool the agent lacks: « Routines » off, no routine_schedule named
+        crate::routines::set_enabled(&config, "wellness", false);
+        let off = text(&call_with(&config, &agent, &args(json!({"path": hidden[0]})), &[]).await);
+        assert!(!off.contains("routine_schedule") && off.contains("Don't call give_file for it again"), "{off}");
+        // a file it may give still goes
+        let given = call_with(&config, &agent, &args(json!({"path": "/envoi/devis.pdf"})), &[]).await;
+        assert_eq!(given["isError"], false, "{}", text(&given));
     }
 
     fn drive_catalog() -> Vec<Service> {

@@ -238,17 +238,66 @@ pub fn set_enabled(config: &Config, agent: &str, on: bool) {
     })
 }
 
-/// Read, change, write (0600), under one lock.
+/// Read, change, write (0600), under one lock. An agent that gets its first routine, or loses its last one (or has
+/// « Routines » switched), gets `routine_schedule` in view or back behind the search (`in_view`, tool_diet.rs).
 pub fn change<T>(config: &Config, f: impl FnOnce(&mut Book) -> T) -> T {
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut book = load(config);
-    let out = f(&mut book);
-    let file = path(config);
-    let body = serde_json::to_string_pretty(&book).unwrap_or_default();
-    if let Err(e) = crate::profile_files::write_atomic_with(&file, body.as_bytes(), 0o600) {
-        tracing::warn!(file = %file.display(), error = %e, "routines not saved");
-    }
+    let (out, flipped) = {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut book = load(config);
+        let before = with_routines(&book);
+        let out = f(&mut book);
+        let file = path(config);
+        let body = serde_json::to_string_pretty(&book).unwrap_or_default();
+        if let Err(e) = crate::profile_files::write_atomic_with(&file, body.as_bytes(), 0o600) {
+            tracing::warn!(file = %file.display(), error = %e, "routines not saved");
+        }
+        let after = with_routines(&book);
+        (out, before.symmetric_difference(&after).cloned().collect::<Vec<_>>())
+    };
+    follow_diet(config, flipped);
     out
+}
+
+/// The agents with a routine of their own (not a plan's moment) and « Routines » on: `routine_schedule` in their view
+/// (tool_diet.rs `current`).
+fn with_routines(book: &Book) -> std::collections::BTreeSet<String> {
+    book.routines
+        .iter()
+        .filter(|r| r.plan.is_none() && !book.off.contains(&r.agent))
+        .map(|r| r.agent.clone())
+        .collect()
+}
+
+/// Whether `agent` has a routine of its own (not a plan's moment) with « Routines » on: its `routine_schedule` is kept
+/// in view (tool_diet.rs `current`). 27/11, Alex's aibox: behind the search, Vie on the Spark (a model whose tool names
+/// are held to the request's) meant to change its nightly routine's instruction and called the in-view give_file with
+/// a path instead, three times (bench 1.1: proactive_off the same way, through give_file).
+pub fn in_view(config: &Config, agent: &str) -> bool {
+    with_routines(&load(config)).contains(agent)
+}
+
+/// These agents' profiles brought up to date (profile_files.rs `reconcile`): `routine_schedule` in view or not.
+fn follow_diet(config: &Config, names: Vec<String>) {
+    let agents: Vec<AgentConfig> = names.iter().filter_map(|n| config.agent(Some(n.as_str())).cloned()).collect();
+    if agents.is_empty() {
+        return;
+    }
+    let config = config.clone();
+    let work = move || {
+        for agent in &agents {
+            match crate::profile_files::reconcile(&config, agent) {
+                Ok(true) => tracing::info!(target: "bipbridge::agents", agent = %agent.name,
+                    "its routines changed: routine_schedule in view or behind the search"),
+                Ok(false) => {}
+                Err(exc) => tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"),
+                    "profile settings not brought up to date"),
+            }
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => drop(handle.spawn_blocking(work)),
+        Err(_) => work(),
+    }
 }
 
 /// The routines.

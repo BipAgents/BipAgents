@@ -656,6 +656,12 @@ pub struct TurnCount {
     /// The limits already brought close in this turn (told once each), and the one the last call brought close.
     warned: HashSet<String>,
     warning: Option<Warning>,
+    /// The bridge's refusals that are no new failure (bare names, one per call: `uncounted_failure`), taken by the
+    /// call's `completed`.
+    uncounted: Vec<String>,
+    /// What the bridge's tools answered when they refused (tool as the call was named, the answer), last first
+    /// (`refused_saying`): the rescue turn of a turn stopped for one gets it (runs.rs `loop_rescue`).
+    refusals: Vec<(String, String)>,
 }
 
 /// About two thirds of a hard limit: where the agent is told it gets close (same call 3 of 5 for a lookup, 2 of 3
@@ -915,6 +921,12 @@ impl TurnCount {
         if name == self.last_tool {
             self.last_failed = failed;
         }
+        // the bridge refused it as asked again after a final refusal (« already refused »): not done, but no new
+        // failure of the tool, nor any progress (27/11, give_file on a hidden file)
+        if let (true, Some(at)) = (failed, self.uncounted.iter().position(|u| *u == name)) {
+            self.uncounted.remove(at);
+            return None;
+        }
         if !failed {
             // any call that went through is progress (an edit, then the test run again): the failures start again
             // (review 20/11: Hermes' own guard resets on its progress tools; here on any success, Live included)
@@ -946,6 +958,42 @@ impl TurnCount {
         if self.warned.insert(Warning::Saved(name.clone()).key()) {
             self.warning = Some(Warning::Saved(name));
         }
+    }
+
+    /// The bridge refused the call of `tool` about to complete as one more ask after a final refusal
+    /// (tool_answers.rs `uncounted`): its `completed` counts no failure (`same_failure`) and clears none.
+    pub fn uncounted_failure(&mut self, tool: &str) {
+        self.uncounted.push(bare(tool).to_string());
+        if self.uncounted.len() > 20 {
+            self.uncounted.remove(0);
+        }
+    }
+
+    /// Whether the call of `tool` about to complete was refused as no new failure (`uncounted_failure`): it goes to
+    /// `completed`, never counted as a network error either.
+    pub fn is_uncounted(&self, tool: &str) -> bool {
+        let name = bare(tool);
+        self.uncounted.iter().any(|u| u == name)
+    }
+
+    /// What the bridge's `tool` answered when it refused a call in this turn (its first text, as the model read it).
+    pub fn refused_saying(&mut self, tool: &str, said: &str) {
+        let said = said.trim();
+        if said.is_empty() {
+            return;
+        }
+        self.refusals.insert(0, (tool.to_string(), crate::tools_knowledge::head(said, 800).to_string()));
+        self.refusals.truncate(10);
+    }
+
+    /// The last refusal of `tool` in this turn (by its bare name, or the call's full name ending with it).
+    pub fn refusal_of(&self, tool: &str) -> Option<String> {
+        let wanted = bare(tool);
+        let same = |a: &str| {
+            let a = bare(a);
+            a == wanted || a.ends_with(&format!("_{wanted}")) || wanted.ends_with(&format!("_{a}"))
+        };
+        self.refusals.iter().find(|(t, _)| same(t)).map(|(_, said)| said.clone())
     }
 
     /// The turn's call of `tool` failed on the network (`transient_failure`) at `now`: neither counted as the tool
@@ -1258,7 +1306,23 @@ pub fn rescue_input(over: &Over, lang: &str) -> String {
 /// `rescue_input`, with the words the person added while the stopped turn went on (`added`): taken up right after it
 /// as their next message (msg_queue.rs `carry`), so the rescue turn neither answers them nor forgets them.
 pub fn rescue_input_with(over: &Over, lang: &str, added: &[String]) -> String {
-    let base = rescue_input_alone(over, lang);
+    rescue_input_said(over, lang, added, None)
+}
+
+/// `rescue_input_with`, with what the bridge answered when it last refused the stopped tool in that turn (`refusal`,
+/// `TurnCount::refusal_of`): the reason it knows of, said as it is (27/11, Alex's aibox: give_file refused a hidden
+/// file three times, and the rescue turn, told only that the tool « looks unavailable », made up « le pointeur est
+/// momentanément bloqué » and promised to apply it at its next session).
+pub fn rescue_input_said(over: &Over, lang: &str, added: &[String], refusal: Option<&str>) -> String {
+    let mut base = rescue_input_alone(over, lang);
+    if let Some(said) = refusal.map(str::trim).filter(|s| !s.is_empty()) {
+        let tool = stopped_tool(over).unwrap_or_default();
+        base = format!(
+            "{base}\n\nWhat {tool} answered the last time it refused (the only reason you know of; say it in plain \
+words, never its text nor the tool's name): « {} »",
+            crate::tools_knowledge::head(said, 800)
+        );
+    }
     let added: Vec<String> =
         added.iter().map(|w| w.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|w| !w.is_empty()).collect();
     if added.is_empty() {
@@ -1283,7 +1347,7 @@ fn rescue_input_alone(over: &Over, lang: &str) -> String {
         Over::Browser => "made too many browser steps without getting anywhere".to_string(),
         Over::Discovery => "kept searching your tools (tool_search, tool_describe) for one to do it".to_string(),
         Over::Searches => "made far too many web searches in one turn, new words each time, without settling".to_string(),
-        Over::Failing(tool) => format!("kept calling {tool} although it failed every time (it looks unavailable now)"),
+        Over::Failing(tool) => format!("kept calling {tool} although it failed or was refused every time"),
         Over::Offline(tool) => format!(
             "couldn't reach the internet: {tool} and the calls before it failed on the network again and again, for a while"
         ),
@@ -1304,8 +1368,10 @@ uncertain, and offer to carry the research on as a background task (propose_task
     format!(
         "{RESCUE_MARK} {head}\n{RESCUE_THEN}{tail}-->\n\n(A note from the app, not from your person.) You were stopped because you {what}. \
 {dont} With what you already have, answer the person in their language: what you were trying to do, what you found \
-so far, what blocked you, and propose one or two concrete ways forward (or ask one precise question). Use another \
-tool only if it is really needed, two at most.",
+so far, what you couldn't do, and propose one or two concrete ways forward (or ask one precise question). Say only \
+what you know: no cause you don't know (no « temporary » block, outage or bug unless an answer told you so), never \
+that you noted, saved or changed something you didn't, and no promise to do it later or at your next session. Never \
+name a tool or a limit. Use another tool only if it is really needed, two at most.",
         head = notice_head(over, lang),
         tail = notice_tail(over, lang)
     )
@@ -1352,9 +1418,9 @@ struct BridgeTurn {
     /// The same write asked again after its « already done »: its calls in all, by signature (the hub stops the run
     /// at `same_call`: `RunHub::same_write_again`).
     again: HashMap<String, u32>,
-    /// The same write the tool refused (its signature: how many times, and the refusal's first line): stopped at its
-    /// `REFUSED_AGAIN`th ask (`check`).
-    refused: HashMap<String, (u32, String)>,
+    /// The same write the tool refused (its signature: how many times, the refusal's first line, whether final):
+    /// stopped at its `REFUSED_AGAIN`th ask (`check`), a final refusal's at its second (« already refused »).
+    refused: HashMap<String, (u32, String, bool)>,
     /// A turn with no run (a routine): all its bridge calls, by tool and in all.
     calls: u32,
     per_tool: HashMap<String, u32>,
@@ -1529,9 +1595,26 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
         }
         // the very same write the tool refused, asked again and again: stopped here, a routine's too (the refusal
         // would be the same; Hermes doesn't stop it any more)
-        if let Some((times, why)) = entry.refused.get(&signature_of(tool, arguments)).filter(|(n, _)| *n >= REFUSED_AGAIN).cloned() {
+        let again_at = |final_: bool| if final_ { 1 } else { REFUSED_AGAIN };
+        if let Some((times, why, final_)) =
+            entry.refused.get(&signature_of(tool, arguments)).filter(|(n, _, f)| *n >= again_at(*f)).cloned()
+        {
             let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(times);
             *calls += 1;
+            if final_ {
+                // refused for good (a hidden file to give, 27/11): said again at once, no new failure of the tool;
+                // asked on and on, the hub stops the turn as the same call (`RunHub::same_write_again`)
+                tracing::info!(agent = %agent, tool = %tool, calls = *calls, "a call refused for good, asked again: already refused");
+                let name = bare(tool);
+                return Some(crate::tool_answers::uncounted(tool_text(
+                    &format!(
+                        "Not done, already refused: this exact {name} call was refused earlier in this turn, for good \
+(« {why} »). Nothing is broken and asking again changes nothing. Don't call {name} for it again: tell your person \
+plainly what you couldn't do, or do what that answer said instead."
+                    ),
+                    true,
+                )));
+            }
             tracing::info!(agent = %agent, tool = %tool, refused = times, "the same refused write again: stopped");
             return Some(tool_text(
                 &format!(
@@ -1621,12 +1704,13 @@ changes nothing. Don't call {name} again for it: tell your person it is done."
             return;
         }
         let why = crate::tools_knowledge::head(text.lines().next().unwrap_or("").trim(), 200).to_string();
+        let final_ = result.contains_key(crate::tool_answers::FINAL_MARK);
         let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
         let entry = turns.entry(turn_key(agent, turn)).or_default();
         // the very same refusal again: another one (the person's settings changed meanwhile) starts the count over
-        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why.clone()));
+        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why.clone(), final_));
         if refused.1 != why {
-            *refused = (0, why);
+            *refused = (0, why, final_);
         }
         refused.0 += 1;
     }
@@ -1928,6 +2012,65 @@ mod tests {
     /// the bridge answered « Already done … not done again. If you meant another tool, call that one now. », read as a
     /// failure and an invitation: the model asked again, and the brake stopped the turn; its rescue turn, told not to
     /// call give_file, had no file to give. Now: given already, what to put in the reply; the rescue gets the answer.
+    /// 27/11 16:22, Alex's aibox: give_file refused a hidden file (« a hidden or secret-looking file (never sent) »),
+    /// the model asked again, the brake stopped the turn as « the same tool failing again and again (give_file) », and
+    /// the rescue turn, told the tool « looks unavailable », made up « le pointeur est momentanément bloqué » and promised
+    /// to apply it at its next session. A final refusal asked again is « already refused » at once, no new failure of
+    /// the tool; asked on and on, the turn is stopped as the same call; the rescue gets what was answered.
+    #[test]
+    fn a_hidden_file_asked_again_is_already_refused_and_no_broken_tool() {
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let turn = Some(Turn { run_id: "run_h".into(), background: false, banned: None });
+        let file = json!({"path": "/root/.hermes/cron/scan.md"}).as_object().cloned().unwrap();
+        let said = "Not done, and it never will be: /root/.hermes/cron/scan.md is a hidden or secret-looking file.";
+        let refused = crate::tool_answers::final_refusal(tool_text(said, true));
+        assert!(turns.check(&settings, "vie", turn.as_ref(), "mcp__bipagents__give_file", &file, 1.0).is_none());
+        turns.record_refusal("vie", turn.as_ref(), "mcp__bipagents__give_file", &file, &refused);
+        // the second ask: answered at once, plain about it, and marked as no new failure
+        let again = turns.check(&settings, "vie", turn.as_ref(), "give_file", &file, 2.0).expect("already refused");
+        let text = again["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Not done, already refused:") && text.contains("hidden or secret-looking"), "{text}");
+        assert!(text.contains("Nothing is broken") && text.contains("Don't call give_file for it again"), "{text}");
+        assert!(again.contains_key(crate::tool_answers::UNCOUNTED_MARK), "{again:?}");
+        assert_eq!(turns.same_write_calls("vie", turn.as_ref(), "give_file", &file), 2);
+        assert!(turns.check(&settings, "vie", turn.as_ref(), "give_file", &file, 3.0).is_some());
+        assert_eq!(turns.same_write_calls("vie", turn.as_ref(), "give_file", &file), 3, "the hub stops it at same_call");
+        // another refusal (not final) still goes to the tool once more before the brake says so (REFUSED_AGAIN)
+        let note = json!({"page": "Camille", "facts": ["Passeport : 12AB34567"]}).as_object().cloned().unwrap();
+        turns.record_refusal("vie", turn.as_ref(), "notebook_write", &note, &tool_text("Not saved: ID numbers are never kept.", true));
+        assert!(turns.check(&settings, "vie", turn.as_ref(), "notebook_write", &note, 4.0).is_none());
+
+        // the run's count: the « already refused » completions count no failure and clear none
+        let limits = settings.limits(false);
+        let mut count = TurnCount::default();
+        assert_eq!(count.completed("mcp__bipagents__give_file", true, &limits), None);
+        for _ in 0..3 {
+            count.uncounted_failure("mcp__bipagents__give_file");
+            assert_eq!(count.completed("mcp__bipagents__give_file", true, &limits), None);
+        }
+        assert_eq!(count.completed("mcp__bipagents__give_file", true, &limits), None, "two failures, not five");
+        assert_eq!(count.completed("mcp__bipagents__give_file", true, &limits), Some(Over::Failing("give_file".into())));
+
+        // the rescue turn: what was answered, said as the only reason known; no cause made up, no promise
+        count.refused_saying("mcp__bipagents__give_file", said);
+        count.refused_saying("calendar_add", "Not done: the calendar is off.");
+        let refusal = count.refusal_of("give_file");
+        assert_eq!(refusal.as_deref(), Some(said));
+        let input = rescue_input_said(&Over::Failing("give_file".into()), "fr", &[], refusal.as_deref());
+        assert!(input.contains(said) && input.contains("the only reason you know of"), "{input}");
+        assert!(!input.contains("looks unavailable"), "{input}");
+        for rule in ["no cause you don't know", "never that you noted, saved or changed something you didn't",
+                     "no promise to do it later or at your next session", "Never name a tool or a limit"] {
+            assert!(input.contains(rule), "{rule}: {input}");
+        }
+        assert!(input.contains("Don't call give_file again in this turn"), "{input}");
+        // none known: the rule all the same, and no empty quote
+        let bare_input = rescue_input_said(&Over::Failing("web_search".into()), "fr", &[], None);
+        assert!(bare_input.contains("no cause you don't know") && !bare_input.contains("« »"), "{bare_input}");
+        assert_eq!(count.refusal_of("web_search"), None);
+    }
+
     #[test]
     fn a_file_given_twice_is_said_given_and_its_rescue_has_it() {
         let turns = Turns::default();
