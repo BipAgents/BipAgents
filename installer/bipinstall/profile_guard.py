@@ -323,8 +323,24 @@ def _name(line: str) -> Optional[str]:
     return bare.split("=", 1)[0].strip().removeprefix("export ").strip()
 
 
+def env_value(raw: str) -> str:
+    """A .env value as Hermes reads it (agent/secret_scope.py `_parse_env_value`): bare, 'single', or "double" with
+    \\" and \\\\ escapes (what its `_quote_env_value` writes for JSON values)."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        quoted, parsed, i = value[1:-1], [], 0
+        while i < len(quoted):
+            escaped = quoted[i] == "\\" and quoted[i + 1:i + 2] in ('"', "\\")
+            parsed.append(quoted[i + 1] if escaped else quoted[i])
+            i += 2 if escaped else 1
+        return "".join(parsed)
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1]
+    return value
+
+
 def _value(line: str) -> str:
-    return line.split("=", 1)[1].strip().strip("\"'")
+    return env_value(line.split("=", 1)[1])
 
 
 def env_kept(name: str) -> bool:
@@ -357,7 +373,7 @@ def own_sandbox_value(name: str, value: str) -> bool:
         return isinstance(parsed, dict) and set(parsed) <= PROXY_ENV
     if name == "TERMINAL_DOCKER_VOLUMES":   # the bridge's named volumes only (bipagents-files-, -share-…)
         return isinstance(parsed, list) and all(isinstance(v, str) and v.startswith("bipagents-") for v in parsed)
-    return False
+    return name in ("TERMINAL_TIMEOUT", "TERMINAL_LIFETIME_SECONDS", "TERMINAL_DOCKER_IMAGE_PINNED")
 
 
 def _env(folder: Path, out: List[str], own: bool) -> None:

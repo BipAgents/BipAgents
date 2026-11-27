@@ -186,3 +186,21 @@ def test_a_name_with_u007f_keeps_the_place_s_config_valid(tmp_path):
                                     None, {}, tmp_path / "profiles")
     data = tomllib.loads(merged)
     assert data["agents"]["coach"]["display_name"] == "Co\x7fach" and data["pronunciations"]["fr"] == {"K\x7f": "k"}
+
+
+def test_a_restore_keeps_the_sandbox_settings_as_hermes_writes_them(tmp_path):
+    """Hermes writes the bridge's `config set terminal.docker_…` into .env quoted, inner quotes escaped
+    (hermes_cli/config.py _quote_env_value): read back as Hermes reads it (_parse_env_value), they stay."""
+    hub = tmp_path / ".hermes"
+    coach = hub / "profiles" / "coach"
+    text = ("API_SERVER_KEY=k\nTERMINAL_ENV=docker\n"
+            'TERMINAL_DOCKER_EXTRA_ARGS="[\\"--network=bipagents-sandbox\\", \\"--dns=127.0.0.1\\"]"\n'
+            'TERMINAL_DOCKER_VOLUMES="[\\"bipagents-files-coach:/fichiers:ro\\"]"\n'
+            'TERMINAL_DOCKER_ENV="{\\"HTTP_PROXY\\": \\"http://10.233.80.2:3128\\"}"\n'
+            "TERMINAL_DOCKER_NETWORK=True\nTERMINAL_LIFETIME_SECONDS=300\n")
+    write(coach / ".env", text, 0o600)
+    assert profile_guard.own_code(hub) == {}
+    assert (coach / ".env").read_text() == text
+    write(coach / ".env", text.replace("--dns=127.0.0.1", "--privileged"), 0o600)
+    assert profile_guard.own_code(hub) == {str(coach): ["sandbox"]}
+    assert "TERMINAL_DOCKER_EXTRA_ARGS" not in (coach / ".env").read_text()
