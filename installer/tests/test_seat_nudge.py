@@ -163,11 +163,17 @@ def test_a_doorbell_is_never_handed_to_another_account(tmp_path, monkeypatch):
     agent.doorbells("vps-1", {1: me[0]}, str(folder), me)
     assert os.lstat(folder / "1").st_ino != linked and os.lstat(folder / "1").st_nlink == 1, "a linked doorbell kept"
     assert (tmp_path / "kept").read_text() == "1800000000\n", "the link elsewhere untouched"
-    before = os.lstat(folder / "1").st_ino
     (folder / "1").write_text("1800000001\n")
+    # Held open, the old account's file keeps its inode: a file system that hands a freed inode number straight
+    # back (ext4, the CI's runner) cannot make a new file look like the old one, nor the old one like a new one.
+    old = os.open(folder / "1", os.O_RDONLY)
     chowned = []
     monkeypatch.setattr(os, "chown", lambda *args, **kw: chowned.append(args))   # not root here
-    agent.doorbells("vps-1", {1: me[0] + 1}, str(folder), me)   # bip installed again: another uid
-    assert os.lstat(folder / "1").st_ino != before, "the old account's file chowned to the new one"
+    try:
+        agent.doorbells("vps-1", {1: me[0] + 1}, str(folder), me)   # bip installed again: another uid
+        assert os.lstat(folder / "1").st_ino != os.fstat(old).st_ino, "the old account's file chowned to the new one"
+        assert os.read(old, 64) == b"1800000001\n", "the old account's file left as it was"
+    finally:
+        os.close(old)
     assert (folder / "1").read_text() == "" and os.lstat(folder / "1").st_mtime == 0
     assert chowned and chowned[-1][1] == me[0] + 1
