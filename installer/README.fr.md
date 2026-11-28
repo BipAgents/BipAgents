@@ -138,7 +138,7 @@ ce que les agents ont manqué, seulement quand il y a quelque chose à ranger et
 
 `bipagents update` (ou `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s --
 update`, comme `bash ~/BipAgents/install.sh update`) met à jour l'installation de ce compte. `bipagents` seul liste ses
-commandes (update, qr, voice, console, hermes-update, bridge, family add, export, resume, send, backup,
+commandes (update, qr, voice, hermes-update, bridge, family add, export, resume, send, backup,
 browser-refresh, encrypt, uninstall) ; l'installateur le met dans `~/.local/bin`. Il montre ce qui est nouveau, relance
 seulement ce qui a changé (le bridge, les voix des Bips quand c'est ce compte qui les fait tourner, les navigateurs des
 agents quand leur image a changé : reconstruits, profils gardés), et applique les réglages qu'une nouvelle

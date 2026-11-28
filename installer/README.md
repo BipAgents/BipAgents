@@ -136,7 +136,7 @@ see docs/self-hosting.md.
 
 `bipagents update` (or `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s --
 update`, the same as `bash ~/BipAgents/install.sh update`) brings this account's install up to date. `bipagents` alone
-lists its commands (update, qr, voice, console, hermes-update, bridge, family add, export, resume, send, backup,
+lists its commands (update, qr, voice, hermes-update, bridge, family add, export, resume, send, backup,
 browser-refresh, encrypt, uninstall); the installer puts it in `~/.local/bin`. It shows what is new, restarts only
 what changed (the bridge, the Bips' voices when this account runs them, the agents' browsers when their image changed:
 rebuilt, their profiles kept), and applies the settings a fresh install now makes (`installer/bipinstall/migrations.py`:

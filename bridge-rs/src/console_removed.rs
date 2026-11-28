@@ -42,7 +42,24 @@ fn remove(path: &std::path::Path) -> std::io::Result<bool> {
 pub fn at_start(config: &Config) -> bool {
     let dir = config.data_dir();
     let path = std::path::PathBuf::from(py::join(&dir, FILE));
-    let sessions = std::fs::read_to_string(&path).map(|text| sessions_in(&text)).unwrap_or(0);
+    // only a regular file is read, never through a link, never blocking, at most 1 MB (security review 28/11, C1)
+    let sessions = {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .and_then(|file| {
+                if !file.metadata()?.file_type().is_file() {
+                    return Ok(String::new());
+                }
+                let mut text = String::new();
+                file.take(1 << 20).read_to_string(&mut text).map(|_| text)
+            })
+            .map(|text| sessions_in(&text))
+            .unwrap_or(0)
+    };
     let mut left = false;
     for target in [path.clone(), path.with_file_name(format!("{FILE}.tmp"))] {
         match remove(&target) {
