@@ -495,8 +495,9 @@ def test_an_earlier_bridge_block_gets_the_rule_about_what_agents_read(bridges, f
     soul = (home / "profiles" / "vie" / "SOUL.md").read_text()
     assert soul.startswith("Tu es Vie, ma personnalité à moi.") and CONTENT_RULE in soul
     assert "write in French." in soul and soul.count(SOUL_BLOCK) == 1
-    # answers with numbers, a plan or a comparison come with a live page placed in the reply (2026-10-22)
-    assert "put its MEDIA: line inside your reply, alone on its line where it belongs" in soul
+    # answers with numbers, a plan or a comparison come with a live page placed in the reply (2026-10-22); its words
+    # as souls.rs VISUAL_RULE says them since the rich replies (a05f3cfc9, 27/11)
+    assert "put its MEDIA: line alone on its line inside your reply" in soul
     # written by hand: kept, with the block added (every agent talks plainly, owner 2026-10-22)
     main = (home / "profiles" / "main" / "SOUL.md").read_text()
     assert main.startswith("Fait à la main, sans bloc.\n\n") and main.count(SOUL_BLOCK) == 1

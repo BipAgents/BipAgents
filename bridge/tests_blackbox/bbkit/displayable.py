@@ -209,6 +209,17 @@ def _item(bridge, item: Dict[str, Any], agent: Optional[str], out: List[str], fe
             out.append(f"{where}: an open follow-up with nothing to answer")
         elif state != "open" and card != "forget" and not (item.get("text") or "").strip():
             out.append(f"{where}: a folded Carnet card with no words")
+    elif kind == "bips":
+        # the small Bips launched in this conversation (part B, threads/bips.rs): drawn by both apps (iPhone
+        # `.smallBips`, Android `Item.SmallBips`), each its id, where it comes from, its words and its state
+        bips = item.get("bips")
+        if not (isinstance(bips, list) and bips):
+            out.append(f"{where}: a small Bips item with no Bip")
+        for bip in bips if isinstance(bips, list) else []:
+            if not (isinstance(bip, dict) and bip.get("id") and bip.get("source") in ("task", "helper")
+                    and (bip.get("title") or "").strip()
+                    and bip.get("state") in ("working", "waiting", "paused", "done", "failed", "stopped")):
+                out.append(f"{where}: a small Bip the apps can't draw: {bip!r:.200}")
     else:
         out.append(f"{where}: kind {kind!r} no app draws (left out silently)")
 

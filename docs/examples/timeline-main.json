@@ -121,7 +121,9 @@
     "keep": 200,
     "pending": false
   },
+  "bips": true,
   "layout": {
     "open": null
-  }
+  },
+  "bips_now": {}
 }
