@@ -852,7 +852,7 @@ pub fn delete(config: &Config, id: &str) -> bool {
 // « Vie a créé la routine « Archive du soir » : chaque jour à 23:00. La démarrer ? », with all it will run in its detail
 // (« Ce qu'elle fera : … », the whole prompt on one line). Until the apps draw a creation card of their own that says
 // so and offers a no (review A1), it is a GENERIC card (owner's decision O-1, option a): no `bip_routine`, so every
-// app build and the console draw it with its sentence, its detail behind « i » and « Oui / Non »; the approval level
+// app build draws it with its sentence, its detail behind « i » and « Oui / Non »; the approval level
 // reads it as `routine_change`, critical like `routine_way` (approval_level.rs: asked and pushed at every level). Its
 // answers (`POST /v1/approve`, run id `bip-rout-<card>`; `starts`):
 //

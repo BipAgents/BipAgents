@@ -2,8 +2,8 @@
 
 Design of the « conversations + notifications » rebuild (approved by Alex on 2026-11-02: « Je veux ça propre »).
 Sources: `BipAgents-reprise/dette-technique.md` (area #1) and `BipAgents-reprise/notifications-refonte.md`
-(phases 1 and 2). This file is the contract between the bridge (`bridge-rs/`) and the apps (iOS, Android, web
-console). The apps build on the API described in §6 and §9; the bridge keeps it stable.
+(phases 1 and 2). This file is the contract between the bridge (`bridge-rs/`) and the apps (iOS, Android). The apps
+build on the API described in §6 and §9; the bridge keeps it stable.
 
 Status of each part is in §12.
 
@@ -763,10 +763,6 @@ bridge adds the agent's quick-turn thinking (`quick_turn_options`). One request 
 words come as early as from Hermes itself. The call's recap joins the next written message on the bridge's side
 (`message_notes`): `POST /v1/live/recaps` and `/v1/live/recaps/take`, and the phones' own recaps, are gone.
 
-**The web console** (`/console/`) uses the same routes: the thread list, the timeline and its events stream (on screen
-while open), the send and stop routes, `POST /v1/approve` for approvals and questions, a run's events at
-`/v1/runs/{id}/events`.
-
 ## 7. How the apps use it (target)
 
 - **One cache per thread, keyed by item id.** Merge rule: an item with a known id replaces the cached one; a new id is
@@ -1039,5 +1035,5 @@ The bridge grows because it now does what each app did twice. The code this make
 | Android `ChatModel.kt` | `thread()`, `restore()`, `keepAnswer()`, `showPendingApproval()`, outbox merge | ~600 of 1,633 lines |
 | Android | `net/Hermes.kt` message parsing (`unwrap`, `isHandoff`, `rescueLine`, `asNotice`, `tidy`), `MessageFocus.kt` | ~350 |
 | Android | `"Bot Chat"` comparisons | 18 sites |
-| Bridge, step 4 | done: the apps' `/hermes/<agent>/…` runs, steers, approvals and questions, `/v1/approvals/answered`, `/v1/agents/{id}/queue` POST and `/steer`, the shared-agents conversation routes (conv-step4). Left: `/v1/live/calls` GET, `/v1/sessions/{id}/state` (web console) | — |
+| Bridge, step 4 | done: the apps' `/hermes/<agent>/…` runs, steers, approvals and questions, `/v1/approvals/answered`, `/v1/agents/{id}/queue` POST and `/steer`, the shared-agents conversation routes (conv-step4). Left: `/v1/live/calls` GET, `/v1/sessions/{id}/state` | — |
 | Bridge, with botchat-v0225 merged | the four `"Bot Chat"` constants become `threads::LEGACY_MAIN_TITLE` (adoption only) | 6 sites |

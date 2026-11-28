@@ -3,8 +3,9 @@
 //!
 //! In axum: [`require_bridge_key`] is the middleware app.rs puts on every router Python mounts with
 //! `Depends(require_bridge_key)`; it leaves a [`Caller`] in the request's extensions (Python's
-//! `request.state.console` / `request.state.device`). [`ClientAddr`] is Python's `request.client.host`, with
-//! uvicorn's `proxy_headers` rule (an `X-Forwarded-For` from 127.0.0.1, `tailscale serve`, is believed).
+//! `request.state.device`; the web console's sessions stood for the key too until 1.1, console_removed.rs).
+//! [`ClientAddr`] is Python's `request.client.host`, with uvicorn's `proxy_headers` rule (an `X-Forwarded-For` from
+//! 127.0.0.1, `tailscale serve`, is believed).
 
 use std::net::SocketAddr;
 
@@ -170,11 +171,9 @@ pub fn address_of(parts: &Parts) -> Option<String> {
     client_host(peer, &parts.headers)
 }
 
-/// Who passed the bridge-key check (Python's `request.state.console` and `request.state.device`).
+/// Who passed the bridge-key check (Python's `request.state.device`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Caller {
-    /// A web console's session (console.py): it never holds the key.
-    pub console: bool,
     /// The device whose own key was presented (device_keys.py), when it was not the bridge key.
     pub device: Option<String>,
 }
@@ -197,17 +196,9 @@ fn too_many() -> HttpError {
     HttpError::new(429, "too many wrong keys, try again later")
 }
 
-/// What a web console never does, whatever its session (security audit 1.11 / 6.8, 17/11): show a password of the
-/// vault in clear (`POST /v1/vault/{id}/reveal`), which the app does only behind Face ID or the phone's lock.
-pub fn app_only(method: &axum::http::Method, path: &str) -> bool {
-    let parts: Vec<&str> = path.trim_end_matches('/').split('/').filter(|p| !p.is_empty()).collect();
-    *method == axum::http::Method::POST
-        && matches!(parts.as_slice(), [.., "vault", id, "reveal"] if !id.is_empty())
-}
-
-/// The bridge key (the app), or a web console's session (console.py; `Caller.console` then says so). An address
-/// that kept presenting wrong keys is refused for a while (guard.py). A request from an app wakes a sleeping place
-/// first (sleep.py).
+/// The bridge key (the app) or a device's own key (device_keys.rs); nothing else since 1.1 (the web console's
+/// sessions went with it, console_removed.rs). An address that kept presenting wrong keys is refused for a while
+/// (guard.py). A request from an app wakes a sleeping place first (sleep.py).
 pub async fn require_bridge_key(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let (mut parts, body) = request.into_parts();
     let address = address_of(&parts);
@@ -225,16 +216,9 @@ pub async fn require_bridge_key(State(state): State<AppState>, request: Request,
     if matched || device.is_some() {
         // the Carnet's weekly review counts the days the app was opened (notebook/ask.rs: once a day, nothing else)
         crate::notebook::ask::app_seen_soon(&config);
-        parts.extensions.insert(Caller { console: false, device });
+        parts.extensions.insert(Caller { device });
         // A request from an app: a place asleep (sleep.py) wakes its Hermes first.
         state.sleep.awake().await;
-        return next.run(Request::from_parts(parts, body)).await;
-    }
-    if crate::console::is_console(&state, &parts.headers) {
-        if app_only(&parts.method, parts.uri.path()) {
-            return HttpError::new(403, "only from the app (behind Face ID or the phone's lock)").into_response();
-        }
-        parts.extensions.insert(Caller { console: true, device: None });
         return next.run(Request::from_parts(parts, body)).await;
     }
     if presented.is_some() {

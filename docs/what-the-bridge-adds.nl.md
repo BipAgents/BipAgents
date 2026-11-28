@@ -15,7 +15,7 @@ toevoegt, met de modules (`bridge-rs/src/<naam>.rs`) die het doen, en wat hij be
 
 | Gebied | Alleen Hermes | Hermes + andere clients | BipAgents-bridge |
 |---|---|---|---|
-| Ermee praten | terminal, chatgateways, Runs-API | een chatvenster (desktop-app, Telegram…) | apps voor iPhone, iPad en Android, spraakberichten, handsfree Live-gesprekken, een webconsole |
+| Ermee praten | terminal, chatgateways, Runs-API | een chatvenster (desktop-app, Telegram…) | apps voor iPhone, iPad en Android, spraakberichten, handsfree Live-gesprekken |
 | Stemmen | geen | geen, of die van het platform | een stem per agent, zin voor zin terwijl het antwoord binnenkomt, tekst voorbereid op spraak in 5 talen |
 | Buiten de app | de berichten van de gateway | de meldingen van het platform | pushmeldingen waarvan de tekst verzegeld is voor je telefoon, goedkeuringen en vragen vanaf het vergrendelscherm, Live Activities |
 | Meerdere agents | profielen, met de hand ingesteld | meestal één agent tegelijk | agents in 2 s gemaakt vanuit de app, elk met een eigen sandbox, browser, tools, stem en geheugentaal |
@@ -49,8 +49,7 @@ toevoegt, met de modules (`bridge-rs/src/<naam>.rs`) die het doen, en wat hij be
 - **Niets kwijt.** `outbox.rs` en `cronwatch.rs` zetten berichten van agents en het antwoord van elke routine in een
   outbox (`store.rs`), met de audio klaar.
 - **Thuis bereiken.** Via Tailscale, of `lan.rs`: een vastgepinde HTTPS-deur op het lokale netwerk als internet
-  wegvalt. `device_keys.rs` geeft elk apparaat een eigen sleutel; `guard.rs` telt foute sleutels; `console.rs` is de
-  webconsole.
+  wegvalt. `device_keys.rs` geeft elk apparaat een eigen sleutel; `guard.rs` telt foute sleutels.
 - **Gewone woorden.** `approval_text.rs`, `approval_command.rs`, `no_reply.rs`, `names.rs`, `answer_style.rs` en
   `welcome.rs` maken van de technische gebeurtenissen van Hermes korte zinnen in de taal van de persoon.
 

@@ -300,9 +300,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "browser-refresh":   # browser_refresh.py: the agents' browser kept up to date, each night
         from .browser_refresh import main as browser_refresh_main
         return browser_refresh_main(argv[1:])
-    if argv and argv[0] == "console":   # a one-time link to the web console, from the bridge
-        from .console import main as console_main
-        return console_main(argv[1:])
     if argv and argv[0] in ("family", "famille"):   # « famille ajouter »: its first name, kept working
         from .family import main as family_main
         return family_main(argv[1:])
@@ -315,8 +312,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser =argparse.ArgumentParser(prog="bipinstall", description="Install BipAgents for this account "
                                      "(`bipinstall uninstall` removes it; `bipinstall family add <name>` prepares a "
                                      "family member's install on this server; `bipinstall update` brings it up to date; `bipinstall voice` connects your own voice "
-                                     "model (a TTS server on the network); `bipinstall console` gives a link to the web "
-                                     "console; `bipinstall hermes-update` updates Hermes "
+                                     "model (a TTS server on the network); `bipinstall hermes-update` updates Hermes "
                                      "and checks the agents)")
     parser.add_argument("--dry-run", action="store_true", help="show every step without changing anything")
     parser.add_argument("--push-service", default=PUSH_SERVICE_URL or None,

@@ -149,20 +149,14 @@ pub fn start_restore(config: &Config, key: &str) -> std::io::Result<()> {
 }
 
 /// The person recovered their account without any of their devices, or removed one of them (the guichet's signed
-/// order put a new pairing secret here): every device key and web console goes, the bridge key changes (nobody has the
-/// new one), the account's SSH keys go too, and the device that proved the secret gets a key of its own. Returns it.
+/// order put a new pairing secret here): every device key goes, the bridge key changes (nobody has the new one), the
+/// account's SSH keys go too, and the device that proved the secret gets a key of its own. Returns it.
 pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
     let config = state.config();
     let keys = crate::device_keys::of(&config);
     keys.clear();
     let (_, key) = keys.mint(name)?;
     rotate_bridge_key(state)?;
-    // the web consoles opened from the old devices too
-    for session in state.console.devices() {
-        if let Some(id) = session.get("id") {
-            state.console.revoke(&crate::py::py_str(id));
-        }
-    }
     // and any SSH key put in the account since the place started (security review 2026-11-26, E3; the app adds none
     // since 26/11, ssh_keys.rs): nothing a removed device left may open it. After the keys above, so that nothing in
     // those files can keep a removed device's key valid. Only in the place's home from the config, never $HOME

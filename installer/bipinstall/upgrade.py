@@ -201,7 +201,6 @@ COMMAND_HELP = """BipAgents, in this account:
   bipagents update --check   only say what is new
   bipagents qr [ACCOUNT]     show the code to scan in the app again (ACCOUNT: another install, with sudo)
   bipagents voice            connect your own voice model (a TTS server on the network)
-  bipagents console          a one-time link opening your agents in a computer's browser
   bipagents hermes-update    update Hermes and keep BipAgents working (--to-bipagents: your own Hermes moved
                              to the version BipAgents is tested on, with every patch; --undo-move: back)
   bipagents bridge [CMD …]   which bridge version runs; `bridge rust` fetches it again; `bridge check`, `bridge

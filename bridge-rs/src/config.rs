@@ -869,8 +869,8 @@ pub struct Config {
     /// The bridge as the agents reach it, for messages between agents (peers.py). Default:
     /// http://127.0.0.1:<port>/peer; e.g. http://host.containers.internal:8643/peer for agents in containers.
     pub peer_url: Option<String>,
-    /// A server the app created in the person's own account (« no computer »): the door is on the Internet, the
-    /// web console is off and wrong keys are limited (guard.py).
+    /// A server the app created in the person's own account (« no computer »): the door is on the Internet and
+    /// wrong keys are limited (guard.py).
     pub cloud: bool,
     /// The account's home on a place of the offer: the only folder whose SSH keys this bridge takes away (at its start
     /// and at a reopen), and only while `cloud` (ssh_keys.rs). `place_home` in bridge.toml (an absolute path), else
@@ -992,7 +992,7 @@ impl Config {
     }
 
     /// The folder next to the database (`os.path.dirname(config.outbox.db_path)`): where the bridge keeps its
-    /// other files (vault/, peers.json, console.json, briefs/…).
+    /// other files (vault/, peers.json, briefs/…).
     pub fn data_dir(&self) -> String {
         py::dirname(&self.outbox.db_path)
     }

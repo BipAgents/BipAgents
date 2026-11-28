@@ -1,5 +1,5 @@
-//! The bridge's data files, embedded from `assets/` (one source of truth): the web console's
-//! page and scripts, noVNC and the vendored Chart.js, the agents' skills, and the YAML catalogs. Plus
+//! The bridge's data files, embedded from `assets/` (one source of truth): noVNC and the vendored
+//! Chart.js, the agents' skills, and the YAML catalogs (the web console's page went in 1.1). Plus
 //! [`static_router`], Starlette's `StaticFiles` for an embedded folder.
 //!
 //! Not a Python module: shared plumbing (core group).
@@ -14,8 +14,6 @@ use sha2::{Digest, Sha256};
 
 use crate::app::AppState;
 
-/// `assets/console/` (index.html, static/…).
-pub static CONSOLE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/console");
 /// `assets/static/` (novnc/, vendor/chart.umd.min.js).
 pub static STATIC: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/static");
 /// `assets/skills/` (visible-browser/SKILL.md, shared-data/SKILL.md).
@@ -119,7 +117,6 @@ mod tests {
 
     #[test]
     fn package_data_is_embedded() {
-        assert!(text(&CONSOLE, "index.html").is_some());
         assert!(file(&STATIC, "vendor/chart.umd.min.js").is_some());
         assert!(text(&SKILLS, "visible-browser/SKILL.md").is_some());
         assert!(AGENT_TEMPLATES_YAML.contains("daily") || !AGENT_TEMPLATES_YAML.is_empty());

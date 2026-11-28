@@ -14,8 +14,8 @@ Live, les fichiers, les notifications (directement ou par le [relais](../relay/R
 questions, la Boîte et les tâches planifiées, le Carnet (`src/notebook/`) avec ses fiches, voyages et archives, les
 connecteurs (mail, agenda et CalDAV, notes, rappels, contacts, santé, météo, cartes), le navigateur visible et le coffre
 de chaque agent (identifiants et cartes), les bacs à sable isolés des agents, les dossiers partagés et les sites
-autorisés, les tâches de fond, les pages et les podcasts, les liens familiaux entre installations, les groupes, la
-console web (`/console/`), la mise en place et les sauvegardes de l'offre, et le chiffrement de l'espace sur le disque.
+autorisés, les tâches de fond, les pages et les podcasts, les liens familiaux entre installations, les groupes, la mise
+en place et les sauvegardes de l'offre, et le chiffrement de l'espace sur le disque.
 Chaque module de `bridge-rs/src/` commence par un commentaire sur ce qu'il fait et ses routes ; les sections ci-dessous
 documentent le cœur d'origine (voix, fichiers, push, accords), que les apps utilisent toujours tel quel.
 

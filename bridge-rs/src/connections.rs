@@ -35,7 +35,7 @@
 //! aren't loopback (a Tailscale `http://100.x…` address), and an https one needs a domain and certificate the
 //! install may not have. PKCE keeps it safe: an app that caught the code can't use it without the verifier, which
 //! never leaves the bridge. `return_to: "bridge"` (the bridge's `public_url`, or `[connections] callback_url`) is
-//! there for the web console and installs with a public https address.
+//! there for installs with a public https address.
 //!
 //! How it works: discovery as the MCP authorization spec says (protected resource metadata, RFC 9728, then the
 //! authorization server's metadata, RFC 8414, whose issuer must be the catalog's), dynamic client registration

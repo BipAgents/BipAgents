@@ -32,7 +32,7 @@ scripts/blackbox-parallel.sh [--workers 10] [--junit out.xml] [tests_blackbox/te
 ```
 
 `BRIDGE_CMD` is split like a shell command line and must end with `serve`. The CLI tests use the same command
-without `serve`, followed by the subcommand they need: `check`, `genkey`, `qr --json [--agent X]`, `console`,
+without `serve`, followed by the subcommand they need: `check`, `genkey`, `qr --json [--agent X]`,
 `peer-token --agent X`, `shares-mounts --agent X`, `agent-tools --agent X`, `spaces start`, `adopt`, `browser remove --agent X`. The suite
 needs no network and runs nothing as root. It uses about 30 local ports: `bind(0)` ones serially; under pytest-xdist each worker takes its ports from a block of
 500 of its own below Linux's ephemeral range (`bbkit/servers.py` `free_port`), so workers never pick the same port. A
@@ -94,7 +94,7 @@ Per-test rules can make a command fail or print something (`bridge.commands.rule
 **Files written before or read after.** The suite checks the on-disk contract directly:
 
 - SQLite tables, created with the Python schema before a start.
-- `console.json`, `peers.json`, `agent-tools.json`, `households.json`, `reminders.json`, `device-keys.json`.
+- `peers.json`, `agent-tools.json`, `households.json`, `reminders.json`, `device-keys.json`.
 - The Fernet stores: `vault/` and `mail/`, decrypted with their key.
 - `jobs/`, `mail-scans/`, `briefs/`, `call-recaps/`, `agent-pages/`, `agent-audio/`, `favicons/`, `sleep.json`.
 - The bridge's own TOML (agents added, rewritten or removed; `[model]`, `[voice_server]`, `bridge_key` after a

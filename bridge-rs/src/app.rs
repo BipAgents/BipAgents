@@ -29,7 +29,6 @@ use crate::agent_tools::AudioMaker;
 use crate::apns::ApnsClient;
 use crate::auth::require_bridge_key;
 use crate::config::{AgentConfig, Config, SharedConfig};
-use crate::console::ConsoleStore;
 use crate::cronwatch::{CronWatcher, Presence};
 use crate::desktop::Tickets;
 use crate::fcm::FcmClient;
@@ -106,8 +105,6 @@ pub struct Services {
     pub threads: OnceLock<Arc<crate::threads::Threads>>,
     /// Wrong keys counted by address (guard.py): Python's `app.state.guard`.
     pub guard: Guard,
-    /// The web consoles (console.py): Python's `app.state.console`.
-    pub console: ConsoleStore,
     /// Every SOUL.md as it was before the start rewrote any (agents_admin::souls_now), taken by the first pass of
     /// dates::run_forever: what the start changed reaches the agents' ongoing conversations.
     pub start_souls: Mutex<Option<std::collections::BTreeMap<String, String>>>,
@@ -236,7 +233,6 @@ impl Services {
             queues: OnceLock::new(),
             threads: OnceLock::new(),
             guard: Guard::default(),
-            console: ConsoleStore::new(&py::join(&data_dir, "console.json")),
             start_souls: Mutex::new(None),
             tasks: Mutex::new(Vec::new()),
         })
@@ -1904,6 +1900,9 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     // a place of the offer: no SSH key left in its account (no SSH there since 26/11), whatever put one there, a
     // reopen that could not remove them included (ssh_keys.rs)
     crate::ssh_keys::at_start(&config);
+    // the web console is gone (1.1): its sessions' file deleted, every browser it let in revoked; the phone's and the
+    // devices' keys untouched (console_removed.rs)
+    crate::console_removed::at_start(&config);
     crate::family_agent::drop_stale_temporaries(&config); // what a hard stop left of the family Carnet's writes
     // the souls as this start finds them, before it rewrites any (dates::run_forever tells the conversations)
     *state.start_souls.lock().unwrap_or_else(|e| e.into_inner()) = Some(crate::agents_admin::souls_now(&config));
@@ -1931,12 +1930,12 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     let mut agent_names: Vec<&String> = config.agents.keys().collect();
     agent_names.sort();
     tracing::info!(version = VERSION, agents = ?J(&agent_names), apns = state.apns.is_some(), "bridge started");
-    let router = assemble(&state, &config);
+    let router = assemble(&state);
     crate::family_relay::set_router(router.clone()); // the calls a linked household keeps for us, run here
     Ok(App { router, state })
 }
 
-fn assemble(state: &AppState, config: &Config) -> Router {
+fn assemble(state: &AppState) -> Router {
     let auth = || middleware::from_fn_with_state(state.clone(), require_bridge_key);
     let (import_admin, import_open) = crate::place_import::place_import_routers(None);
     // Everything Python mounts under /v1 with Depends(require_bridge_key), in its order.
@@ -2015,9 +2014,6 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::outlook::router()) // « Outlook », 404 while `[outlook]` is off
         .merge(crate::live_activities::router())
         .merge(crate::skill_library::router());
-    if !config.cloud {
-        authed = authed.merge(crate::console::console_admin_router());
-    }
     authed = authed
         .merge(crate::peers::household_admin_router())
         .merge(crate::rules_live::router())
@@ -2038,10 +2034,6 @@ fn assemble(state: &AppState, config: &Config) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .merge(Router::new().nest("/v1", authed.route_layer(auth())));
-    if !config.cloud {
-        // on the Internet (a server the app created), no web console: one door less
-        app = app.merge(crate::console::console_router()).nest("/console/static", crate::console::console_files());
-    }
     app = app
         .merge(Router::new().nest("/v1", open))
         // The agents' Hermes through the bridge: on the LAN door, and for agents in their own space (their gateway

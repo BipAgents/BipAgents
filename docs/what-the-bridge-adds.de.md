@@ -16,7 +16,7 @@ sie bewusst Hermes überlässt.
 
 | Bereich | Hermes allein | Hermes + andere Clients | BipAgents-Bridge |
 |---|---|---|---|
-| Mit ihm sprechen | Terminal, Chat-Gateways, Runs-API | ein Chatfenster (Desktop-App, Telegram…) | Apps für iPhone, iPad und Android, Sprachnachrichten, freihändige Live-Anrufe, eine Web-Konsole |
+| Mit ihm sprechen | Terminal, Chat-Gateways, Runs-API | ein Chatfenster (Desktop-App, Telegram…) | Apps für iPhone, iPad und Android, Sprachnachrichten, freihändige Live-Anrufe |
 | Stimmen | keine | keine oder die der Plattform | eine Stimme pro Agent, Satz für Satz während die Antwort läuft, Text für die Sprache in 5 Sprachen aufbereitet |
 | Außerhalb der App | die Nachrichten des Gateways | die Benachrichtigungen der Plattform | Push, dessen Text für dein Handy versiegelt ist, Freigaben und Fragen vom Sperrbildschirm, Live Activities |
 | Mehrere Agenten | Profile, von Hand eingerichtet | meist ein Agent auf einmal | Agenten in 2 s aus der App erstellt, jeder mit eigener Sandbox, eigenem Browser, eigenen Werkzeugen, eigener Stimme und Gedächtnissprache |
@@ -52,8 +52,7 @@ sie bewusst Hermes überlässt.
 - **Nichts geht verloren.** `outbox.rs` und `cronwatch.rs` legen Agentennachrichten und die Antwort jeder Routine in
   einen Postausgang (`store.rs`), mit fertigem Audio.
 - **Nach Hause kommen.** Über Tailscale oder `lan.rs`: eine gepinnte HTTPS-Tür im lokalen Netz, wenn das Internet weg
-  ist. `device_keys.rs` gibt jedem Gerät einen eigenen Schlüssel; `guard.rs` zählt falsche Schlüssel; `console.rs` ist
-  die Web-Konsole.
+  ist. `device_keys.rs` gibt jedem Gerät einen eigenen Schlüssel; `guard.rs` zählt falsche Schlüssel.
 - **Einfache Worte.** `approval_text.rs`, `approval_command.rs`, `no_reply.rs`, `names.rs`, `answer_style.rs` und
   `welcome.rs` machen aus den technischen Ereignissen von Hermes kurze Sätze in der Sprache der Person.
 

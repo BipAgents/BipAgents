@@ -48,7 +48,6 @@
 "test_config.py": 0.1,
 "test_connections.py": 5.9,
 "test_connectors.py": 5.5,
-"test_console.py": 0.4,
 "test_contacts.py": 1.2,
 "test_cronwatch.py": 38.2,
 "test_desktop.py": 0.9,
