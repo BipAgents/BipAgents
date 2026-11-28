@@ -5,6 +5,7 @@ connection closed, and the creation stopped half way: its Hermes profile made, t
 Now (agent_making.rs): the creation runs in a task of its own, never cut by the app; while it runs its profile is never
 offered to link; past `[guide] answer_wait_seconds` the card answers « still being made » (202) and the same tap waits
 for the same agent; a real failure is tried once more, then said as one, nothing of it left behind."""
+import threading
 import uuid
 
 import httpx
@@ -17,11 +18,14 @@ from test_agent_create import GUIDE_TOKEN
 from test_guide import place
 
 
-def card_for(bridge, name, role="Mes recettes de la semaine"):
+def card_for(bridge, name, role="Mes recettes de la semaine", tools=None):
     """Bip (made first) proposes « Créer <name> »: the card, as the apps read it."""
     bip = bridge.post("/v1/guide/create-agent", headers=AUTH, json={"lang": "fr"}).json()["agent"]["id"]
     give_token(bridge, bip, GUIDE_TOKEN)
-    made = call(bridge, "propose_agent", {"kind": "daily", "name": name, "role": role, "for": "me"}, token=GUIDE_TOKEN)
+    card = {"kind": "daily", "name": name, "role": role, "for": "me"}
+    if tools:
+        card["tools"] = tools
+    made = call(bridge, "propose_agent", card, token=GUIDE_TOKEN)
     assert not made["isError"], text_of(made)
     return next(c for c in bridge.get("/v1/guide", headers=AUTH).json()["proposals"] if c.get("name") == name)
 
@@ -47,7 +51,10 @@ def test_a_card_the_app_gave_up_on_is_made_all_the_same_and_never_offered_to_lin
     # the app gives up waiting and its connection closes (Android at 60 s, the iPhone at 90 s)
     with pytest.raises(httpx.TimeoutException):
         httpx.post(accept_url(bridge, card), headers=AUTH, json={"lang": "fr"}, timeout=1.5)
-    assert (home / "profiles" / "cuisine" / "config.yaml").is_file()
+    # the profile's folder, written by `hermes profile create` before the held command: on a loaded machine a moment
+    # after the app gave up (the pre-test's CI, 27/11: red at once), so waited for as everywhere in the black box
+    config = home / "profiles" / "cuisine" / "config.yaml"
+    assert wait_until(config.is_file, timeout=30), bridge.log_tail()
     # being made: never a profile « created on the server » to link on the home
     assert listing(bridge)["unclaimed"] == []
     go_on.touch()
@@ -62,6 +69,46 @@ def test_a_card_the_app_gave_up_on_is_made_all_the_same_and_never_offered_to_lin
     assert again.json()["agent"]["id"] == "cuisine"
     assert sorted(p.name for p in (home / "profiles").iterdir() if p.name.startswith("cuisine")) == ["cuisine"]
     assert not (home / "profiles" / "cuisine" / ".bipagents-making").exists()
+
+
+def test_an_agent_made_from_a_card_is_never_listed_without_requested(bridges, fakes):
+    """28/11 (int-1.1e): the card's agent was put in the bridge's config, then its look and tools were set (a `hermes`
+    command), and only then marked « requested »: a phone reading `GET /v1/agents` meanwhile saw it without the mark
+    and did not put it on its home by itself (a 2nd red of this file, 1 in 19 on the build server). Here its tools'
+    command is held: while it waits, the agent is either not listed yet or listed « requested »."""
+    bridge, home = place(bridges, fakes, agents=("coach",))
+    card = card_for(bridge, "Cuisine", tools=["web"])
+    go_on = bridge.root / "go-on"
+    bridge.commands.rule("hermes", ["-p", "cuisine", "tools", "enable"], hold=str(go_on), times=1)
+    answer = []
+    accept = threading.Thread(target=lambda: answer.append(httpx.post(accept_url(bridge, card), headers=AUTH,
+                                                                       json={"lang": "fr"}, timeout=60)))
+    accept.start()
+    try:
+        # its tools' command is reached: the agent is made and in the config by then
+        assert wait_until(lambda: any(c[:4] == ["-p", "cuisine", "tools", "enable"]
+                                      for c in bridge.commands.of("hermes")), timeout=30), bridge.log_tail()
+        listed = next((a for a in listing(bridge)["agents"] if a["id"] == "cuisine"), None)
+        assert listed is None or listed["requested"], listed
+    finally:
+        go_on.touch()
+        accept.join(60)
+    assert answer and answer[0].status_code in (200, 201, 202), answer and answer[0].text
+    assert wait_until(lambda: "cuisine" in ids(bridge), timeout=30), bridge.log_tail()
+    assert next(a for a in listing(bridge)["agents"] if a["id"] == "cuisine")["requested"]
+
+
+def test_an_agent_whose_tools_fail_stays_and_stays_requested(bridges, fakes):
+    """Its look or tools failing (look_and_tools: noted, never undone): the agent is made all the same and stays on
+    the home, « requested »; nothing of it to « link »."""
+    bridge, home = place(bridges, fakes, agents=("coach",))
+    card = card_for(bridge, "Cuisine", tools=["web"])
+    bridge.commands.rule("hermes", ["-p", "cuisine", "tools", "enable"], exit=1, stderr="Error: broken")
+    made = bridge.post(f"/v1/guide/proposals/{card['id']}/accept", headers=AUTH, json={"lang": "fr"})
+    assert made.status_code in (200, 201), made.text
+    view = listing(bridge)
+    assert view["unclaimed"] == []
+    assert next(a for a in view["agents"] if a["id"] == "cuisine")["requested"], view
 
 
 def test_a_slow_card_answers_still_being_made_then_its_agent(bridges, fakes):

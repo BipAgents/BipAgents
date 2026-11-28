@@ -1563,13 +1563,16 @@ async fn agent_card(
             .await
             .map_err(creation_failed)?
     };
+    // « requested » at once, as the family's agent above: listed from here on (`GET /v1/agents`), a phone reading the
+    // list during its look and tools (a `hermes` command, slow on a busy machine) saw it without the mark and did not
+    // put it on its home by itself (28/11). Its look or tools failing never removes it (look_and_tools notes it only).
+    note_requested(&state.config(), &agent.name);
     // its look and the tiles that need nothing, as the form does; the others wait for the person (`suggested`)
     let tools = strings(proposal, "tools");
     crate::guide_team::look_and_tools(state, &agent, &kind, None, &tools).await;
     let mut suggested: Vec<String> =
         tools.into_iter().filter(|t| !crate::guide_team::ON_AT_CREATION.contains(&t.as_str())).collect();
     suggested.extend(strings(proposal, "services"));
-    note_requested(&state.config(), &agent.name);
     let config = state.config();
     let agent = config.agents.get(&agent.name).cloned().unwrap_or(agent);
     crate::beta_measures::card_accepted(&config, None, now());
