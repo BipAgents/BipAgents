@@ -2033,7 +2033,12 @@ fn assemble(state: &AppState, config: &Config) -> Router {
     // Under /v1 without the bridge key: a computer sending its agents (the app's one-time code instead), and a
     // server the app created until the app claims it (its own proofs).
     // The phone exit's tunnel (prototype): the phone's own token.
-    let open = Router::new().merge(import_open).merge(crate::cloud_setup::router()).merge(crate::phone_exit::open_router());
+    // The guichet's doorbell (seat_nudge.rs): its signature instead of the bridge key, on a place of the offer only.
+    let open = Router::new()
+        .merge(import_open)
+        .merge(crate::cloud_setup::router())
+        .merge(crate::seat_nudge::router())
+        .merge(crate::phone_exit::open_router());
 
     let mut app = Router::new()
         .route("/health", get(health))

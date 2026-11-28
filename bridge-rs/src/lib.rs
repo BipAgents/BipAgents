@@ -279,6 +279,7 @@ pub mod script_shape; // what an agent's script does, from its syntax (browser_m
 pub mod link_wallet;
 pub mod cards;
 pub mod cloud_setup;
+pub mod seat_nudge; // the guichet's doorbell: a place's seat agent looks at its orders now
 pub mod console;
 pub mod contacts;
 pub mod desktop;
