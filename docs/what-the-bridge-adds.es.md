@@ -16,7 +16,7 @@ solo programa en Rust, `bipbridge`). Esta página recoge lo que añade, área po
 
 | Área | Hermes solo | Hermes + otros clientes | Bridge de BipAgents |
 |---|---|---|---|
-| Hablarle | terminal, pasarelas de chat, API Runs | una ventana de chat (app de escritorio, Telegram…) | apps para iPhone, iPad y Android, notas de voz, llamadas Live manos libres, una consola web |
+| Hablarle | terminal, pasarelas de chat, API Runs | una ventana de chat (app de escritorio, Telegram…) | apps para iPhone, iPad y Android, notas de voz, llamadas Live manos libres |
 | Voces | ninguna | ninguna, o la de la plataforma | una voz por agente, frase a frase mientras llega la respuesta, texto preparado para hablar en 5 idiomas |
 | Fuera de la app | los mensajes de la pasarela | las notificaciones de la plataforma | notificaciones cuyo texto va sellado para tu móvil, aprobaciones y preguntas desde la pantalla de bloqueo, Live Activities |
 | Varios agentes | perfiles, configurados a mano | normalmente un agente a la vez | agentes creados en 2 s desde la app, cada uno con su sandbox, su navegador, sus herramientas, su voz y el idioma de su memoria |
@@ -51,8 +51,7 @@ solo programa en Rust, `bipbridge`). Esta página recoge lo que añade, área po
 - **Nada se pierde.** `outbox.rs` y `cronwatch.rs` guardan los mensajes de los agentes y la respuesta de cada rutina en
   una bandeja de salida (`store.rs`), con el audio listo.
 - **Llegar a casa.** Por Tailscale, o `lan.rs`: una puerta HTTPS fijada en la red local cuando falla Internet.
-  `device_keys.rs` da a cada dispositivo su clave; `guard.rs` cuenta las claves erróneas; `console.rs` es la consola
-  web.
+  `device_keys.rs` da a cada dispositivo su clave; `guard.rs` cuenta las claves erróneas.
 - **Palabras sencillas.** `approval_text.rs`, `approval_command.rs`, `no_reply.rs`, `names.rs`, `answer_style.rs` y
   `welcome.rs` convierten los eventos técnicos de Hermes en frases cortas en el idioma de la persona.
 

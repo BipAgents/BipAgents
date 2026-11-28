@@ -15,7 +15,7 @@ that do it, and what it deliberately leaves to Hermes.
 
 | Area | Hermes alone | Hermes + other clients | BipAgents bridge |
 |---|---|---|---|
-| Talking to it | terminal, chat gateways, Runs API | a chat window (desktop app, Telegram…) | iPhone, iPad and Android apps, voice notes, hands-free Live calls, a web console |
+| Talking to it | terminal, chat gateways, Runs API | a chat window (desktop app, Telegram…) | iPhone, iPad and Android apps, voice notes, hands-free Live calls |
 | Voices | none | none, or the platform's own | a voice per agent, sentence by sentence while the reply streams, text prepared for speech in 5 languages |
 | Away from the app | the gateway's own messages | the platform's notifications | push whose text is sealed for your phone, approvals and questions answered from the lock screen, Live Activities |
 | Several agents | profiles, configured by hand | usually one agent at a time | agents created in 2 s from the app, each with its own sandbox, browser, tools, voice and memory language |
@@ -49,7 +49,7 @@ that do it, and what it deliberately leaves to Hermes.
 - **Nothing missed.** `outbox.rs` and `cronwatch.rs` put agent messages and every routine's reply into an outbox
   (`store.rs`) with its audio ready.
 - **Reaching home.** Over Tailscale, or `lan.rs`: a pinned HTTPS door on the local network when the Internet is down.
-  `device_keys.rs` gives each device its own key; `guard.rs` counts wrong keys; `console.rs` is the web console.
+  `device_keys.rs` gives each device its own key; `guard.rs` counts wrong keys.
 - **Plain words.** `approval_text.rs`, `approval_command.rs`, `no_reply.rs`, `names.rs`, `answer_style.rs` and
   `welcome.rs` turn Hermes' technical events into short sentences in the person's language.
 

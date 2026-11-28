@@ -14,8 +14,7 @@ notifications (directly or through the [push relay](../relay/README.md)), approv
 scheduled tasks, the Notebook (Carnet, `src/notebook/`) with its records, trips and archives, the connectors (mail,
 calendar and CalDAV, notes, reminders, contacts, health, weather, maps), each agent's visible browser and vault
 (logins and cards), the agents' isolated sandboxes, shared folders and allowed sites, background tasks, pages and
-podcasts, family links between installs, groups, the web console (`/console/`), the offer's setup and backups, and the
-space's encryption at rest. Each module of `bridge-rs/src/` starts with a comment on what it does and its routes; the
+podcasts, family links between installs, groups, the offer's setup and backups, and the space's encryption at rest. Each module of `bridge-rs/src/` starts with a comment on what it does and its routes; the
 sections below document the original core (voice, files, push, approvals), which the apps still use as written.
 
 | Feature | Route | What the bridge does |

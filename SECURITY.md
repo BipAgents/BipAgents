@@ -13,9 +13,9 @@ A problem in Hermes Agent itself goes to [its own security policy](https://githu
 
 ## What is in scope
 
-- **The bridge** (`bridge-rs/`): its keys, the web console's sessions, the relay to each agent's Hermes, links between
-  agents and households, the agents' sandboxes, shared folders and allowed sites, the vault, files and pages served to
-  the apps, the space's encryption at rest.
+- **The bridge** (`bridge-rs/`): its keys, the relay to each agent's Hermes, links between agents and households, the
+  agents' sandboxes, shared folders and allowed sites, the vault, files and pages served to the apps, the space's
+  encryption at rest.
 - **The installer** (`installer/`, `install.sh`): file permissions, services, what `tailscale serve` publishes.
 - **The agents' visible browsers** (`browser/`): their isolation, the take-over hold, the vault filling passwords.
 - **The push relay** (`relay/`): what it forwards, what it keeps out.
@@ -34,9 +34,7 @@ Details: [docs/security-model.md](docs/security-model.md).
 - Nothing is published on the Internet at home: the bridge and Hermes listen on `127.0.0.1`, and Tailscale makes them
   reachable from your devices only. The local-network door (and, on the offer, the space's door) is HTTPS with a
   pinned self-signed certificate.
-- Each agent's Hermes has its own key; the bridge has another. The web console never receives either: its session
-  cookie (HttpOnly, Secure, SameSite Strict) plus a header stand for the bridge key, and the bridge adds the agent's
-  key itself.
+- Each agent's Hermes has its own key; the bridge has another and adds the agent's key itself.
 - Risky commands always ask you (`approvals.mode: manual`), except inside an isolated sandbox, where the sandbox is the
   wall; « Always allow » is offered only for a few kinds that aren't critical (sorting mail, writing in a service you
   connected), never for commands, payments or secrets.

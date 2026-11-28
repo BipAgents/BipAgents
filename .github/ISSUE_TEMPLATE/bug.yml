@@ -21,7 +21,6 @@ body:
         - Bridge
         - Voices (Pocket or your own voice model)
         - Agents' visible browser
-        - Web console
         - Something else
     validations:
       required: true

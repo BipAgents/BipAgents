@@ -290,9 +290,7 @@ reste local, seul le bridge l'appelle.
 
 ## 7. L'app
 
-- Les apps (iPhone, iPad, Android) viennent de l'App Store et de Google Play *(bientôt : elles sont en test)*. En
-  attendant, la console web ouvre tes agents dans le navigateur d'un ordinateur : `~/.local/bin/bipbridge console
-  --config ~/.config/hermes-ios/bridge.toml` donne un lien à usage unique (sur le tailnet).
+- Les apps (iPhone, iPad, Android) viennent de l'App Store et de Google Play *(bientôt : elles sont en test)*.
 - Dans l'app : **＋ › Scanner le QR code**. Sur le serveur, renseigner `public_url` (adresses tailnet du bridge et de
   chaque agent) dans `bridge.toml`, puis afficher le code avec `~/.local/bin/bipbridge qr --config
   ~/.config/hermes-ios/bridge.toml` (un par agent, `--agent <id>` pour un seul, `--png <fichier>` pour l'enregistrer).

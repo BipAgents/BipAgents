@@ -10,7 +10,7 @@ as issues all the same.
 
 | Part | Folder | Run its tests |
 |---|---|---|
-| Bridge (Rust) and web console | `bridge-rs/` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `bridge-rs/` |
+| Bridge (Rust) | `bridge-rs/` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `bridge-rs/` |
 | Bridge's HTTP contract (black-box suite) | `bridge/tests_blackbox/` | `python -m pytest tests_blackbox -q` in `bridge/`, after `cargo build --release` in `bridge-rs/` |
 | Installer and `bipagents` | `installer/`, `install.sh`, `install.ps1` | `PYTHONPATH=installer python -m pytest -q installer/tests` |
 | Push relay (Rust) | `relay/` | `cargo test`, `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` in `relay/` |

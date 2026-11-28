@@ -89,7 +89,7 @@ flowchart TD
 | Qui | À qui on confie | Ne peut pas (imposé par le code) |
 |---|---|---|
 | **Toi** (titulaire du compte) | Tout ce qui est dans ton espace : tu réponds aux validations, ajoutes les secrets, prends la main sur le navigateur. | — |
-| **Les apps** (iPhone, iPad, Android, console web) | La clé du bridge ou une clé par appareil, gardée dans le trousseau iOS / l'Android Keystore. Elles montrent les validations et renvoient tes réponses, le code de sécurité d'une carte, les secrets du coffre (en écriture seule). | Relire un mot de passe du coffre (une exception : un mot de passe que le coffre a lui-même créé pour un compte ouvert par un agent). |
+| **Les apps** (iPhone, iPad, Android) | La clé du bridge ou une clé par appareil, gardée dans le trousseau iOS / l'Android Keystore. Elles montrent les validations et renvoient tes réponses, le code de sécurité d'une carte, les secrets du coffre (en écriture seule). | Relire un mot de passe du coffre (une exception : un mot de passe que le coffre a lui-même créé pour un compte ouvert par un agent). |
 | **Le bridge** (`bridge-rs/`, un programme Rust dans ton espace) | La copie principale du coffre, les mots de passe des boîtes mail, les secrets des connecteurs, les jetons des agents. C'est le garde : il décide, demande et tape. | — C'est le cœur de confiance : une faille ici entre dans le périmètre. |
 | **Hermes Agent** (une passerelle par agent, ou une partagée par tes agents) | Faire tourner l'agent : appels au modèle, outils, mémoire, validation de ses propres commandes. Sa propre copie des identifiants donnés à cet agent (pour les remplir). | Atteindre le dossier de données du bridge. Utiliser une carte : les cartes ne sont jamais écrites dans Hermes. |
 | **Le modèle d'IA** (chez le fournisseur choisi ; sur l'offre, via EUrouter) | Lit chaque message auquel il répond et chaque résultat d'outil. | Recevoir un mot de passe du coffre ou un numéro de carte (les valeurs ne lui reviennent jamais ; voir [le coffre](#-le-coffre)). Valider quoi que ce soit. |
@@ -515,8 +515,7 @@ clés, ni agents. Le serveur des voix est partagé (il reçoit du texte à dire,
 | Certificat | celui de Tailscale ; la porte facultative sur le réseau local a un certificat auto-signé dont les apps épinglent le SHA-256 à l'appairage (`lan.rs`) | un certificat Let's Encrypt pour le nom d'hôte de la place sous bipagents.com, dont la clé privée est créée sur la place et ne la quitte jamais (le guichet répond seulement au défi DNS, `place_cert.rs`) ; toute autre connexion reçoit le certificat auto-signé que les apps épinglent |
 
 - **Clés.** Chaque passerelle Hermes a sa clé, le bridge une autre, chaque appareil la sienne (`auth.rs`, comparaisons à
-  temps constant). La console web ne les reçoit jamais : un cookie HttpOnly, Secure, SameSite=Strict et un en-tête
-  remplacent la clé du bridge, qui ajoute lui-même la clé de l'agent.
+  temps constant) ; le bridge ajoute lui-même la clé de l'agent.
 - **Entre les bridges de deux foyers**, un lien vers une porte n'accepte que le certificat épinglé de l'autre côté
   (`door_tls.rs`) ; les liens qui passent par le relais de Kerfy Studio sont scellés entre les deux bridges, le relais
   voit qui appelle qui et quand, pas quoi (`family_rendezvous.rs`, `family_seal.rs`).

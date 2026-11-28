@@ -113,7 +113,6 @@ WSL2). No GPU, no beta code, no limit. Your agents, their memory and your files 
    ([details](installer/README.md#if-you-already-have-hermes)).
 
 2. **Scan the QR code** it shows at the end in the app (**＋ › Scan QR code**), with Tailscale on your phone too.
-   The apps are coming soon to the stores; until then, `bipagents console` opens your agents in a computer's browser.
 
 Then: `bipagents update` keeps everything up to date (every night if you like), `bipagents family add <name>` makes
 room for someone else on the same machine, `bipagents export --moving` takes your agents, memory and all, to another
@@ -140,7 +139,6 @@ machine. All of it in the [installer's guide](installer/README.md); by hand: [se
   them), and data sent only to the websites you allowed (beyond a small amount).
 - 👨‍👩‍👧 **The whole family**: one private space per person; relatives' agents talk to each other only along links you
   turned on. Agents sorted into groups on the home screen (Personal, Pro, Family, or your own).
-- 💻 **On a computer too**: the web console opens your agents, their conversations and the Inbox in a browser.
 - 🌍 In English, French, Spanish and German; agents speak and listen in their own language.
 
 ## 🎮 Play with the Bips
@@ -175,8 +173,8 @@ flowchart LR
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** does the thinking: the model you chose, tools,
   memory, skills, routines.
 - **The bridge** ([`bridge-rs/`](bridge-rs/), one Rust program; [README](bridge/README.md)) adds everything else: voices,
-  files, the Notebook, connectors, the agents' browsers and vault, approvals, background tasks, pages, backups, the web
-  console. Its binaries are published as GitHub pre-releases `bridge-<key>`, which installs fetch.
+  files, the Notebook, connectors, the agents' browsers and vault, approvals, background tasks, pages, backups. Its
+  binaries are published as GitHub pre-releases `bridge-<key>`, which installs fetch.
 - **Pocket TTS** ([`pocket/`](pocket/README.md)) gives the Bips their voices on the server's CPU.
 - **The push relay** ([`relay/`](relay/README.md)) forwards notifications to Apple and Google without their text in
   clear: it is sealed for your phone, which alone opens it.

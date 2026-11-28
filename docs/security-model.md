@@ -85,7 +85,7 @@ flowchart TD
 | Who | Trusted with | Can't (enforced by code) |
 |---|---|---|
 | **The person** (the account holder) | Everything in their space: they answer approvals, add secrets, take over the browser. | — |
-| **The apps** (iPhone, iPad, Android, web console) | The bridge key or a key per device, kept in the iOS Keychain / Android Keystore. They show approvals and send the answers, the security code of a card, the vault's secrets (write-only). | Read a password back from the vault (one exception: a password the vault itself made for an account an agent created). |
+| **The apps** (iPhone, iPad, Android) | The bridge key or a key per device, kept in the iOS Keychain / Android Keystore. They show approvals and send the answers, the security code of a card, the vault's secrets (write-only). | Read a password back from the vault (one exception: a password the vault itself made for an account an agent created). |
 | **The bridge** (`bridge-rs/`, one Rust program in the person's space) | The vault's master copy, the mailbox passwords, the connectors' secrets, the agents' tokens. It is the guard: it decides, asks and types. | — It is the trusted core: a flaw here is in scope. |
 | **Hermes Agent** (one gateway per agent, or a shared one for the person's own agents) | Running the agent: model calls, tools, memory, approvals of its own commands. Its own copy of the logins given to that agent (to fill them). | Reach the bridge's data folder. Use a card: cards are never written into Hermes. |
 | **The AI model** (at the provider chosen: on the offer, through EUrouter) | Reads every message it answers and every tool result. | Receive a vault password or a card number (values are never returned to it; see [the vault](#-the-vault)). Approve anything. |
@@ -473,8 +473,7 @@ share files, keys or agents. The voices' TTS server is shared (it receives text 
 | Certificate | Tailscale's; the optional local-network door has a self-signed one whose SHA-256 the apps pin at pairing (`lan.rs`) | a Let's Encrypt certificate for the place's hostname under bipagents.com, its private key made on the place and never leaving it (the guichet only answers the DNS challenge, `place_cert.rs`); any other connection gets the self-signed one the apps pin |
 
 - **Keys.** Each Hermes gateway has its own key, the bridge another, each device its own (`auth.rs`, constant-time
-  comparisons). The web console never receives them: an HttpOnly, Secure, SameSite=Strict cookie plus a header stand in
-  for the bridge key, and the bridge adds the agent's key itself.
+  comparisons); the bridge adds the agent's key itself.
 - **Between two households' bridges**, a link to a door accepts exactly the other side's pinned certificate
   (`door_tls.rs`); links through Kerfy Studio's relay are sealed between the two bridges, the relay sees who calls whom
   and when, not what (`family_rendezvous.rs`, `family_seal.rs`).

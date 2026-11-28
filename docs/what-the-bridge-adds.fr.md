@@ -16,7 +16,7 @@ domaine, avec les modules (`bridge-rs/src/<nom>.rs`) qui le font, et ce qu'il la
 
 | Domaine | Hermes seul | Hermes + autres clients | Bridge BipAgents |
 |---|---|---|---|
-| Lui parler | terminal, passerelles de discussion, API Runs | une fenêtre de discussion (app de bureau, Telegram…) | apps iPhone, iPad et Android, notes vocales, appels Live mains libres, console web |
+| Lui parler | terminal, passerelles de discussion, API Runs | une fenêtre de discussion (app de bureau, Telegram…) | apps iPhone, iPad et Android, notes vocales, appels Live mains libres |
 | Voix | aucune | aucune, ou celle de la plateforme | une voix par agent, phrase par phrase pendant la réponse, texte préparé pour la parole en 5 langues |
 | Hors de l'app | les messages de la passerelle | les notifications de la plateforme | notifications dont le texte est scellé pour ton téléphone, approbations et questions depuis l'écran verrouillé, Live Activities |
 | Plusieurs agents | profils, réglés à la main | souvent un agent à la fois | agents créés en 2 s depuis l'app, chacun avec son bac à sable, son navigateur, ses outils, sa voix et la langue de sa mémoire |
@@ -51,8 +51,7 @@ domaine, avec les modules (`bridge-rs/src/<nom>.rs`) qui le font, et ce qu'il la
 - **Rien de perdu.** `outbox.rs` et `cronwatch.rs` mettent les messages des agents et la réponse de chaque routine dans
   une boîte d'envoi (`store.rs`), audio prêt.
 - **Joindre la maison.** Par Tailscale, ou `lan.rs` : une porte HTTPS épinglée sur le réseau local quand Internet est
-  coupé. `device_keys.rs` donne une clé à chaque appareil ; `guard.rs` compte les mauvaises clés ; `console.rs` est la
-  console web.
+  coupé. `device_keys.rs` donne une clé à chaque appareil ; `guard.rs` compte les mauvaises clés.
 - **Des mots simples.** `approval_text.rs`, `approval_command.rs`, `no_reply.rs`, `names.rs`, `answer_style.rs` et
   `welcome.rs` traduisent les événements techniques de Hermes en phrases courtes dans la langue de la personne.
 

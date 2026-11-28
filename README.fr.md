@@ -122,8 +122,7 @@ leur mémoire et tes fichiers restent sur ta machine.
    changer avant de commencer ([détails](installer/README.fr.md#si-tu-as-déjà-hermes)).
 
 2. **Scanne le QR code** affiché à la fin dans l'app (**＋ › Scanner le QR code**), avec Tailscale sur ton téléphone
-   aussi. Les apps arrivent bientôt sur les stores ; en attendant, `bipagents console` ouvre tes agents dans le
-   navigateur d'un ordinateur.
+   aussi.
 
 Ensuite : `bipagents update` garde tout à jour (chaque nuit si tu veux), `bipagents family add <prénom>` fait de la
 place pour un proche sur la même machine, `bipagents export --moving` emmène tes agents, mémoire comprise, sur une
@@ -155,8 +154,6 @@ autre machine. Tout est dans le [guide de l'installateur](installer/README.fr.md
   petite quantité).
 - 👨‍👩‍👧 **Toute la famille** : un espace privé par personne ; les agents de tes proches ne se parlent que là où tu l'as
   permis. Des agents rangés en groupes sur l'accueil (Perso, Pro, Famille, ou le tien).
-- 💻 **Sur un ordinateur aussi** : la console web ouvre tes agents, leurs conversations et la Boîte dans un
-  navigateur.
 - 🌍 En français, anglais, espagnol et allemand ; chaque agent parle et écoute dans sa langue.
 
 ## 🎮 Joue avec les Bips
@@ -192,8 +189,7 @@ flowchart LR
   outils, la mémoire, les compétences, les routines.
 - **Le bridge** ([`bridge-rs/`](bridge-rs/), un seul programme en Rust ; [README](bridge/README.fr.md)) ajoute tout le
   reste : voix, fichiers, Carnet, connecteurs, navigateurs et coffre des agents, accords, tâches de fond, pages,
-  sauvegardes, console web. Ses binaires sont publiés en pré-versions GitHub `bridge-<clé>`, que les installations
-  téléchargent.
+  sauvegardes. Ses binaires sont publiés en pré-versions GitHub `bridge-<clé>`, que les installations téléchargent.
 - **Pocket TTS** ([`pocket/`](pocket/README.fr.md)) donne leur voix aux Bips, sur le processeur du serveur.
 - **Le relais de notifications** ([`relay/`](relay/README.fr.md)) transmet les notifications à Apple et Google sans
   leur texte en clair : il est scellé pour ton téléphone, seul à pouvoir l'ouvrir.
