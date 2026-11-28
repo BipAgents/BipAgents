@@ -1341,3 +1341,24 @@ async fn a_thread_hermes_moved_aside_is_the_agents_bot_chat_again() {
     away.hermes_url = "http://127.0.0.1:9/p/coach".into();
     assert!(restore_moved_aside(&hermes, &away).await.is_err());
 }
+
+/// The guichet's doorbell (seat_nudge.rs, internal/next/seat-nudge.md): on a place of the offer, beside `/v1/setup` and
+/// without the bridge key; on someone's own install, nothing there.
+#[tokio::test]
+async fn the_doorbell_is_a_place_of_the_offer_s_without_the_bridge_key() {
+    let bell = json!({"server": "vps-1", "seat": 1, "at": 1_800_000_000, "signature": "AAAA"});
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new(cloud(dir.path()));
+    // no doorbell folder on this machine (the seat agent makes it): no doorbell, never « unauthorized »
+    let said = app.send_json("POST", "/v1/seat/nudge", &[], &bell).await;
+    assert_eq!((said.status.as_u16(), said.json()), (404, json!({"detail": "no doorbell on this place"})));
+    // nor a wrong key counted for a bell: the address is never blocked by the guichet's rings
+    for _ in 0..=app.app.state.guard.limit {
+        assert_eq!(app.send_json("POST", "/v1/seat/nudge", &[], &bell).await.status.as_u16(), 404);
+    }
+    assert_eq!(app.get("/v1/agents", &[("authorization", &format!("Bearer {BRIDGE_KEY}"))]).await.status, 200);
+    let other = tempfile::tempdir().unwrap();
+    let own = TestApp::new(common::config(other.path(), &Urls::default()));
+    let said = own.send_json("POST", "/v1/seat/nudge", &[], &bell).await;
+    assert_eq!((said.status.as_u16(), said.json()), (404, json!({"detail": "Not Found"})));
+}

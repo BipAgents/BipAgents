@@ -280,6 +280,7 @@ pub mod link_wallet;
 pub mod cards;
 pub mod cloud_setup;
 pub mod console_removed; // the web console, gone in 1.1: its file deleted at start
+pub mod seat_nudge; // the guichet's doorbell: a place's seat agent looks at its orders now
 pub mod contacts;
 pub mod desktop;
 pub mod desktop_page;

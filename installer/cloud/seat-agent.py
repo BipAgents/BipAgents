@@ -78,6 +78,10 @@ CREDIT_STATES = ("ok", "low", "full", "stopped")
 # `remote_off`): <uid>.json per place, root's, outside the places' homes (nothing of the place can remove it, never in
 # its backups nor moved with it, kept across reboots)
 OFFER_CARDS_DIR = "/var/lib/bipagents/offer-cards"
+# The guichet's doorbell (bridge-rs/src/seat_nudge.rs, internal/next/seat-nudge.md): root's, `server` (this server's id,
+# what the guichet signs) and <n> per place, its account's, 0600, which its bridge writes when the guichet rings;
+# bipagents-seats.path then starts this round at once
+NUDGE_DIR = "/var/lib/bipagents/nudge"
 HARDENED = "/var/lib/bipagents/space-hardened"   # space-hardening.sh was done (user-data.yaml, add-seat.sh)
 VAULT_TRIED = "/var/lib/bipagents/vault-keys-tried"   # the vault_keys orders tried: each place enrolled once at most
 VAULT_STATE = ".local/state/bipagents/vault-keys.json"   # the place's own last try (installer/bipinstall/vault_keys.py)
@@ -149,6 +153,11 @@ def account(number):
 
 def run(*args):
     subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def run_rc(*args):
+    """`run`, its exit code."""
+    return subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
 
 
 def wipe(user):
@@ -1458,6 +1467,148 @@ AccuracySec=1s
 [Install]
 WantedBy=timers.target
 """
+
+
+NUDGE_PATH = """[Unit]
+Description=BipAgents: the guichet's doorbell, the seat agent's round at once
+
+[Path]
+PathChanged=%s
+Unit=bipagents-seats.service
+
+[Install]
+WantedBy=paths.target
+"""
+
+
+def doorbells(server, uids=None, folder=None, owner=(0, 0)):
+    """The guichet's doorbell: NUDGE_DIR (root's, 0755) with `server`, this server's id (root's, 0644: what the guichet
+    signs), and one empty file per place, <n>, its account's, 0600 (its bridge writes the time in it when the guichet
+    rings, bridge-rs/src/seat_nudge.rs). A change in the folder starts a round (bipagents-seats.path): only what
+    differs is changed, a bridge's ring kept as it is. `uids`: number -> uid, the places' accounts by default."""
+    folder = folder or NUDGE_DIR
+    if uids is None:
+        uids = {}
+        for number in range(1, MAX_SEATS + 1):
+            try:
+                uids[number] = pwd.getpwnam(account(number)).pw_uid
+            except KeyError:
+                continue
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        if os.path.lexists(folder):
+            os.unlink(folder)
+        os.makedirs(folder, mode=0o755, exist_ok=True)
+    st = os.lstat(folder)
+    if (st.st_uid, st.st_gid) != owner:
+        os.chown(folder, owner[0], owner[1], follow_symlinks=False)
+    if stat_mod.S_IMODE(st.st_mode) != 0o755:
+        os.chmod(folder, 0o755)
+    wanted = {str(number): uid for number, uid in uids.items()}
+    for name in os.listdir(folder):   # a place gone: its file goes, never another account's later
+        if name != "server" and name not in wanted:
+            path = os.path.join(folder, name)
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+    server_file = os.path.join(folder, "server")
+    text = "%s\n" % server
+    try:
+        st = os.lstat(server_file)
+        with open(server_file) as fh:
+            same = stat_mod.S_ISREG(st.st_mode) and fh.read() == text
+    except OSError:
+        same = False
+    if not same:
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".server.")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)
+        os.chown(tmp, owner[0], owner[1])
+        os.replace(tmp, server_file)
+    else:
+        st = os.lstat(server_file)
+        if (st.st_uid, st.st_gid) != owner:
+            os.chown(server_file, owner[0], owner[1], follow_symlinks=False)
+        if stat_mod.S_IMODE(st.st_mode) != 0o644:
+            os.chmod(server_file, 0o644)
+    for name, uid in sorted(wanted.items()):
+        path = os.path.join(folder, name)
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            st = None
+        # a link or anything else in its stead, another account's file (a place installed again gets another uid:
+        # never the old account's inode chowned over) or one its account linked elsewhere: replaced by a new one
+        if st is not None and (not stat_mod.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_nlink != 1):
+            if stat_mod.S_ISDIR(st.st_mode):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+            st = None
+        if st is None:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+            os.utime(path, (0, 0))   # a new doorbell is no ring (rung_since)
+            st = os.lstat(path)
+        if st.st_uid != uid or st.st_gid != owner[1]:
+            os.chown(path, uid, owner[1], follow_symlinks=False)
+        if stat_mod.S_IMODE(st.st_mode) != 0o600:
+            os.chmod(path, 0o600)
+
+
+def nudge_units(folder=None, units="/etc/systemd/system", runner=None):
+    """bipagents-seats.path beside bipagents-seats.timer (the way back when no bell rings), set up once, and started
+    again at each round when systemd left it stopped or failed (its service's start limit hit, 5 starts in 10 s:
+    systemd then fails the path unit for good, path.c PATH_FAILURE_UNIT_START_LIMIT_HIT; the timer goes on)."""
+    runner = runner or run_rc
+    text = NUDGE_PATH % (folder or NUDGE_DIR)
+    path = os.path.join(units, "bipagents-seats.path")
+    try:
+        with open(path) as fh:
+            same = fh.read() == text
+    except OSError:
+        same = False
+    if not same:
+        with open(path, "w") as fh:
+            fh.write(text)
+        runner("systemctl", "daemon-reload")
+        runner("systemctl", "enable", "--now", "bipagents-seats.path")
+        return
+    if runner("systemctl", "is-active", "--quiet", "bipagents-seats.path") != 0:
+        runner("systemctl", "reset-failed", "bipagents-seats.path")
+        runner("systemctl", "start", "bipagents-seats.path")
+
+
+def rung_since(at, folder=None):
+    """A place's bell rung since `at` (its bridge wrote the time in its file): while a round ran, its orders fetched."""
+    folder = folder or NUDGE_DIR
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    until = time.time() + 1   # a time set ahead by the place (its own file: utime) is no ring
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            if at <= os.lstat(os.path.join(folder, name)).st_mtime <= until:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+# A round longer than this leaves the next one to the timer: TimeoutStartSec=2h is the whole run's (guichet
+# bootstrap.rs), a second round in it would have what is left (an update or a move of that round killed halfway),
+# and after a round longer than its 2 minutes the timer (OnUnitActiveSec, already past) starts the next run at once.
+AGAIN_WITHIN = 600
+
+
+def round_again(argv, started, folder=None):
+    """One round more when a bell rang while this one ran (systemd starts no second run of a running service): its
+    order is taken now, not at the next timer's round. Never twice in a row, never after a long round."""
+    return "--again" not in argv and time.time() - started < AGAIN_WITHIN and rung_since(started, folder)
 
 
 def read_json(path):
@@ -3128,7 +3279,13 @@ def main(argv=()):
         return 0
     if "--rebooting" in argv:
         return rebooting(conf)
+    started = time.time()
     metadata_block()
+    try:
+        doorbells(conf["server"])
+        nudge_units()
+    except Exception as exc:   # never the round's loss: the timer's rounds stay
+        log("doorbell not set: %s" % exc)
     try:
         deny_places_ssh()
     except Exception as exc:   # nothing of it may stop the round (review M2): logged, tried again next round
@@ -3217,6 +3374,9 @@ def main(argv=()):
     except Exception as exc:   # never the round's loss
         log("place check not started: %s" % exc)
     zram()   # last: installing it may take a minute, once
+    if round_again(argv, started):
+        log("the guichet rang during the round: once more")
+        return main(tuple(argv) + ("--again",))
     return 0
 
 
