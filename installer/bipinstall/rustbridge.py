@@ -43,7 +43,7 @@ SUMS = "SHA256SUMS"
 BUILD = "BIPAGENTS_BRIDGE_BUILD"   # a folder of binaries built on this machine, for one with no build of ours
 PROGRAMS = ("bipbridge", "bip-browser-mcp")
 # The bridge's own subcommands, passed on by `bipagents bridge <command> …` (bridge-rs/src/main_cli.rs).
-COMMANDS = ("check", "genkey", "qr", "browser", "shares-mounts", "console", "spaces", "adopt", "vault-check")
+COMMANDS = ("check", "genkey", "qr", "browser", "shares-mounts", "spaces", "adopt", "vault-check")
 
 Opener = Callable[[str], bytes]
 
