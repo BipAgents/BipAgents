@@ -113,18 +113,19 @@ fn signed_by_the_guichet(public_key: &Path, nudge: &Nudge) -> bool {
 
 /// `nudge` checked against the doorbell folder `dir` and the guichet's key at `public_key`, then rung: the seat rung.
 /// Only a bell that passed every check counts for the 10 s (refusals never hold back the guichet's next one).
+/// The signature first: a bell that isn't the guichet's gets one answer, whatever server, place or time it names.
 pub fn ring_at(dir: &Path, public_key: &Path, nudge: &Nudge, now: f64, bell: &Bell) -> Result<i64, HttpError> {
     let Some((server, seat)) = own_doorbell(dir) else {
         return Err(HttpError::new(404, "no doorbell on this place"));
     };
+    if !signed_by_the_guichet(public_key, nudge) {
+        return Err(HttpError::new(403, "not the guichet's bell"));
+    }
     if nudge.server != server || nudge.seat != seat {
         return Err(HttpError::new(403, "not this place's bell"));
     }
     if (nudge.at as f64 - now).abs() > MAX_AGE as f64 {
         return Err(HttpError::new(403, "too old a bell"));
-    }
-    if !signed_by_the_guichet(public_key, nudge) {
-        return Err(HttpError::new(403, "not the guichet's bell"));
     }
     let mut last = bell.last.lock().unwrap_or_else(|e| e.into_inner());
     if last.is_some_and(|at| now - at < SPACING) {
@@ -260,6 +261,26 @@ mod tests {
         let missing =
             ring_at(&dir.path().join("missing"), &public_key, &signed(&pair, SERVER, 3, at), now, &Bell::default());
         assert_eq!(missing.unwrap_err().status.as_u16(), 404);
+    }
+
+    /// A bell that isn't the guichet's tells its sender nothing of the place: the same answer whatever server, place
+    /// or time it names (else anyone finds the place's number and checks a server's id, without any key).
+    #[test]
+    fn a_bell_not_the_guichets_learns_nothing_of_the_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_pair, public_key) = guichet(dir.path());
+        let folder = doorbells(dir.path(), 3);
+        let now = 1_800_000_000.0;
+        let said = |server: &str, seat: i64, at: i64| {
+            let junk = Nudge { server: server.into(), seat, at, signature: "AAAA".into() };
+            let e = ring_at(&folder, &public_key, &junk, now, &Bell::default()).unwrap_err();
+            (e.status.as_u16(), e.detail)
+        };
+        let right = said(SERVER, 3, now as i64);
+        assert_eq!(said(SERVER, 4, now as i64), right, "another place's number");
+        assert_eq!(said("vps-test-2", 3, now as i64), right, "another server's id");
+        assert_eq!(said(SERVER, 3, now as i64 - 3600), right, "another time");
+        assert_eq!(rung(&folder, 3), "", "nothing rung");
     }
 
     #[test]

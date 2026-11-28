@@ -155,6 +155,11 @@ def run(*args):
     subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def run_rc(*args):
+    """`run`, its exit code."""
+    return subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+
+
 def wipe(user):
     """The account, its services, its sandboxes and every file of it."""
     try:
@@ -1533,7 +1538,9 @@ def doorbells(server, uids=None, folder=None, owner=(0, 0)):
             st = os.lstat(path)
         except FileNotFoundError:
             st = None
-        if st is not None and not stat_mod.S_ISREG(st.st_mode):   # a link or anything else in its stead: replaced
+        # a link or anything else in its stead, another account's file (a place installed again gets another uid:
+        # never the old account's inode chowned over) or one its account linked elsewhere: replaced by a new one
+        if st is not None and (not stat_mod.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_nlink != 1):
             if stat_mod.S_ISDIR(st.st_mode):
                 shutil.rmtree(path)
             else:
@@ -1551,19 +1558,26 @@ def doorbells(server, uids=None, folder=None, owner=(0, 0)):
 
 
 def nudge_units(folder=None, units="/etc/systemd/system", runner=None):
-    """bipagents-seats.path beside bipagents-seats.timer (the way back when no bell rings), set up once."""
+    """bipagents-seats.path beside bipagents-seats.timer (the way back when no bell rings), set up once, and started
+    again at each round when systemd left it stopped or failed (its service's start limit hit, 5 starts in 10 s:
+    systemd then fails the path unit for good, path.c PATH_FAILURE_UNIT_START_LIMIT_HIT; the timer goes on)."""
+    runner = runner or run_rc
     text = NUDGE_PATH % (folder or NUDGE_DIR)
     path = os.path.join(units, "bipagents-seats.path")
     try:
         with open(path) as fh:
-            if fh.read() == text:
-                return
+            same = fh.read() == text
     except OSError:
-        pass
-    with open(path, "w") as fh:
-        fh.write(text)
-    (runner or run)("systemctl", "daemon-reload")
-    (runner or run)("systemctl", "enable", "--now", "bipagents-seats.path")
+        same = False
+    if not same:
+        with open(path, "w") as fh:
+            fh.write(text)
+        runner("systemctl", "daemon-reload")
+        runner("systemctl", "enable", "--now", "bipagents-seats.path")
+        return
+    if runner("systemctl", "is-active", "--quiet", "bipagents-seats.path") != 0:
+        runner("systemctl", "reset-failed", "bipagents-seats.path")
+        runner("systemctl", "start", "bipagents-seats.path")
 
 
 def rung_since(at, folder=None):
@@ -1573,21 +1587,28 @@ def rung_since(at, folder=None):
         names = os.listdir(folder)
     except OSError:
         return False
+    until = time.time() + 1   # a time set ahead by the place (its own file: utime) is no ring
     for name in names:
         if not name.isdigit():
             continue
         try:
-            if os.lstat(os.path.join(folder, name)).st_mtime >= at:
+            if at <= os.lstat(os.path.join(folder, name)).st_mtime <= until:
                 return True
         except OSError:
             continue
     return False
 
 
+# A round longer than this leaves the next one to the timer: TimeoutStartSec=2h is the whole run's (guichet
+# bootstrap.rs), a second round in it would have what is left (an update or a move of that round killed halfway),
+# and after a round longer than its 2 minutes the timer (OnUnitActiveSec, already past) starts the next run at once.
+AGAIN_WITHIN = 600
+
+
 def round_again(argv, started, folder=None):
     """One round more when a bell rang while this one ran (systemd starts no second run of a running service): its
-    order is taken now, not at the next timer's round. Never twice in a row."""
-    return "--again" not in argv and rung_since(started, folder)
+    order is taken now, not at the next timer's round. Never twice in a row, never after a long round."""
+    return "--again" not in argv and time.time() - started < AGAIN_WITHIN and rung_since(started, folder)
 
 
 def read_json(path):

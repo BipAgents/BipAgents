@@ -66,9 +66,10 @@ def test_setup_writes_the_nudge_path_unit_and_folder(tmp_path):
     # its path unit, written once, enabled once, beside bipagents-seats.timer
     units, ran = tmp_path / "units", []
     units.mkdir()
-    agent.nudge_units(str(folder), str(units), lambda *args: ran.append(args))
-    agent.nudge_units(str(folder), str(units), lambda *args: ran.append(args))
-    assert ran == [("systemctl", "daemon-reload"), ("systemctl", "enable", "--now", "bipagents-seats.path")]
+    agent.nudge_units(str(folder), str(units), lambda *args: ran.append(args) or 0)
+    agent.nudge_units(str(folder), str(units), lambda *args: ran.append(args) or 0)
+    assert ran == [("systemctl", "daemon-reload"), ("systemctl", "enable", "--now", "bipagents-seats.path"),
+                   ("systemctl", "is-active", "--quiet", "bipagents-seats.path")]   # each round looks: still there
     text = (units / "bipagents-seats.path").read_text()
     assert "PathChanged=%s\n" % folder in text and "WantedBy=paths.target" in text
 
@@ -97,3 +98,76 @@ def test_a_nudge_file_change_starts_a_beat(tmp_path):
     assert not agent.rung_since(started + 2, str(folder))
     # no folder (a server set up before 28/11, its first round with the bell): nothing rung
     assert not agent.rung_since(started, str(tmp_path / "none"))
+
+
+# -- review 28/11 (red until fixed) ------------------------------------------------------------------------------------
+
+def test_a_doorbell_unit_systemd_failed_is_started_again(tmp_path):
+    """systemd leaves bipagents-seats.path failed for good once its service hits its start limit (5 starts in 10 s,
+    path.c: PATH_FAILURE_UNIT_START_LIMIT_HIT; the timer keeps going): each round looks and starts it again, not only
+    when its file changed."""
+    agent = _seat_agent()
+    folder, units = str(tmp_path / "nudge"), tmp_path / "units"
+    units.mkdir()
+    agent.nudge_units(folder, str(units), lambda *args: 0)
+    ran = []
+
+    def failed(*args):
+        ran.append(args)
+        return 3 if args[:2] == ("systemctl", "is-active") else 0   # `failed`: unit-start-limit-hit
+
+    agent.nudge_units(folder, str(units), failed)
+    assert ("systemctl", "reset-failed", "bipagents-seats.path") in ran
+    assert ("systemctl", "start", "bipagents-seats.path") in ran
+    ran.clear()
+    agent.nudge_units(folder, str(units), lambda *args: ran.append(args) or 0)   # active: only the look
+    assert ran == [("systemctl", "is-active", "--quiet", "bipagents-seats.path")]
+
+
+def test_a_long_round_leaves_the_next_one_to_the_timer(tmp_path):
+    """TimeoutStartSec=2h is the whole run's (guichet bootstrap.rs): a second round in the same run shares what is left
+    of it, and an update or a move of that round is killed halfway. After a long round the timer (OnUnitActiveSec=2min,
+    already past) starts the next run at once, with its own 2 hours."""
+    agent = _seat_agent()
+    folder = tmp_path / "nudge"
+    me = (os.getuid(), os.getgid())
+    agent.doorbells("vps-1", {1: me[0]}, str(folder), me)
+    started = time.time() - 3600   # a round of an hour (a wave of updates, an install)
+    os.utime(folder / "1", (started + 60, started + 60))   # rung during it
+    assert agent.rung_since(started, str(folder))
+    assert not agent.round_again([], started, str(folder))
+
+
+def test_a_ring_set_in_the_future_is_no_ring(tmp_path):
+    """The place owns its file: a time set ahead (utime) would make every run two rounds, for good."""
+    agent = _seat_agent()
+    folder = tmp_path / "nudge"
+    me = (os.getuid(), os.getgid())
+    agent.doorbells("vps-1", {1: me[0]}, str(folder), me)
+    ahead = time.time() + 10 * 365 * 86400
+    os.utime(folder / "1", (ahead, ahead))
+    assert not agent.rung_since(time.time(), str(folder))
+
+
+def test_a_doorbell_is_never_handed_to_another_account(tmp_path, monkeypatch):
+    """A place installed again gets a new account, another uid (seat-agent.py drop_view): its doorbell is a new file,
+    never the old account's inode chowned over (with its last ring in it, and the links that account made to it,
+    which protected_hardlinks lets an owner make)."""
+    agent = _seat_agent()
+    folder = tmp_path / "nudge"
+    me = (os.getuid(), os.getgid())
+    agent.doorbells("vps-1", {1: me[0]}, str(folder), me)
+    (folder / "1").write_text("1800000000\n")
+    os.link(folder / "1", tmp_path / "kept")   # the account's own link to its doorbell
+    linked = os.lstat(folder / "1").st_ino
+    agent.doorbells("vps-1", {1: me[0]}, str(folder), me)
+    assert os.lstat(folder / "1").st_ino != linked and os.lstat(folder / "1").st_nlink == 1, "a linked doorbell kept"
+    assert (tmp_path / "kept").read_text() == "1800000000\n", "the link elsewhere untouched"
+    before = os.lstat(folder / "1").st_ino
+    (folder / "1").write_text("1800000001\n")
+    chowned = []
+    monkeypatch.setattr(os, "chown", lambda *args, **kw: chowned.append(args))   # not root here
+    agent.doorbells("vps-1", {1: me[0] + 1}, str(folder), me)   # bip installed again: another uid
+    assert os.lstat(folder / "1").st_ino != before, "the old account's file chowned to the new one"
+    assert (folder / "1").read_text() == "" and os.lstat(folder / "1").st_mtime == 0
+    assert chowned and chowned[-1][1] == me[0] + 1
