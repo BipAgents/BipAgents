@@ -211,8 +211,9 @@ fn the_kit_never_outranks_the_agents_own_css() {
         }
     }
     // (31 000 since 5/11: a map's one link for the whole trip; 34 000 since 15/11: what people typed drawn as text
-    // only, Bip.rows, and amounts read as whole cents, Bip.cents)
-    assert!(pages::kit_js().contains("__BIP_TINT__") && pages::kit_js().len() < 34_000 && css.len() < 20_000);
+    // only, Bip.rows, and amounts read as whole cents, Bip.cents; 35 000 since 27/11: a table of 4 columns or more
+    // as cards on a phone, A-page rules of internal/next/conversation-pages-bips.md)
+    assert!(pages::kit_js().contains("__BIP_TINT__") && pages::kit_js().len() < 35_000 && css.len() < 20_000);
 }
 
 #[test]

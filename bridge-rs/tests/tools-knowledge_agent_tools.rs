@@ -432,7 +432,8 @@ fn the_tools_version_is_the_pythons() {
     // Reply-To without `to` (support mail, 2026-11-17), create_page in the conversation's language (2026-11-19),
     // create_page designing each page for its content, phone first, its layout checked (2026-11-20), then no layout
     // example, totals worked out in the script, starting data in a constant (review and second bench, 2026-11-20),
-    // routine_schedule's `until`, `repeat` and `approx` (the task frame, proactive agents part 4, 2026-11-23).
+    // routine_schedule's `until`, `repeat` and `approx` (the task frame, proactive agents part 4, 2026-11-23), create_page's
+    // A-page rules: the top the conversation shows, 3 columns, amounts never cut, the best in green (2026-11-27).
     let expected = include_str!("golden/agent_tools_version.txt").trim();
     assert_eq!(agent_tools::tools_version(), expected);
 }

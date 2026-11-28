@@ -1021,6 +1021,8 @@ impl Page {
             "joins": self.joins,
             // the phone's copy for when the bridge is out of reach (thin apps brick 6): the same on every phone
             "copy": {"keep": COPY_KEEP, "pending": false},
+            // this bridge places the small Bips in the thread (bips.rs): the apps drop their « Tâche de fond » banner
+            "bips": true,
         });
         let replaced = self.replaced();
         if !replaced.is_empty() {

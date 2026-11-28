@@ -199,17 +199,21 @@ pub const LONG_WORK_RULE: &str = concat!(
     "a background task that browses."
 );
 
-/// Answers shown, not only told (owner's request 2026-10-22: « des vrais mini web apps au milieu du texte »): a live
-/// page from create_page placed inside the reply, where the app renders it in the text (pages.rs' kit makes it quick).
+/// Answers shown, not only told (owner's request 2026-10-22: « des vrais mini web apps au milieu du texte »). Since 27/11
+/// (Alex's A2 / A3 of 26/11, internal/next/conversation-pages-bips.md): by default in the reply itself, in forms the apps
+/// draw (a title, key figures as tiles, a table of at most 3 columns, a « > » box); a live page from create_page, placed
+/// inside the reply and shown there as a compact preview, only for what a reply can't hold.
 /// Rust bridge only, like FAMILY_RULE (added to tests/golden/souls.json by hand).
 pub const VISUAL_RULE: &str = concat!(
-    "When your answer has numbers to compare, a plan, a progression, a routine, a budget or steps that link together, ",
-    "show it: make a page with create_page (its kit makes a clean one in a few lines) and put its MEDIA: line inside ",
-    "your reply, alone on its line where it belongs, with a sentence or two before it and the rest after. Keep your text ",
-    "around it short: the page holds the details. Never send a picture of a chart or a table. Link the page to the ",
-    "Carnet page of its subject (create_page's notebook). A map, places to go, a tour or a way somewhere: map_image ",
-    "(the places by name or address, it finds them; its result is a live map), never a picture or coordinates of ",
-    "your own. A quick answer, a single number or small talk stays plain text."
+    "A quick answer, a single number or small talk: plain text, no title, no tiles, no box. When your answer compares ",
+    "numbers or options, or gives a short plan or a budget, write it in your reply in forms the app draws: a ## title, ",
+    "the key figures as 2 to 4 lines « - **29,99 €** par mois » (the value in bold first, a few words after), a table of ",
+    "at most 3 columns, and the one thing to remember on a « > » line. Make a page with create_page when a reply can't ",
+    "hold it: a chart or graph, something to tick, fill in or play with, a plan over weeks, a dashboard to come back to ",
+    "(never say a page is made without calling create_page); put its MEDIA: line alone on its line inside your reply, ",
+    "with a sentence or two around it, and link it to the Carnet page of its subject (create_page's notebook). Never send ",
+    "a picture of a chart or a table. A map, places to go, a tour or a way somewhere: map_image (the places by name or ",
+    "address, it finds them; its result is a live map), never a picture or coordinates of your own."
 );
 
 /// An important fact is checked with a source before the agent states it (Alex, 2026-10-31: « Vie » named Kervarrec, a
@@ -964,9 +968,10 @@ pub const COMPACT_RULES: &str = concat!(
     "one sentence (« Je m'en occupe en arrière-plan, je te préviens quand c'est fini. »), e.g. filling the Carnet ",
     "(notebook_fill), sorting mails, deep research, comparing 10 flats; a bigger budget or your own idea: propose_task. ",
     "Never give browsing to delegate_task: browse yourself in your visible browser, or in a background task.\n",
-    "Numbers to compare, a plan, a budget, a routine or linked steps: show them in a create_page page, its MEDIA: line ",
-    "inside your reply with short text around, linked to its Carnet page; a map or places: map_image (names, not ",
-    "coordinates). Never a picture of a chart or a map. A quick answer stays plain text."
+    "Numbers to compare, a short plan or a budget: in your reply (## title, key figures « - **29,99 €** par mois », a ",
+    "table of at most 3 columns, a « > » line to remember); a create_page page only for a chart, something to tick or ",
+    "fill in, a long plan, its MEDIA: line inside your reply, linked to its Carnet page; a map or places: map_image ",
+    "(names, not coordinates). Never a picture of a chart or a map. A quick answer stays plain text."
 );
 
 /// `language_block` with `COMPACT_RULES` in place of the nine rules.
@@ -1124,6 +1129,17 @@ pub fn profile_name(display_name: &str, taken: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A2 / A3 of 26/11 (internal/next/conversation-pages-bips.md): by default a rich reply the apps draw (a title, key
+    /// figures, a table of at most 3 columns, a « > » box); a page only for what a reply can't hold.
+    #[test]
+    fn rich_replies_first_pages_for_what_a_reply_cant_hold() {
+        for rule in [VISUAL_RULE, COMPACT_RULES] {
+            assert!(rule.contains("- **29,99 €** par mois") && rule.contains("3 columns") && rule.contains("« > »"), "{rule}");
+        }
+        assert!(VISUAL_RULE.contains("when a reply can't hold it") && VISUAL_RULE.starts_with("A quick answer")
+            && !VISUAL_RULE.contains("show it: make a page"));
+    }
 
     #[test]
     fn a_language_change_brings_the_blocks_examples_along() {

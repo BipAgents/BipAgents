@@ -220,7 +220,7 @@ pub fn budgets_on(config: &crate::config::Config, offer: bool) -> (Value, Value)
     )
 }
 
-fn folder(config: &crate::config::Config) -> PathBuf {
+pub(crate) fn folder(config: &crate::config::Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("jobs")
 }
 

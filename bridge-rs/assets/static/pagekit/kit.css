@@ -26,8 +26,8 @@ max-width:760px;margin-inline:auto;-webkit-font-smoothing:antialiased;overflow-w
 :where(body :not(table)){max-width:100%}
 :where(pre:not(.diagram)){white-space:pre-wrap}
 :where(html[data-bip-view=inline] body){padding:14px 14px 16px}
-:where(h1){font-size:23px;font-weight:900;line-height:1.15;margin:0 0 4px;letter-spacing:-.01em}
-:where(h2){font-size:17px;font-weight:800;margin:18px 0 8px}
+:where(h1){font-size:27px;font-weight:900;line-height:1.15;margin:0 0 4px;letter-spacing:-.01em}
+:where(h2){font-size:18px;font-weight:800;margin:18px 0 8px}
 :where(h3){font-size:15px;font-weight:800;margin:12px 0 6px}
 :where(p){margin:6px 0}
 :where(.sub,.muted){color:var(--muted);font-size:13px;font-weight:600}
@@ -75,8 +75,9 @@ background:var(--bar,var(--accent))}
 white-space:nowrap}
 :where(td){padding:9px 10px;border-top:1px solid var(--line);vertical-align:top}
 :where(td.n,th.n){text-align:right}
-:where(tr.best td){background:var(--tint)}
-:where(tr.best td:first-child){box-shadow:inset 3px 0 0 var(--accent)}
+:where(td.n,.price){white-space:nowrap}
+:where(tr.best td,.best){background:color-mix(in srgb,var(--good) 14%,var(--card));border-color:transparent}
+
 :where(table.sort th){cursor:pointer;user-select:none;-webkit-user-select:none}
 :where(table.sort th[aria-sort=ascending])::after{content:" ▲";font-size:9px}
 :where(table.sort th[aria-sort=descending])::after{content:" ▼";font-size:9px}
@@ -169,3 +170,13 @@ border:1px solid var(--line);border-radius:12px;padding:8px 10px;width:100%}
 :where(.map-pin[data-current] span){transform:scale(1.3)}
 :where(.map-open){grid-column:3;grid-row:1 / span 2;align-self:center;padding:4px 10px;border-radius:99px;background:var(--tint);color:var(--deep);font-size:12px;font-weight:800;text-decoration:none;white-space:nowrap}
 :where(.map-route){display:block;margin:4px 14px 12px;padding:10px 12px;border-radius:12px;background:var(--accent);color:#fff;font-weight:800;text-align:center;text-decoration:none}
+/* a table of 4 columns or more: one card per row on a phone (kit.js labels its cells) */
+@media (max-width:540px){:where(table.bip-cards thead,table.bip-cards tr:first-child:not(:has(>td))){display:none}
+:where(table.bip-cards,table.bip-cards tbody){display:block}
+:where(table.bip-cards tr){display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 12px;margin:0 0 8px}
+:where(table.bip-cards tr.best){background:color-mix(in srgb,var(--good) 14%,var(--card));border-color:transparent}
+:where(table.bip-cards td){display:block;border:0;padding:3px 0;text-align:right;background:none}
+:where(table.bip-cards td)::before{content:attr(data-l);float:left;margin-right:12px;white-space:normal;color:var(--muted);font-size:12.5px;font-weight:700;text-align:left}
+:where(table.bip-cards td:first-child){font-size:15px;font-weight:800;text-align:left}
+:where(table.bip-cards td:first-child)::before{content:none}
+:where(.table-wrap:has(table.bip-cards)){border:0;overflow:visible}}
