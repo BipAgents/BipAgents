@@ -336,25 +336,16 @@ async fn pairing_route() {
 
 #[tokio::test]
 async fn static_files_are_served_from_the_package() {
+    // (through the desktop's noVNC since the web console went, 1.1: tests/console_removed.rs)
     let (_dir, app) = app();
-    let resp = app.get("/console/static/style.css", &[]).await;
+    let resp = app.get("/desktop/static/novnc/core/rfb.js", &[]).await;
     assert_eq!(resp.status, StatusCode::OK);
-    assert_eq!(resp.header("content-type").as_deref(), Some("text/css; charset=utf-8"));
-    let resp = app.get("/console/static/nothing.css", &[]).await;
+    assert_eq!(resp.header("content-type").as_deref(), Some("text/javascript; charset=utf-8"));
+    let resp = app.get("/desktop/static/novnc/core/nothing.js", &[]).await;
     assert_eq!((resp.status, resp.json()), (StatusCode::NOT_FOUND, json!({"detail": "Not Found"})));
-    let resp = app.request("POST", "/console/static/style.css", &[], None).await;
+    let resp = app.request("POST", "/desktop/static/novnc/core/rfb.js", &[], None).await;
     assert_eq!((resp.status, resp.header("allow")), (StatusCode::METHOD_NOT_ALLOWED, None));
-    assert_eq!(app.request("HEAD", "/console/static/style.css", &[], None).await.status, StatusCode::OK);
-    assert_eq!(app.get("/desktop/static/novnc/core/rfb.js", &[]).await.status, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn a_cloud_server_has_no_web_console() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut dict = config_dict(dir.path(), &Urls::default());
-    dict["cloud"] = json!(true);
-    let app = TestApp::new(bipbridge::config::parse_config(&dict, None).unwrap());
-    assert_eq!(app.get("/console/static/style.css", &[]).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.request("HEAD", "/desktop/static/novnc/core/rfb.js", &[], None).await.status, StatusCode::OK);
 }
 
 #[tokio::test]

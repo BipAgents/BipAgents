@@ -2190,7 +2190,7 @@ pub fn shown_thinking(config: &Config, agent: &AgentConfig) -> Option<String> {
     Some(if auto_thinking(config, agent).is_some() { AUTO_THINKING.into() } else { level })
 }
 
-/// The level the person chose from the app or the console: recorded (their settings record), then written.
+/// The level the person chose from the app: recorded (their settings record), then written.
 /// « auto » ([`AUTO_THINKING`]): their level forgotten and the default written (no thinking entry; GLM's « low »), so
 /// the bridge decides each turn again ([`auto_thinking`]).
 pub fn choose_thinking(config: &Config, agent: &AgentConfig, level: &str) -> anyhow::Result<String> {

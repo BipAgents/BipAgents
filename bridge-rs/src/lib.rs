@@ -279,7 +279,7 @@ pub mod script_shape; // what an agent's script does, from its syntax (browser_m
 pub mod link_wallet;
 pub mod cards;
 pub mod cloud_setup;
-pub mod console;
+pub mod console_removed; // the web console, gone in 1.1: its file deleted at start
 pub mod contacts;
 pub mod desktop;
 pub mod desktop_page;

@@ -186,7 +186,7 @@ class Bridge:
 
     @property
     def state_dir(self) -> Path:
-        """Where the bridge keeps its files next to its database (console.json, peers.json, vault/…)."""
+        """Where the bridge keeps its files next to its database (peers.json, vault/…)."""
         return self.db_path.parent
 
     def env(self) -> Dict[str, str]:
@@ -312,7 +312,7 @@ class Bridge:
 
     # -- the CLI ---------------------------------------------------------------------------------------------------
     def cli(self, *args: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
-        """Another subcommand of the same program (`console`, `qr`, `check`…), with this bridge's environment (its
+        """Another subcommand of the same program (`qr`, `check`…), with this bridge's environment (its
         config as last written: `write_config()` first for a bridge never started)."""
         base = self.command[:-1] if self.command and self.command[-1] == "serve" else self.command
         return subprocess.run(base + list(args), cwd=str(BRIDGE_DIR), env=self.env(),

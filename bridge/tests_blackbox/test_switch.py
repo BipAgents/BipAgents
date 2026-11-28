@@ -1,5 +1,5 @@
 """An install switches implementation and back without losing anything: a bridge builds up state (devices, outbox
-and audio, an agent created in the app, console session, device key, vault item, mailbox, household, reminders,
+and audio, an agent created in the app, a device key, vault item, mailbox, household, reminders,
 links, a proposed job, a call's brief, a page, a watched run waiting for an approval, the agents' tool tokens), stops;
 the other implementation starts on the same config and data and must show the same; then the first one again.
 
@@ -39,9 +39,6 @@ def build(bridge, fakes):
     assert routine.status_code == 200, routine.text
     assert bridge.put(f"/v1/cron-jobs/wellness/{routine.json()['job']['id']}", headers=AUTH,
                       json={"notify": False}).status_code == 200
-    code = bridge.cli("console").stdout.split("/console/#", 1)[1].split()[0]
-    login = bridge.post("/console/api/login", json={"code": code, "name": "PC"})
-    cookie = login.headers["set-cookie"].split(";", 1)[0]
     device = bridge.post("/v1/device-keys", headers=AUTH, json={"name": "iPad"}).json()
     created = bridge.post("/v1/agents", headers=AUTH, json={"name": "Max", "kind": "finance", "lang": "en"})
     assert created.status_code == 201, created.text   # its [agents.max] table and profile, read by the other one
@@ -66,7 +63,7 @@ def build(bridge, fakes):
     bridge.put("/v1/agents/wellness/appearance", headers=AUTH, json={"category": "home", "color": "#112233"})
     bridge.post("/v1/watch", headers=AUTH, json={"agent": "wellness", "run_id": "run_wait", "session_id": "api_bot"})
     assert wait_until(lambda: bridge.db().execute("SELECT count(*) FROM watched_runs WHERE run_id = 'run_wait'").fetchone()[0] == 1)
-    return {"cookie": cookie, "device_key": device["key"], "outbox_id": item["id"]}
+    return {"device_key": device["key"], "outbox_id": item["id"]}
 
 
 def keys_of(bridge):
@@ -92,7 +89,6 @@ def snapshot(bridge, keys):
         resp = bridge.get(path, **kw)
         assert resp.status_code == 200, (path, resp.status_code, resp.text)
         return resp.json()
-    console = {"Cookie": keys["cookie"], "X-Bip-Console": "1"}
     with bridge.db() as db:
         devices = sorted(db.execute("SELECT token, environment, agent_ids, created_at FROM devices").fetchall())
     assert wait_until(lambda: bridge.get("/v1/approvals", headers=AUTH).json()["items"])
@@ -107,7 +103,6 @@ def snapshot(bridge, keys):
         "outbox": boite_items(bridge),
         "audio": bridge.get(f"/v1/outbox/{keys['outbox_id']}/audio", headers=AUTH).content,
         "cron": get("/v1/cron-jobs", headers=AUTH)["jobs"],
-        "console": (get("/console/api/me", headers=console), [d["name"] for d in get("/v1/console/devices", headers=AUTH)["devices"]]),
         "device_keys": [(d["name"], d["me"]) for d in get("/v1/device-keys", headers={"Authorization": f"Bearer {keys['device_key']}"})["devices"]],
         "vault": get("/v1/vault", headers=AUTH),
         "mail": get("/v1/mail/accounts", headers=AUTH)["accounts"],
